@@ -1,6 +1,7 @@
 //! The movement simulation. Names are ours; the structure follows the oracle's call tree so a
 //! divergence can be pinned to one function (docs/oracle.md maps each to its RVA).
 
+pub mod climb;
 pub mod collide;
 pub mod duck;
 pub mod ground;
@@ -74,6 +75,7 @@ pub struct Settings {
     pub lurch: jump::Lurch,
     pub skip: jump::Skip,
     pub wallrun: bool,
+    pub climb: climb::Climb,
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
@@ -141,6 +143,7 @@ pub struct Player {
     pub sprint_toggle_lock: bool,
     pub sprint_blocked: bool,
     pub sprint_suppressed: bool,
+    pub traversal_blocked: bool,
     pub stamina: f32,
     pub prev_velocity: V3,
     pub eye_angles: V3,
@@ -162,6 +165,31 @@ pub struct Player {
     pub ground_plane: V3,
     pub ledge_origin: V3,
     pub move_trace: MoveTraceInfo,
+    /// Where the player stood when this call began; the oracle's abs origin, which the
+    /// movement code reads while `mv.origin` moves.
+    pub abs_origin: V3,
+    /// The height climbs are measured from: drops with the player, rises only on floors.
+    pub floor_height: f32,
+    pub floor_frozen: bool,
+    /// `up` as it was at the end of the last climb update.
+    pub prev_up: V3,
+    pub wall_start: V3,
+    pub wall_count: i32,
+    pub same_wall: bool,
+    pub push_away_since: f32,
+    pub wall_time: f32,
+    pub wall_leave_time: f32,
+    pub retry_time: f32,
+    pub retry_origin: V3,
+    pub retry_normal: V3,
+    /// The last wall left, which the next climb must not be: count 0 or 1.
+    pub repel_normal: V3,
+    pub repel_time: f32,
+    pub repel_count: i32,
+    pub hanging: bool,
+    pub dodge_lock: bool,
+    pub dodged: bool,
+    pub wall_decel_scale: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -177,6 +205,7 @@ pub struct MoveData {
     pub forward: f32,
     pub side: f32,
     pub up: f32,
+    pub view_forward: V3,
     pub flat_forward: V3,
     pub flat_right: V3,
     pub flat_wish: V3,
@@ -184,6 +213,8 @@ pub struct MoveData {
     pub ground_wish: V3,
     pub jump_dir: V3,
     pub maxspeed: f32,
+    pub hull_height: f32,
+    pub hull_half_width: f32,
     pub origin: V3,
     pub velocity: V3,
 }
@@ -205,6 +236,8 @@ pub struct Trace {
     /// trace_t +0x3b: lets a step land whatever the slope.
     pub flag3b: bool,
     pub surface: u32,
+    /// trace_t +0x34; 0x100000 marks a surface nothing may climb.
+    pub contents: u32,
     pub entity: u64,
 }
 
@@ -245,14 +278,21 @@ pub struct Move<'a> {
 
 const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
 
-impl Move<'_> {
+impl Player {
     /// Runs before each movement call: while standing, remember when and with which up
-    /// vector, for the jump grace period.
-    pub fn pre_think(&mut self) {
-        if self.on_ground() {
-            self.p.left_ground_time = self.g.curtime;
-            self.p.left_ground_up = self.p.up;
+    /// vector, for the jump grace period; and keep the height climbs are measured from.
+    pub fn pre_think(&mut self, curtime: f32) {
+        if self.ground.is_some() {
+            self.left_ground_time = curtime;
+            self.left_ground_up = self.up;
         }
+        self.update_floor_height();
+    }
+}
+
+impl Move<'_> {
+    pub fn pre_think(&mut self) {
+        self.p.pre_think(self.g.curtime);
     }
 
     /// C_GameMovement::ProcessMovement: the whole movement call for one command.

@@ -329,7 +329,7 @@ impl Move<'_> {
 
     /// A blocked move that hit a walkable slope keeps going along it for the rest of the
     /// time (or towards `dest`), else falls back to stepping.
-    pub fn along_slope(&mut self, mut t: Trace, grounded: bool, dest: Option<V3>, refuse: bool) -> bool {
+    pub fn along_slope(&mut self, t: &mut Trace, grounded: bool, dest: Option<V3>, refuse: bool) -> bool {
         let up = self.p.up;
         let n = t.normal;
         if dot(up, n) > WALKABLE && !refuse {
@@ -353,17 +353,16 @@ impl Move<'_> {
             } else {
                 (len2(d) / len2(along)).min(f32::MAX).sqrt()
             };
-            let mut target = mad(e, along, k);
-            target[2] += 0.01;
+            let target = [e[0] + along[0] * k, e[1] + along[1] * k, e[2] + (along[2] * k + 0.01)];
             let f = t.fraction;
-            t = self.trace(e, target);
+            *t = self.trace(e, target);
             if t.fraction == 1.0 {
                 self.mv.origin = target;
                 return true;
             }
             t.fraction = (1.0 - f) * t.fraction + f;
         }
-        self.step_move(t);
+        self.step_move(*t);
         false
     }
 

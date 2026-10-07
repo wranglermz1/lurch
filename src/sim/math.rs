@@ -61,32 +61,62 @@ pub fn is_world_up(up: V3) -> bool {
     ((up[0] * 0.0 + up[1] * 0.0) - up[2] * 1.0) as f64 <= -0.999
 }
 
+const DEG2RAD: f32 = f32::from_bits(0x3c8e_fa35);
+const TWO_OVER_PI: f32 = f32::from_bits(0x3f22_f983);
+const P1: f32 = f32::from_bits(0x3fc9_1000);
+const P2: f32 = f32::from_bits(0xb695_7000);
+const P3: f32 = f32::from_bits(0xb06f_4b9e);
+const C4: f32 = f32::from_bits(0x37cf_14c2);
+const C3: f32 = f32::from_bits(0xbab6_0b22);
+const C2: f32 = f32::from_bits(0x3d2a_aaa9);
+const S3: f32 = f32::from_bits(0xb94d_6102);
+const S2: f32 = f32::from_bits(0x3c08_85d2);
+const S1: f32 = f32::from_bits(0xbe2a_aaa8);
+pub const HALF_PI: f32 = f32::from_bits(0x3fc9_0fdb);
+
+fn reduce(r: f32) -> (i32, f32) {
+    let q = (r * TWO_OVER_PI).round_ties_even() as i32;
+    let qf = q as f32;
+    (q, ((r - P1 * qf) - P2 * qf) - P3 * qf)
+}
+
+fn sin_poly(x: f32, x2: f32) -> f32 {
+    ((S3 * x2 + S2) * x2 + S1) * (x2 * x) + x
+}
+
+fn cos_poly(x2: f32) -> f32 {
+    (((C4 * x2 + C3) * x2 + C2) * x2 + -0.5) * x2 + 1.0
+}
+
+fn flip(v: f32, q: i32) -> f32 {
+    f32::from_bits(v.to_bits() ^ (((q & 2) as u32) << 30))
+}
+
 /// The engine's own sine and cosine (four lanes at once in the oracle): Cody-Waite
 /// reduction by pi/2 in three parts, then short minimax polynomials. Matching it, rather than
 /// the platform's sin/cos, is what keeps directions exact to the last bit.
 pub fn sin_cos_deg(deg: f32) -> (f32, f32) {
-    const DEG2RAD: f32 = f32::from_bits(0x3c8e_fa35);
-    const TWO_OVER_PI: f32 = f32::from_bits(0x3f22_f983);
-    const P1: f32 = f32::from_bits(0x3fc9_1000);
-    const P2: f32 = f32::from_bits(0xb695_7000);
-    const P3: f32 = f32::from_bits(0xb06f_4b9e);
-    const C4: f32 = f32::from_bits(0x37cf_14c2);
-    const C3: f32 = f32::from_bits(0xbab6_0b22);
-    const C2: f32 = f32::from_bits(0x3d2a_aaa9);
-    const S3: f32 = f32::from_bits(0xb94d_6102);
-    const S2: f32 = f32::from_bits(0x3c08_85d2);
-    const S1: f32 = f32::from_bits(0xbe2a_aaa8);
-    let r = deg * DEG2RAD;
-    let q = (r * TWO_OVER_PI).round_ties_even() as i32;
-    let qf = q as f32;
-    let x = ((r - P1 * qf) - P2 * qf) - P3 * qf;
+    let (q, x) = reduce(deg * DEG2RAD);
     let x2 = x * x;
-    let cos = (((C4 * x2 + C3) * x2 + C2) * x2 + -0.5) * x2 + 1.0;
-    let sin = ((S3 * x2 + S2) * x2 + S1) * (x2 * x) + x;
+    let (sin, cos) = (sin_poly(x, x2), cos_poly(x2));
     let (s, c) = if q & 1 == 0 { (sin, cos) } else { (cos, sin) };
-    let s = f32::from_bits(s.to_bits() ^ (((q & 2) as u32) << 30));
-    let c = f32::from_bits(c.to_bits() ^ ((((q + 1) & 2) as u32) << 30));
-    (s, c)
+    (flip(s, q), flip(c, q + 1))
+}
+
+/// The same sine of radians, as the code that wants one lane computes it. A cosine there
+/// is this sine at `x + HALF_PI`, rounded to f32 first.
+pub fn engine_sin(r: f32) -> f32 {
+    let (q, x) = reduce(r);
+    let x2 = x * x;
+    flip(if q & 1 == 0 { sin_poly(x, x2) } else { cos_poly(x2) }, q)
+}
+
+pub fn engine_cos(r: f32) -> f32 {
+    engine_sin(r + HALF_PI)
+}
+
+pub fn deg2rad(deg: f32) -> f32 {
+    deg * DEG2RAD
 }
 
 pub fn angle_vectors(angles: V3) -> (V3, V3, V3) {

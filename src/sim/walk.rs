@@ -22,7 +22,8 @@ impl Move<'_> {
     pub fn half_gravity(&mut self, t: f32) {
         let g = if self.p.gravity == 0.0 { 1.0 } else { self.p.gravity };
         let k = if self.s.gravity_scale * g != 0.0 { self.s.gravity_scale * g } else { 1.0 };
-        let dv = ((k * self.s.sv_gravity) as f64 * 0.5 * t as f64 * 1.0) as f32;
+        let wall = if is_world_up(self.p.up) { 1.0 } else { self.wall_gravity(self.g.curtime - self.p.wall_time) };
+        let dv = ((k * self.s.sv_gravity) as f64 * 0.5 * t as f64 * wall as f64) as f32;
         let v = self.mv.velocity;
         let mut x = GRAVITY_DIR[0] * dv + v[0];
         let mut y = GRAVITY_DIR[1] * dv + v[1];
@@ -58,10 +59,14 @@ impl Move<'_> {
         self.half_gravity(dt);
         self.check_velocity();
         self.check_jump();
+        self.climb_think();
         self.check_velocity();
         if self.on_ground() {
             self.ground_move(dt);
         } else {
+            if !is_world_up(self.p.up) {
+                self.end_climb();
+            }
             self.air_move(dt);
         }
         self.categorize(false);
@@ -72,12 +77,24 @@ impl Move<'_> {
         self.check_velocity();
     }
 
-    fn ground_wish(&self) -> V3 {
+    /// Forward and right along the ground plane. On a wall the view's right vector, not its
+    /// forward, sets the axes, unless it lies too close to the wall's normal.
+    fn ground_axes(&self) -> (V3, V3) {
         let up = self.p.up;
-        let (f, _, _) = angle_vectors(self.mv.angles);
-        let c = cross(f, up);
-        let r = scale(c, 1.0 / (c[1] * c[1] + c[0] * c[0] + c[2] * c[2]).sqrt().max(TINY));
-        let fwd_dir = cross(up, r);
+        let (f, r, _) = angle_vectors(self.mv.angles);
+        if is_world_up(up) || 0.7 <= ((up[0] * r[0] + up[1] * r[1]) + up[2] * r[2]).abs() {
+            let c = cross(f, up);
+            let r = scale(c, 1.0 / (c[1] * c[1] + c[0] * c[0] + c[2] * c[2]).sqrt().max(TINY));
+            (cross(up, r), r)
+        } else {
+            let c = cross(up, r);
+            let f = scale(c, 1.0 / (c[1] * c[1] + c[0] * c[0] + c[2] * c[2]).sqrt().max(TINY));
+            (f, cross(f, up))
+        }
+    }
+
+    fn ground_wish(&self, fwd_dir: V3, r: V3) -> V3 {
+        let up = self.p.up;
         let k = if self.p.sprinting { SPRINT_INPUT } else { 1.0 };
         let (mut fwd, mut side) = (self.mv.forward * k, self.mv.side * k);
         let m2 = side * side + fwd * fwd;
@@ -182,7 +199,7 @@ impl Move<'_> {
         }
     }
 
-    fn ramp(&self) -> f32 {
+    pub(super) fn ramp(&self) -> f32 {
         let now = self.g.curtime;
         if now >= self.p.ramp_end {
             return 1.0;
@@ -191,7 +208,7 @@ impl Move<'_> {
         if now <= start { 0.0 } else { (now - start) * 2.0 }
     }
 
-    fn ground_accelerate(&mut self, wishdir: V3, wishspeed: f32, accel: f32) {
+    pub(super) fn ground_accelerate(&mut self, wishdir: V3, wishspeed: f32, accel: f32) {
         if self.p.no_accel {
             return;
         }
@@ -209,13 +226,19 @@ impl Move<'_> {
     pub fn ground_move(&mut self, dt: f32) {
         let up = self.p.up;
         self.mv.velocity = reject(self.mv.velocity, up);
-        let wish = self.ground_wish();
-        let l = len(wish);
-        let wishdir = scale(wish, 1.0 / l.max(TINY));
-        let wishspeed = l.min(1.0) * self.mv.maxspeed;
-        let accel = self.ground_accel();
-        self.ground_friction(wishdir, wishspeed);
-        self.ground_accelerate(wishdir, wishspeed, accel);
+        let (fwd_dir, r) = self.ground_axes();
+        if is_world_up(up) {
+            let wish = self.ground_wish(fwd_dir, r);
+            let l = len(wish);
+            let wishdir = scale(wish, 1.0 / l.max(TINY));
+            let wishspeed = l.min(1.0) * self.mv.maxspeed;
+            let accel = self.ground_accel();
+            self.ground_friction(wishdir, wishspeed);
+            self.ground_accelerate(wishdir, wishspeed, accel);
+        } else {
+            let (wish, fwd, side) = self.wall_wish(fwd_dir, r);
+            self.wall_accelerate(wish, fwd, side);
+        }
 
         let speed = len(self.mv.velocity);
         if self.p.sliding && speed < self.s.slide_stop_speed && self.p.duck_state != 3 {
@@ -228,8 +251,8 @@ impl Move<'_> {
         let origin = self.mv.origin;
         let mut vel = self.mv.velocity;
         let gp = self.p.ground_plane;
-        let plane = if len2(gp) != 0.0 && is_world_up(up) { Some(gp) } else { None };
-        if let Some(gp) = plane {
+        let plane = if len2(gp) != 0.0 { Some(gp) } else { None };
+        if let Some(gp) = plane.filter(|_| is_world_up(up)) {
             let vn = dot(gp, vel);
             let un = dot(up, gp);
             let along = sub(scale(vel, un), scale(up, vn));
@@ -246,13 +269,17 @@ impl Move<'_> {
         self.p.last_plane = ZERO;
         let t = self.trace(origin, dest);
         self.p.move_trace = super::MoveTraceInfo { endpos: t.endpos, normal: t.normal, kind: 1 };
-        let t = if t.fraction == 1.0 { t } else { pin_shallow(t, plane) };
+        let mut t = if t.fraction == 1.0 { t } else { pin_shallow(t, plane.filter(|_| is_world_up(up))) };
         if t.fraction == 1.0 {
             self.mv.origin = t.endpos;
-        } else if !self.along_slope(t, true, Some(dest), false) {
-            let o = self.mv.origin;
-            if -0.03125 < dot(sub(o, t.endpos), t.normal) {
-                self.p.last_plane = t.normal;
+        } else {
+            let vel = self.mv.velocity;
+            if !self.along_slope(&mut t, true, Some(dest), false) {
+                let o = self.mv.origin;
+                if -0.03125 < dot(sub(o, t.endpos), t.normal) {
+                    self.p.last_plane = t.normal;
+                }
+                self.wall_contact(t.endpos, t.normal, Some(&t), vel);
             }
         }
         self.stay_on_ground();
@@ -310,13 +337,29 @@ impl Move<'_> {
         self.p.move_trace = super::MoveTraceInfo { endpos: t.endpos, normal: t.normal, kind: 2 };
         if t.fraction == 1.0 {
             self.mv.origin = t.endpos;
+            self.retry_wall(t.endpos, origin);
         } else {
             self.air_blocked(t, origin[2]);
         }
         self.p.step_height = step;
     }
 
-    fn air_blocked(&mut self, t: Trace, start_z: f32) {
+    /// A wall that nearly started a climb is offered again once `retry_time` passes, while
+    /// the player is still level with its plane.
+    fn retry_wall(&mut self, endpos: V3, start: V3) {
+        let at = self.p.retry_time;
+        if at == 0.0 || self.g.curtime < at {
+            return;
+        }
+        self.p.retry_time = 0.0;
+        let (o, ro, rn) = (self.mv.origin, self.p.retry_origin, self.p.retry_normal);
+        let d = ((o[1] - ro[1]) * rn[1] + (o[0] - ro[0]) * rn[0]) + (o[2] - ro[2]) * rn[2];
+        if d.abs() < 1.0 {
+            self.wall_contact(endpos, neg(rn), None, start);
+        }
+    }
+
+    fn air_blocked(&mut self, mut t: Trace, start_z: f32) {
         let v = self.mv.velocity;
         let nz = t.normal[2];
         let mut along = self.g.curtime - self.p.last_ground_time <= 0.1
@@ -339,7 +382,7 @@ impl Move<'_> {
                 self.mv.velocity = vel;
             }
         }
-        if along && self.along_slope(t, false, None, false) {
+        if along && self.along_slope(&mut t, false, None, false) {
             return;
         }
         let vz = self.mv.velocity[2];
@@ -352,6 +395,7 @@ impl Move<'_> {
             self.p.ledge_origin = self.mv.origin;
         }
         self.p.last_plane = t.normal;
+        self.wall_contact(t.endpos, t.normal, Some(&t), v);
     }
 }
 

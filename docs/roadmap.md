@@ -6,13 +6,11 @@ top. Each item names how it is checked.
 
 ## 1. Movement still to port
 
-- **Wall climb.** `0x81ae40`, wall contact `0x81ca50` / `0x81bb60`. A climb makes the wall
-  the ground: up vector `+0x266c` turns to the wall normal and the non-floor branch of
-  `0x818320` runs with the `climb*` settings. Recordings: `traces/pending/climb_*.ltr`.
 - **Mantle.** Movetype 12. Entry `0x811650` (automantle) and `0x810960`, ledge finder
   `0x80f360`, move `0x8139e0`. `+0x262c` (the retail `m_traversalState` offset) stays 0
   through a mantle in this build; the real offset is still to be found. Recordings:
-  `traces/pending/mantle_*.ltr`.
+  `traces/pending/mantle_*.ltr`. The automantle check already shows in climb recordings: two
+  hull sweeps forward by `automantle_forwarddist` that our air move does not make.
 - **Superglide.** Mantle plus a timed jump. Record once mantle replays.
 - **Superjump.** On the tech list, not yet recorded.
 

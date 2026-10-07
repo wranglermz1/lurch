@@ -7,7 +7,7 @@ use super::math::*;
 use super::Move;
 
 pub const IN_DUCK: u32 = 0x4;
-const IN_TOGGLE_DUCK: u32 = 0x400_0000;
+pub const IN_TOGGLE_DUCK: u32 = 0x400_0000;
 const DUCK_MS: i32 = 400;
 const SLIDE_DUCK_MS: i32 = 200;
 const UNDUCK_MS: i32 = 200;
@@ -19,7 +19,7 @@ const DOWN: u32 = 2;
 const COMING_UP: u32 = 3;
 
 impl Move<'_> {
-    fn hull_shift(&self) -> V3 {
+    pub(super) fn hull_shift(&self) -> V3 {
         let p = &*self.p;
         let stand = sub(p.hull_max, p.hull_min);
         let duck = sub(p.hull_duck_max, p.hull_duck_min);
@@ -27,7 +27,7 @@ impl Move<'_> {
     }
 
     /// Can the standing hull fit where a ducked player would stand up?
-    fn room_to_stand(&mut self) -> bool {
+    pub(super) fn room_to_stand(&mut self) -> bool {
         if !self.ducked() {
             return true;
         }

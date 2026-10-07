@@ -15,3 +15,11 @@ else runs from the host.
 - A take that moves the player away (a climb, a mantle onto a roof) needs the user to
   reset the position before the next. Calibrate distances from a fixed point: walking
   into a wall first, then backing off, gives a repeatable start.
+
+Known capture faults, which the replay tolerates:
+
+- In `climb_walk` about one call in eleven holds another caller's CMoveData (other view
+  angles, no buttons). Those calls are skipped, and the chain restarts after each: a call
+  whose CMoveData angles differ from the player's command angles (`+0x2188`) is not replayed.
+- A trace entry can come out all zero though none was counted lost. A query that matches
+  nothing in the log takes such an entry as a miss; the call's outcome must still agree.

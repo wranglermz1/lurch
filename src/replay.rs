@@ -60,7 +60,7 @@ pub fn run(rec: &Record, carried: Option<&(Player, MoveData)>) -> (Step, Player,
 pub fn simulate(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mut dyn Tracer) -> (Step, Player, MoveData) {
     let want = outcome(rec);
     let mut p = oracle::player(&rec.player_in);
-    let mut mv = oracle::move_data(&rec.mv_in, rec.seq);
+    let mut mv = oracle::move_in(rec);
     if let Some((cp, cmv)) = carried {
         p = oracle::with_state(p, cp);
         mv.origin = cmv.origin;
@@ -80,35 +80,49 @@ pub fn simulate(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mut dyn
     (Step { seq: rec.seq, want, got, missing: 0, unused: 0, diffs }, p, mv)
 }
 
+/// Every call of a recording whose input was recorded (see `oracle::input_recorded`).
 pub fn file(path: &str) -> std::io::Result<Vec<Step>> {
-    open(path)?.map(|r| r.map(|r| step(&r))).collect()
+    let mut steps = Vec::new();
+    for rec in open(path)? {
+        let rec = rec?;
+        if oracle::input_recorded(&rec) {
+            steps.push(step(&rec));
+        }
+    }
+    Ok(steps)
 }
 
 pub struct Chain {
     pub calls: usize,
     /// Calls where the carried state had to be thrown away for the oracle's, and why.
     pub resyncs: Vec<(u32, String)>,
+    /// Calls whose input was not recorded; the chain restarts after each.
+    pub unrecorded: usize,
 }
 
 /// Replay a recording carrying the simulation's state from call to call. Before each call
 /// the carried state is checked against the oracle's input; a mismatch (drift, or something
 /// outside movement changing the player) is recorded and the chain restarts from the oracle.
 pub fn chain(path: &str) -> std::io::Result<Chain> {
-    let mut c = Chain { calls: 0, resyncs: Vec::new() };
+    let mut c = Chain { calls: 0, resyncs: Vec::new(), unrecorded: 0 };
     let mut carried: Option<(Player, MoveData)> = None;
     for rec in open(path)? {
         let rec = rec?;
         c.calls += 1;
+        if !oracle::input_recorded(&rec) {
+            c.unrecorded += 1;
+            carried = None;
+            continue;
+        }
         if let Some((cp, cmv)) = &mut carried {
             let g = oracle::globals(&rec.globals, cp.lagged);
             cp.prev_velocity = cmv.velocity;
-            if cp.ground.is_some() {
-                cp.left_ground_time = g.curtime;
-                cp.left_ground_up = cp.up;
-            }
+            cp.abs_origin = cmv.origin;
+            cp.pre_think(g.curtime);
             let theirs = oracle::player(&rec.player_in);
             let mut d = oracle::diff_player(cp, &theirs);
-            let mvin = oracle::move_data(&rec.mv_in, rec.seq);
+            let mvin = oracle::move_in(&rec);
+            let moved = cmv.origin != mvin.origin || cmv.velocity != mvin.velocity;
             if cmv.origin != mvin.origin {
                 d.push(format!("origin {:?} want {:?}", cmv.origin, mvin.origin));
             }
@@ -116,7 +130,11 @@ pub fn chain(path: &str) -> std::io::Result<Chain> {
                 d.push(format!("velocity {:?} want {:?}", cmv.velocity, mvin.velocity));
             }
             if !d.is_empty() {
-                c.resyncs.push((rec.seq, d.join("; ")));
+                // Only signs of zero changed, as when the game restores networked state: not
+                // the simulation's doing, so take the oracle's state without a resync.
+                if moved || !oracle::diff_player_values(cp, &theirs).is_empty() {
+                    c.resyncs.push((rec.seq, d.join("; ")));
+                }
                 carried = None;
             }
         }
@@ -137,10 +155,8 @@ pub fn chain_world(path: &str, world: &mut dyn Tracer) -> std::io::Result<(f32, 
         if let Some((cp, cmv)) = &mut carried {
             let g = oracle::globals(&rec.globals, cp.lagged);
             cp.prev_velocity = cmv.velocity;
-            if cp.ground.is_some() {
-                cp.left_ground_time = g.curtime;
-                cp.left_ground_up = cp.up;
-            }
+            cp.abs_origin = cmv.origin;
+            cp.pre_think(g.curtime);
         }
         let (s, p, mv) = simulate(&rec, carried.as_ref(), world);
         worst_origin = worst_origin.max(s.origin_err());

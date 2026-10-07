@@ -166,6 +166,29 @@ replaying recordings through `src/sim`. Names are ours.
 | `0x81ebb0` | `set_ground` | Landing slowdown (`0x869a80`); leaving the ground clears `+0x30ed` (jumped recently), which a jump then sets again |
 | `0x805710` | (surface) | Surface friction ×1.25, capped at 1, by the trace's surface index |
 
+## Wall climb
+
+The wallrun code with `wallrun` off; `climbEnabled` selects its climb paths. Ported in
+`src/sim/climb.rs`, verified by `traces/climb_*.ltr`.
+
+| RVA | Ours | Behaviour |
+|---|---|---|
+| `0x81ca50` | `wall_contact` | Called with the hit point, normal, trace and pre-clip velocity wherever a move is blocked: the end of the air move, a failed ground step, and (air move, nothing hit) a remembered wall once `wallrun_retry_interval` passes. Classifies the wall; a climb start makes the wall normal the up vector |
+| `0x81bb60` | `classify_wall` | Refuses: world up and on (or within 0.5 s of) the ground; not facing the wall within ~45° (`0xbf0a40`); vz above `climbSpeedStart`/2; the hit above `verticalGainCutoff_wallrun + floor − climbFinalJumpUpHeight`; floors (n.z > 0.7) and ceilings; startsolid or contents `0x100000`; the repel wall; velocity not into the wall (`wallrun_minAngle_air`). Then probes the wall at foot and head height, and with world up also at the top when reaching for a ledge (`0x80ed90`) |
+| `0x81c750` | `wall_probe` | A cube of half the hull width swept from the probe point into the wall by reach + `wallrunAllowedWallDistance` + 0.2929·half; a wall within the allowed distance counts |
+| `0x81ae40` | `climb_think` | Every call, after the jump check. On a wall it lets go on duck, on facing away, on stalling (vz < 10 after 1 s), at the top (`0x81ade0` + `climbHeight`), or on pushing away for `wallrun_pushAwayFallOffTime`; every 4th command it re-probes the wall. Letting go pushes off by `wallrun_fallAwaySpeed`, remembers the wall, ends the climb, and at the top adds a jump of up to 10 + `climbFinalJumpUpHeight` |
+| `0x818320` wall branch | `wall_wish`, `wall_accelerate` | Axes from `up × right`; forward input pushes up the wall (`wallrun_upwardAutoPush`). Vertical and horizontal each decelerate beyond and accelerate toward their own top speed: `climbSpeedStart` easing to `climbSpeedEnd` near the top, `climbHorzSpeed`; without upward input the `wallrun*` speeds apply, with slip after `wallrun_slipstarttime` |
+| `0x8089e0` | `half_gravity` | On a wall, gravity × `0x806be0`: none while pushing into the wall, else ramping in over `wallrunGravityRampUpTime` by wall strength (`0x81d800`) |
+| `0x81d9c0` | `wall_jump` | Out by `wallrunJumpOutwardSpeed`, up by `climbFinalJumpUpHeight` × strength |
+| `0x866760` | `end_climb` | Up back to (−0, −0, 1), leave time stamped. Also run before an air move with a wall up |
+| `0x870160` | `update_floor_height` | In pre-think: `+0x1d00` follows the abs origin down, and up only on walkable ground; each climb or wall jump lowers it by `wallclimb_vertical_gain_reduction` |
+
+Player fields: up `+0x266c`, previous up `+0x2678`, climb start origin `+0x2684`, climb
+count `+0x2690`, same wall `+0x2694`, push-away timer `+0x26a4`, retry `+0x26b0`/`+0x26b4`/
+`+0x26c0`, climb start time `+0x307c`, leave time `+0x3080`, repel wall `+0x1bb4`
+(count `+0x1bd0`), floor height `+0x1d00`. Landing on world-up ground clears the repel wall
+and sets "same wall"; a normal jump clears the count and "same wall".
+
 ## Traces
 
 Movement traces go through IEngineTrace (`*0xd413e80`) slots `+0x18`, `+0x20`, `+0x38` and `+0x40`;
@@ -198,6 +221,10 @@ plane dist `+0x2c`, fraction `+0x30`, allsolid `+0x38`, startsolid `+0x39`, a st
   Found by fuzzed input: the quantisation flips the test when facing is near perpendicular
   to velocity.
 - `+0x41c` is the previous call's final velocity (FinishMove).
+- A call starts from the player's abs origin and velocity (`+0x14c`, `+0x140`), which
+  ProcessMovement copies into CMoveData; the CMoveData read before the call can be stale.
+- `along_slope` (`0x8162a0`) lifts its target as `e.z + (along.z·k + 0.01)`; the decompile
+  prints `(e.z + along.z·k) + 0.01`. On a failed slope move it traces into the caller's trace.
 - Slip (`slipSpeed`, `slipAcceleration`, `0x808e40`) only acts while the player touches
   entities listed at `+0x2ac8`; on plain ground its direction is zero and it does nothing.
 
@@ -219,9 +246,6 @@ assembly.
   (probably the active weapon) sets one at `+0x1a14`.
 - The constant drag term at settings `0x7e4` has no name in the registry.
 - Jump, keyboard redirect (lurch, tap strafe), crouch and slide are ported and verified.
-- Wall climb: `0x81ae40` with the wall-impact handler `0x81ca50`/`0x81bb60`. A climb swaps the
-  player's up vector (`+0x266c`) to the wall normal, and the move then runs the non-floor
-  branch of `0x818320` with the `climb*` settings. Not ported.
 - Mantle: traversal, movetype 12. Entry tests `0x811650` (automantle) and `0x810960`, ledge
   finder `0x80f360`, move `0x8139e0`. Superglide comes out of mantle plus jump timing.
   Not ported.

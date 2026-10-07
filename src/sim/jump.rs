@@ -133,12 +133,18 @@ impl Move<'_> {
 
         self.set_ground(None);
         self.p.jumped_since_ground = true;
-        let speed = ((self.s.sv_gravity + self.s.sv_gravity) * height).sqrt();
-        let surface = 1.0;
-        self.mv.velocity = mad(self.mv.velocity, self.mv.jump_dir, surface * speed);
-        let lp = self.p.last_plane;
-        if dot(lp, self.mv.flat_wish) < 0.0 {
-            self.mv.velocity = sub(self.mv.velocity, scale(lp, WALL_PUSH));
+        if world {
+            let speed = ((self.s.sv_gravity + self.s.sv_gravity) * height).sqrt();
+            self.p.wall_count = 0;
+            self.p.same_wall = false;
+            let surface = 1.0;
+            self.mv.velocity = mad(self.mv.velocity, self.mv.jump_dir, surface * speed);
+            let lp = self.p.last_plane;
+            if dot(lp, self.mv.flat_wish) < 0.0 {
+                self.mv.velocity = sub(self.mv.velocity, scale(lp, WALL_PUSH));
+            }
+        } else {
+            self.wall_jump();
         }
         self.p.sliding = false;
         self.half_gravity(self.g.frametime);

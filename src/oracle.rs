@@ -4,6 +4,7 @@
 
 use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
+use crate::sim::climb::Climb;
 use crate::sim::jump::{Lurch, Skip};
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
@@ -18,6 +19,57 @@ const EXTRA_AIR_ACCEL: f32 = 2.0;
 const SKIP_TIME: f32 = 1.0;
 const JUMP_GRACEPERIOD: f32 = 0.2;
 pub const SV_OPTIMIZEDMOVEMENT: bool = true;
+
+/// The wallrun_*, wallclimb_* and automantle_* ConVars the climb reads.
+const WALL_CONVARS: Climb = Climb {
+    enabled: false,
+    height: 0.0,
+    final_jump_up_height: 0.0,
+    speed_start: 0.0,
+    speed_end: 0.0,
+    accel: 0.0,
+    decel: 0.0,
+    horz_speed: 0.0,
+    horz_accel: 0.0,
+    horz_decel: 0.0,
+    vertical_gain_cutoff: 0.0,
+    allowed_wall_distance: 0.0,
+    ceiling_limit: 0.0,
+    gravity_ramp_up_time: 0.0,
+    duck_causes_fall_off: false,
+    same_wall_allowed: false,
+    same_wall_height: 0.0,
+    no_gravity_ramp: false,
+    mantle_angle_scale: 0.0,
+    jump_outward_speed: 0.0,
+    wall_max_speed_vertical: 0.0,
+    wall_accel_vertical: 0.0,
+    wall_decel_vertical: 0.0,
+    wall_max_speed_horizontal: 0.0,
+    wall_max_speed_horizontal_back: 0.0,
+    wall_accel_horizontal: 0.0,
+    wall_decel_horizontal: 0.0,
+    retry_interval: 0.07,
+    same_wall_dot: 0.9,
+    same_wall_dist: 100.0,
+    same_wall_slope: 0.0,
+    min_angle_air: 180.0,
+    rotate_max_rate: 3.0,
+    upward_auto_push: 0.65,
+    slip_start_time: 1.5,
+    slip_duration: 1.0,
+    no_input_slip_frac: 0.7,
+    strength_loss_start: 1000.0,
+    strength_loss_end: 1000.0,
+    fall_away_speed: 70.0,
+    push_away_fall_off_time: 0.05,
+    avoid_wall_top_decel: 3000.0,
+    vertical_gain_reduction: 128.0,
+    angle_change_min_cos: 0.8,
+    mantle_max_angle_push: 50.0,
+    mantle_max_angle_view: 50.0,
+    mantle_wallrun_max_angle_view: 45.0,
+};
 
 fn byte(b: &[u8], off: usize) -> u8 {
     b[off]
@@ -86,6 +138,36 @@ pub fn settings(blob: &[u8]) -> Settings {
         lurch: Lurch { period_min: 0.2, period_max: 0.5, strength: 0.7, max: 0.7 },
         skip: Skip { time: SKIP_TIME, height_speed: 450.0, height_fraction: 1.0, speed_retain: -1.0, speed_reduce: 100.0 },
         wallrun: byte(blob, 0xe0b) != 0,
+        climb: Climb {
+            enabled: byte(blob, 0xe0a) != 0,
+            height: f32_at(blob, 0x97c),
+            final_jump_up_height: f32_at(blob, 0x980),
+            speed_start: f32_at(blob, 0x984),
+            speed_end: f32_at(blob, 0x988),
+            accel: f32_at(blob, 0x98c),
+            decel: f32_at(blob, 0x990),
+            horz_speed: f32_at(blob, 0x994),
+            horz_accel: f32_at(blob, 0x998),
+            horz_decel: f32_at(blob, 0x99c),
+            vertical_gain_cutoff: f32_at(blob, 0x81c),
+            allowed_wall_distance: f32_at(blob, 0x9b0),
+            ceiling_limit: f32_at(blob, 0x9ac),
+            gravity_ramp_up_time: f32_at(blob, 0x9d8),
+            duck_causes_fall_off: byte(blob, 0xe0d) != 0,
+            same_wall_allowed: byte(blob, 0xe10) != 0,
+            same_wall_height: f32_at(blob, 0x9e8),
+            no_gravity_ramp: byte(blob, 0xe0c) != 0,
+            mantle_angle_scale: f32_at(blob, 0x880),
+            jump_outward_speed: f32_at(blob, 0x9e4),
+            wall_max_speed_vertical: f32_at(blob, 0x9bc),
+            wall_accel_vertical: f32_at(blob, 0x9c8),
+            wall_decel_vertical: f32_at(blob, 0x9cc),
+            wall_max_speed_horizontal: f32_at(blob, 0x9c0),
+            wall_max_speed_horizontal_back: f32_at(blob, 0x9c4),
+            wall_accel_horizontal: f32_at(blob, 0x9d0),
+            wall_decel_horizontal: f32_at(blob, 0x9d4),
+            ..WALL_CONVARS
+        },
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
         extra_air_accel: EXTRA_AIR_ACCEL,
@@ -124,6 +206,7 @@ pub fn player(p: &[u8]) -> Player {
         sprint_toggle_lock: byte(p, 0x1881) != 0,
         sprint_blocked: byte(p, 0x2605) != 0 || u32_at(p, 0x1764) != 0 || byte(p, 0x2c7c) != 0,
         sprint_suppressed: false,
+        traversal_blocked: byte(p, 0x2c7c) != 0,
         traversal_state: u32_at(p, 0x262c),
         frozen: byte(p, 0x2184) != 0,
         dead: byte(p, 0x730) != 0,
@@ -161,6 +244,26 @@ pub fn player(p: &[u8]) -> Player {
         ground_plane: vec3_at(p, 0x3e60),
         ledge_origin: vec3_at(p, 0x30e0),
         move_trace: Default::default(),
+        abs_origin: vec3_at(p, 0x14c),
+        floor_height: f32_at(p, 0x1d00),
+        floor_frozen: u32_at(p, 0x19d0) == 1,
+        prev_up: vec3_at(p, 0x2678),
+        wall_start: vec3_at(p, 0x2684),
+        wall_count: u32_at(p, 0x2690) as i32,
+        same_wall: byte(p, 0x2694) != 0,
+        push_away_since: f32_at(p, 0x26a4),
+        wall_time: f32_at(p, 0x307c),
+        wall_leave_time: f32_at(p, 0x3080),
+        retry_time: f32_at(p, 0x26b0),
+        retry_origin: vec3_at(p, 0x26b4),
+        retry_normal: vec3_at(p, 0x26c0),
+        repel_normal: vec3_at(p, 0x1bb4),
+        repel_time: f32_at(p, 0x1bcc),
+        repel_count: u32_at(p, 0x1bd0) as i32,
+        hanging: byte(p, 0x276d) != 0,
+        dodge_lock: byte(p, 0x30ee) != 0,
+        dodged: byte(p, 0x3094) != 0,
+        wall_decel_scale: f32_at(p, 0x26a8),
     }
 }
 
@@ -175,15 +278,36 @@ pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
         forward: f32_at(mv, 0x30),
         side: f32_at(mv, 0x34),
         up: f32_at(mv, 0x38),
+        view_forward: vec3_at(mv, 0x3c),
         flat_forward: vec3_at(mv, 0x60),
         flat_right: vec3_at(mv, 0x6c),
         flat_wish: vec3_at(mv, 0x78),
         ground_wish: vec3_at(mv, 0xb4),
         jump_dir: vec3_at(mv, 0xa8),
         maxspeed: f32_at(mv, 0xd4),
+        hull_height: f32_at(mv, 0xc8),
+        hull_half_width: f32_at(mv, 0xd0),
         origin: vec3_at(mv, 0x118),
         velocity: vec3_at(mv, 0x124),
     }
+}
+
+/// Whether the call's move input is this player's: CMoveData's view angles are the
+/// command's (`+0x2188`). Some recordings hold calls where the capture read another
+/// caller's CMoveData; those cannot be replayed.
+pub fn input_recorded(rec: &Record) -> bool {
+    let a = vec3_at(&rec.mv_in, 0xc);
+    let v = vec3_at(&rec.player_in, 0x2188);
+    a[0] == v[0] && a[1] == v[1]
+}
+
+/// The move data a call starts from. ProcessMovement copies the player's abs origin and
+/// velocity into it on entry; what CMoveData held before then can be another call's.
+pub fn move_in(rec: &Record) -> MoveData {
+    let mut mv = move_data(&rec.mv_in, rec.seq);
+    mv.origin = vec3_at(&rec.player_in, 0x14c);
+    mv.velocity = vec3_at(&rec.player_in, 0x140);
+    mv
 }
 
 pub fn globals(g: &[u8], lagged: f32) -> Globals {
@@ -218,23 +342,26 @@ pub fn decode(result: &[u8]) -> Trace {
         startsolid: result[0x39] != 0,
         flag3b: result[0x3b] != 0,
         surface: result[0x48] as u32,
+        contents: u32_at(result, 0x34),
         entity: u64::from_le_bytes(result[0x60..0x68].try_into().unwrap()),
     }
 }
 
 /// Answers the simulation's hull traces from the oracle's log. Each query must match a logged
 /// ray (centre, sweep and extents) at or after the last one used; oracle traces the simulation
-/// never asked for are counted, not fatal.
+/// never asked for are counted, not fatal. A logged trace the capture lost (all zero) answers
+/// a query nothing else matches with a miss; the call's outcome still has to agree.
 pub struct LogTracer<'a> {
     log: &'a [crate::ltr::Trace],
     next: usize,
     pub skipped: usize,
+    pub lost: usize,
     pub missing: Vec<HullQuery>,
 }
 
 impl<'a> LogTracer<'a> {
     pub fn new(log: &'a [crate::ltr::Trace]) -> Self {
-        LogTracer { log, next: 0, skipped: 0, missing: Vec::new() }
+        LogTracer { log, next: 0, skipped: 0, lost: 0, missing: Vec::new() }
     }
 
     pub fn unused(&self) -> usize {
@@ -264,17 +391,39 @@ impl Tracer for LogTracer<'_> {
                 return decode(&r.result);
             }
         }
+        let miss = Trace { start: q.start, endpos: q.end, fraction: 1.0, ..Default::default() };
+        if let Some(i) = (self.next..self.log.len()).find(|&i| self.log[i].slot == 0 && self.log[i].ray.iter().all(|&b| b == 0)) {
+            self.skipped += i - self.next;
+            self.next = i + 1;
+            self.lost += 1;
+            return miss;
+        }
         self.missing.push(*q);
-        Trace { start: q.start, endpos: q.end, fraction: 1.0, ..Default::default() }
+        miss
     }
+}
+
+fn unsign_zeros(s: String) -> String {
+    let s = s.replace("-0.0,", "0.0,").replace("-0.0]", "0.0]");
+    if s == "-0.0" { "0.0".to_string() } else { s }
 }
 
 /// Every modelled player field that differs between the simulation and the oracle's result.
 pub fn diff_player(ours: &Player, theirs: &Player) -> Vec<String> {
+    diff_player_as(ours, theirs, |s| s)
+}
+
+/// The same, blind to the sign of zero: what changes between calls when the game restores
+/// networked state.
+pub fn diff_player_values(ours: &Player, theirs: &Player) -> Vec<String> {
+    diff_player_as(ours, theirs, unsign_zeros)
+}
+
+fn diff_player_as(ours: &Player, theirs: &Player, norm: fn(String) -> String) -> Vec<String> {
     let mut out = Vec::new();
     macro_rules! field {
         ($f:ident) => {
-            let (a, b) = (format!("{:?}", ours.$f), format!("{:?}", theirs.$f));
+            let (a, b) = (norm(format!("{:?}", ours.$f)), norm(format!("{:?}", theirs.$f)));
             if a != b {
                 out.push(format!("{} {} want {}", stringify!($f), a, b));
             }
@@ -314,6 +463,23 @@ pub fn diff_player(ours: &Player, theirs: &Player) -> Vec<String> {
     field!(ledge_origin);
     field!(step_height);
     field!(prev_velocity);
+    field!(floor_height);
+    field!(prev_up);
+    field!(wall_start);
+    field!(wall_count);
+    field!(same_wall);
+    field!(push_away_since);
+    field!(wall_time);
+    field!(wall_leave_time);
+    field!(retry_time);
+    field!(retry_origin);
+    field!(retry_normal);
+    field!(repel_normal);
+    field!(repel_time);
+    field!(repel_count);
+    field!(hanging);
+    field!(dodge_lock);
+    field!(dodged);
     if ours.ground.is_some() != theirs.ground.is_some() {
         out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
     }
@@ -374,6 +540,23 @@ pub fn with_state(mut base: Player, state: &Player) -> Player {
     base.ledge_origin = state.ledge_origin;
     base.step_height = state.step_height;
     base.prev_velocity = state.prev_velocity;
+    base.floor_height = state.floor_height;
+    base.prev_up = state.prev_up;
+    base.wall_start = state.wall_start;
+    base.wall_count = state.wall_count;
+    base.same_wall = state.same_wall;
+    base.push_away_since = state.push_away_since;
+    base.wall_time = state.wall_time;
+    base.wall_leave_time = state.wall_leave_time;
+    base.retry_time = state.retry_time;
+    base.retry_origin = state.retry_origin;
+    base.retry_normal = state.retry_normal;
+    base.repel_normal = state.repel_normal;
+    base.repel_time = state.repel_time;
+    base.repel_count = state.repel_count;
+    base.hanging = state.hanging;
+    base.dodge_lock = state.dodge_lock;
+    base.dodged = state.dodged;
     base.ground = state.ground;
     base
 }
