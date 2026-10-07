@@ -92,6 +92,11 @@ pub struct Settings {
     pub slide_fov_scale: f32,
     pub slide_fov_lerp_in: f32,
     pub slide_fov_lerp_out: f32,
+    pub sprint_start_fast_duration: f32,
+    pub sprint_start_duration: f32,
+    pub sprint_start_delay: f32,
+    pub sprint_end_duration: f32,
+    pub sprint_view_offset: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -220,6 +225,13 @@ pub struct Player {
     pub fov_duration: f32,
     pub fov_from: f32,
     pub fov_to: f32,
+    /// When sprinting started and stopped, the view's sprint fraction then, and when the
+    /// wish to sprint began.
+    pub sprint_start_time: f32,
+    pub sprint_start_frac: f32,
+    pub sprint_end_time: f32,
+    pub sprint_end_frac: f32,
+    pub sprint_intent_time: f32,
 }
 
 #[derive(Clone, Debug, Default)]

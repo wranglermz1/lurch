@@ -13,6 +13,11 @@ const PRESS_WINDOW: f32 = 3.0;
 const MIN_INPUT2: f32 = 0.64000005;
 const SPRINT_STAMINA: f32 = 10.0;
 
+/// The view fraction is networked in 1/1023 steps.
+fn quantize(f: f32) -> f32 {
+    (f * 1023.0 + 0.5).floor() / 1023.0
+}
+
 impl Move<'_> {
     fn input(&self) -> (f32, f32) {
         (self.mv.forward, self.mv.side)
@@ -72,6 +77,7 @@ impl Move<'_> {
         if !self.p.sprint_intent {
             if now <= self.p.sprint_until && self.can_keep_sprinting() {
                 self.p.sprint_intent = true;
+                self.p.sprint_intent_time = now;
             }
         } else if !self.can_keep_sprinting() {
             self.p.sprint_intent = false;
@@ -79,9 +85,14 @@ impl Move<'_> {
         }
         let want = (held & IN_SPEED != 0 || self.p.sprint_intent) && self.sprint_allowed();
         if self.p.sprinting != want {
+            let frac = quantize(self.p.sprint_view_frac(self.s, now));
             if !want {
+                self.p.sprint_end_frac = frac;
+                self.p.sprint_end_time = now;
                 self.p.sprinting = false;
             } else if self.p.sprint_started_fresh || SPRINT_STAMINA <= self.p.stamina {
+                self.p.sprint_start_frac = frac;
+                self.p.sprint_start_time = now;
                 self.p.sprinting = true;
                 self.p.sprint_started_fresh = true;
             }

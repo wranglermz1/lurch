@@ -176,6 +176,11 @@ pub fn settings() -> Settings {
         slide_fov_scale: 1.1,
         slide_fov_lerp_in: 0.25,
         slide_fov_lerp_out: 0.25,
+        sprint_start_fast_duration: 0.2,
+        sprint_start_duration: 0.8,
+        sprint_start_delay: 0.2,
+        sprint_end_duration: 0.15,
+        sprint_view_offset: -6.0,
         wall_start_kick: view::Kick { base: [-1.5, 0.0, 5.0], random: [0.5, 0.5, 0.5] },
     }
 }

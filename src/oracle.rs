@@ -189,6 +189,11 @@ pub fn settings(blob: &[u8]) -> Settings {
         slide_fov_scale: f32_at(blob, 0xa7c),
         slide_fov_lerp_in: f32_at(blob, 0xa80),
         slide_fov_lerp_out: f32_at(blob, 0xa84),
+        sprint_start_fast_duration: f32_at(blob, 0xd78),
+        sprint_start_duration: f32_at(blob, 0xd74),
+        sprint_start_delay: f32_at(blob, 0xd70),
+        sprint_end_duration: f32_at(blob, 0xd7c),
+        sprint_view_offset: f32_at(blob, 0xd6c),
         wall_start_kick: Kick { base: [f32_at(blob, 0x9ec), f32_at(blob, 0x9f4), f32_at(blob, 0x9fc)], random: [f32_at(blob, 0x9f0), f32_at(blob, 0x9f8), f32_at(blob, 0xa00)] },
     }
 }
@@ -296,6 +301,11 @@ pub fn player(p: &[u8]) -> Player {
         fov_duration: f32_at(p, 0x4054),
         fov_from: f32_at(p, 0x4058),
         fov_to: f32_at(p, 0x405c),
+        sprint_start_time: f32_at(p, 0x2608),
+        sprint_start_frac: f32_at(p, 0x260c),
+        sprint_end_time: f32_at(p, 0x2610),
+        sprint_end_frac: f32_at(p, 0x2614),
+        sprint_intent_time: f32_at(p, 0x2618),
     }
 }
 
@@ -509,6 +519,11 @@ macro_rules! modelled_fields {
         $m!(fov_duration);
         $m!(fov_from);
         $m!(fov_to);
+        $m!(sprint_start_time);
+        $m!(sprint_start_frac);
+        $m!(sprint_end_time);
+        $m!(sprint_end_frac);
+        $m!(sprint_intent_time);
     };
 }
 

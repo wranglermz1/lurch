@@ -3,6 +3,7 @@
 //! And what the view setup updates once a frame between calls: the slide's FOV and tilt.
 
 use super::math::*;
+use std::f32::consts::PI;
 use super::{Move, Player, Settings};
 
 /// The `sprinttilt_*`, `viewpunch_base_spring*` and `slide_viewTilt*` ConVars.
@@ -285,7 +286,42 @@ fn tilt_toward(tilt: &mut V3, on: f32, v: V3, (lo, hi): (f32, f32), (rise, fall)
     };
 }
 
+fn clamp01(mut f: f32) -> f32 {
+    if f <= 0.0 {
+        f = 0.0;
+    }
+    if 1.0 <= f {
+        f = 1.0;
+    }
+    f
+}
+
+fn ramp(now: f32, from: f32, duration: f32) -> f32 {
+    if duration == 0.0 { 1.0 } else { clamp01((now - from) / duration) }
+}
+
 impl Player {
+    /// How far into sprinting the view is, 0 to 1: up over `sprintStartFastDuration`, and
+    /// after `sprintStartDelay` over `sprintStartDuration`, whichever is behind; down over
+    /// `sprintEndDuration`. Each starts from the fraction when sprinting turned.
+    pub fn sprint_view_frac(&self, s: &Settings, now: f32) -> f32 {
+        if !self.sprinting {
+            return clamp01(self.sprint_end_frac - ramp(now, self.sprint_end_time, s.sprint_end_duration));
+        }
+        let fast = ramp(now, self.sprint_start_time, s.sprint_start_fast_duration);
+        let slow = ramp(now, s.sprint_start_delay + self.sprint_intent_time, s.sprint_start_duration);
+        let slow = if 0.0 <= slow { slow } else { 0.0 };
+        clamp01(if slow <= fast { slow } else { fast } + self.sprint_start_frac)
+    }
+
+    /// How far sprinting lowers the eye: `sprintViewOffset` eased in on a quarter sine.
+    pub fn sprint_eye_drop(&self, s: &Settings, now: f32) -> f32 {
+        if s.sprint_view_offset == 0.0 {
+            return 0.0;
+        }
+        s.sprint_view_offset * engine_sin(self.sprint_view_frac(s, now) * PI * 0.5 + 0.0)
+    }
+
     /// The FOV scale, eased linearly in game time toward the last one set (`SetFOVScale`).
     pub fn fov_scale(&self, curtime: f32) -> f32 {
         let start = self.fov_start;

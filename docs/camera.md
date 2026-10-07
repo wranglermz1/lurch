@@ -19,6 +19,7 @@ recorded and so not checked.
 | `0x820790` | landing | At the end of `full_walk_move`: on ground with a fall speed of at least 80 (400 for titans), measured along the up vector when it is a wall's. Clears the fall speed |
 | `0x807f70` | landing kick | Scale from the fall speed against `viewkickFallDistMin`/`Max` (feet, ×12) and `viewkickFallDistMaxScale`: below the minimum `fall / min`, then 1 to the max scale. Pitch `scale · (2 + 0.75 r)`, roll `scale · r` |
 | `0x807080` | jump kick | In `check_jump`, after `jump_enabled`. Pitch `2 + r`, yaw `r`, roll `0.9 + 0.5 r` |
+| `0x865510` | sprint transition | When the wish to sprint begins `+0x2618` = now; when sprinting turns on or off, the time (`+0x2608` / `+0x2610`) and the view's sprint fraction then, in 1/1023 steps (`+0x260c` / `+0x2614`) |
 | `0x807520` | wall start kick | In `wall_contact` when more than 0.25 s since the last wall. `wallrun_viewpunch_onStart_*`: yaw and roll lean by the view's right · wall normal. No roll on the weapon |
 
 A kick adds 20 × its angles to the base punch's angular velocity and 4 × to the weapon's.
@@ -61,12 +62,15 @@ runtime handles (`0x285a5058`, `0x2859d658`, `0x285a0094`) that are not resolved
 `slideFOVLerpInTime` (0.25 s), and back to 1 over `slideFOVLerpOutTime` (0.25 s), linearly
 in game time (`SetFOVScale`, `0x683e20` / `0x683d90`).
 
-Not ported yet:
+Sprint eye drop (`0x8585d0`, `0x865240`, ported as `Player::sprint_eye_drop`): the eye
+drops by `sprintViewOffset` (−6) × sin(f · π/2), f the sprint fraction. It ramps in over
+`sprintStartFastDuration` (0.2 s) from the sprint start, and over `sprintStartDuration`
+(0.8 s) after `sprintStartDelay` (0.2 s) from when the wish to sprint began, whichever is
+behind; and out over `sprintEndDuration` (0.15 s). Each starts from the fraction when
+sprinting turned. `update_sprint` stamps those times and fractions (`+0x2608` to `+0x2618`,
+fractions in 1/1023 steps), so they are gated with the movement fields.
 
-Sprint view (`0x8585d0`, `0x865240`): the eye drops by `sprintViewOffset` (−6) ×
-sin(f · π/2), f the sprint fraction: it ramps in over `sprintStartFastDuration` and,
-after `sprintStartDelay`, `sprintStartDuration` from the sprint start time `+0x2608`/`+0x2618`,
-and out over `sprintEndDuration` from `+0x2610`. Those times are not modelled yet.
+Not ported yet:
 
 Sprint shake scale (`0x626110`): `sprint_view_shake_style` 1 eases between 1 and 0.25 over
 the sprint transition with a half cosine; style 0 between 1 and 0.5.
