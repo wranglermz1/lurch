@@ -246,6 +246,24 @@ assembly.
   (probably the active weapon) sets one at `+0x1a14`.
 - The constant drag term at settings `0x7e4` has no name in the registry.
 - Jump, keyboard redirect (lurch, tap strafe), crouch and slide are ported and verified.
-- Mantle: traversal, movetype 12. Entry tests `0x811650` (automantle) and `0x810960`, ledge
-  finder `0x80f360`, move `0x8139e0`. Superglide comes out of mantle plus jump timing.
-  Not ported.
+- Mantle: traversal, movetype 12. Not ported; the move needs animation data (below).
+
+## Mantle (not ported)
+
+- `player_move` runs, for movetypes 2 and 7 and unless within `traversal_cooldown` of the
+  last traversal (`+0x273c`), the automantle check `0x811650` and then `0x810960`; either
+  starting a traversal runs `0x8139e0(this, 1)` instead of the walk move. Movetype 12 runs
+  `0x8139e0(this, 0)`.
+- `0x811650` returns early on the ground with world up unless jump is held, and within 0.25
+  s of leaving the ground; otherwise it sweeps the hull forward along the view yaw by
+  `automantle_searchdist` or the speed (the two sweeps by `automantle_forwarddist` seen in
+  air calls), finds the ledge with `0x80f360`, and sets the traversal up (`0x812770`,
+  `0x8100f0`): type `+0x26e8` (3 below, 4 level, 5 above, 6 high; +4 ducked; 11, 12 ends),
+  progress `+0x2730`, start time `+0x2734`, ledge point `+0x2724`.
+- `0x8139e0` advances progress at `(1 − h·k)/mantleDuration*` per second by type, and with
+  `traversal_anim 1` places the origin by the first-person model's bone transform for
+  sequence `0x2fe + type` at that cycle (`0x7c2bf0`, `0x1d6c80`, then matrix products).
+  With `traversal_anim 0` it would use `0x866eb0` instead. At progress 1 it ends
+  (`0x815210`), returns to movetype 2 and, if moving forward, leaves at sprint or run
+  speed along the wish. Jumping out early (`automantle_jumpoff_*`) uses `wallrunJumpUpSpeed`
+  and `wallrunJumpOutwardSpeed`.

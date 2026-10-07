@@ -6,11 +6,12 @@ top. Each item names how it is checked.
 
 ## 1. Movement still to port
 
-- **Mantle.** Movetype 12. Entry `0x811650` (automantle) and `0x810960`, ledge finder
-  `0x80f360`, move `0x8139e0`. `+0x262c` (the retail `m_traversalState` offset) stays 0
-  through a mantle in this build; the real offset is still to be found. Recordings:
-  `traces/pending/mantle_*.ltr`. The automantle check already shows in climb recordings: two
-  hull sweeps forward by `automantle_forwarddist` that our air move does not make.
+- **Mantle.** Movetype 12. Needs the workstation: with `traversal_anim 1` the mantle's
+  position each call is the traversal animation's root motion. `TraversalMove` (`0x8139e0`)
+  plays activity `0x2fe + type` (types 3 to 12) on the first-person model and places the
+  player by its bone transform, so the sequences' keyframes have to come from the game's
+  model files (or a capture hook that logs the root offset per call). The rest is portable
+  from the image and is mapped in `docs/oracle.md`. Recordings: `traces/pending/mantle_*.ltr`.
 - **Superglide.** Mantle plus a timed jump. Record once mantle replays.
 - **Superjump.** On the tech list, not yet recorded.
 
