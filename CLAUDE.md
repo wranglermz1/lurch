@@ -84,7 +84,7 @@ pattern. Retail strips it.
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
     src/              the lurch crate: trace parser, movement step, replay
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
-    traces/local/     recordings too large to commit (fuzz runs); gated when present
+    traces/local/     recordings kept off git (none now); gated when present
     traces/pending/   recordings of mechanics not ported yet; `cargo test -- --ignored`
     docs/maps.md      getting R5Reloaded map collision into a mesh
     docs/capture.md   recording on the guest
