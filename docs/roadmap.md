@@ -29,7 +29,8 @@ Window, mouse and keyboard into usercmds (per-command button edges, so a scroll-
 strafe works), first-person camera, the test map (`src/testmap.rs`) drawn flat-shaded. The
 simulation side is ready: `pilot::Pilot` is the loop a frame runs, one `step` per command,
 then `Player::view_frame`, and the camera comes from `eye_position`, `camera_angles` and
-`view_fov`. Needs a windowing and rendering crate; ask before adding one.
+`view_fov`. Bevy 0.19.1 is approved for a separate `game/` crate; the plan and its status
+are in `docs/game-shell-plan.md`.
 
 ## 3. Camera feel
 

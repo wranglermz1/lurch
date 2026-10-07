@@ -23,9 +23,10 @@ asked for it.
 
 ## Non-goals
 
-Rendering beyond a flat-shaded map and a stand-in viewmodel. Netcode, prediction,
-rollback. Weapons, abilities, legends, anims as art. Map loading beyond collision.
-Multiplayer. Game modes, menus, anything that is not practising movement.
+Rendering beyond a flat-shaded map and a stand-in viewmodel. Weapons, abilities,
+legends; Apex models, animations and other game assets. Map loading beyond
+collision. Game modes, menus, anything that is not practising movement. Deferred, not
+refused: multiplayer and our own models (`docs/game-shell-plan.md` section 8).
 
 ## Definition of done
 
@@ -86,6 +87,7 @@ pattern. Retail strips it.
     tools/fuzz.py     seeded random drive script, for record.sh
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
     docs/camera.md    the camera's answer to movement, recovered; what is ported and gated
+    docs/game-shell-plan.md  the Bevy game shell plan (roadmap item 2) and its status
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
     src/              the lurch crate: trace parser, movement step, replay, test map
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them

@@ -104,3 +104,12 @@ fn sliding_down_the_hill_outruns_sprinting() {
     assert!((downhill(&ran) - sprint).abs() < 0.1, "{} vs {sprint}", downhill(&ran));
     assert!(downhill(&slid) > sprint * 0.85 && slid.iter().map(speed).fold(0.0, f32::max) > sprint * 1.3);
 }
+
+#[test]
+fn a_spawned_pilot_sees_the_class_fov() {
+    let s = pilot::settings();
+    let mut p = Pilot::new([0.0; 3]);
+    assert_eq!(p.player.view_fov(&s, 1.0, 100.0), s.fov);
+    p.player.view_frame(&s, p.velocity, 100.0, DT);
+    assert_eq!(p.player.view_fov(&s, 1.0, 100.0 + DT), s.fov);
+}

@@ -229,6 +229,8 @@ pub fn spawn(origin: V3) -> Player {
         same_wall: true,
         wall_decel_scale: 1.0,
         precise_view: true,
+        fov_from: 1.0,
+        fov_to: 1.0,
         ..Default::default()
     }
 }
