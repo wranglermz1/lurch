@@ -48,8 +48,8 @@ Lives in the HAVM repo at /home/fz/HAVM/HAVM, already extracted. Do not re-deriv
   795 of them on the player. Names carry over; offsets do not fit the oracle build. The
   traversal state machine (`m_traversalState`, `m_traversalType`, `m_traversalProgress`,
   `m_traversalBegin/Mid/End`) and the wallrun and slide fields come from here.
-- `maps/*.mesh` — extracted collision geometry, retail maps. Only canyonlands exists
-  in the oracle build.
+- `maps/*.mesh` — extracted collision geometry, retail maps. The guest plays
+  mp_rr_desertlands_64k_x_64k under the Flowstate mod, hosting its own match.
 - `dumps/current.bin` (HAVM `dumps/5dba2a2f-02ae8471/dump.bin`) — full plaintext image of `r5apex.exe` under
   R5Reloaded main. `.text` and `.rdata` 100% held, no encrypted pages.
 - `dump.bin` — retail `r5apex_dx12.exe`, probably build 6abfe359 (same capture
@@ -74,8 +74,10 @@ pattern. Retail strips it.
     tools/rtti.py     resolve a class name to its vtable and vfunc RVAs
     tools/dec.sh      decompile oracle functions by RVA (Ghidra headless, /opt/ghidra)
     tools/settings.py name the player-settings offset globals
+    tools/annotate.py name ConVars, settings and constants in dec.sh output
+    tools/record.sh   record one scripted scenario (drive + drain) into traces/
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
-    capture/          lurchcap.dll + inject.exe (guest, mingw) and drain (host); `make`
+    capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
     src/              the lurch crate: trace parser, movement step, replay
     traces/           recorded oracle traces; `cargo test` gates on them
     dumps/            images, committed, hardlinked from HAVM on disk
@@ -94,6 +96,12 @@ With names, it prints each vtable and its function RVAs. It recovers the image
 base from the locator pointers, so no base has to be passed in. A vfunc count
 that reports "hit cap, unterminated" ran past the end of the vtable: the walk
 stops at the first slot outside .text and has no other terminator.
+
+## Fidelity reached
+
+Walking on the oracle's own terrain (walk, back, strafe, diagonal into walls and up slopes,
+with sprint) replays with zero error on origin and velocity, every trace matched
+(`cargo test`). Tolerance in the gate is 1e-3. Jump and lurch are ported, unverified.
 
 ## Approach
 

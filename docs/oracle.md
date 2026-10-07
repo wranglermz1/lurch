@@ -138,10 +138,59 @@ This is the reading so far. The code is the authority, and the diff decides.
 This is not Source's `WalkMove`. The spec's "start from published Source behaviour" holds for
 the base trace-and-clip layer only. The ground and air math is recovered from these functions.
 
+## Movement call tree
+
+Recovered by reading the decompiles (`tools/dec.sh`, `tools/annotate.py`), and checked by
+replaying recordings through `src/sim`. Names are ours.
+
+| RVA | Ours | Notes |
+|---|---|---|
+| `0x8702d0` | `pre_think` | Called by RunCommand before ProcessMovement; stamps the jump-grace time and up vector while standing |
+| `0x8221b0` | `player_move` | With `sv_optimizedmovement` and an unmoved origin, skips categorize unless moving up faster than 200 |
+| `0x865510` | `update_sprint` | `+speed` hold window, can-keep (`0x865160`) and allowed (`0x864d90`) tests; allowed needs last tick's velocity (`+0x41c`) in front of the eye yaw (`+0x1ebc`) |
+| `0x81a080` | `full_walk_move` | |
+| `0x809cb0` | `check_jump` | Grace period, skip penalty, anti multi-jump, slide jump, wall push |
+| `0x818320` | `ground_move` | Velocity re-projected along the ground plane (`+0x3e60`) for the move only |
+| `0x808d10` | `ground_accel` | sprintAcceleration above speed−1, lowAcceleration below lowSpeed, else acceleration |
+| `0x817c90` | `ground_friction` | The part of velocity along the wish direction (clipped by the last wall) is spared |
+| `0x817ad0` | `ground_accelerate` | Caps at max(|v|, wishspeed) |
+| `0x816c60` | `air_move` | Air drag, air accelerate (`0x816a40`), keyboard redirect (lurch), then the move |
+| `0x8162a0` | `along_slope` | Continues a blocked move along a walkable plane, else steps |
+| `0x815e70` | `step_move` | |
+| `0x828d10` | `step_slide` | Raise by step+1/32, slide, drop, keep if it got further |
+| `0x8272b0` | `slide` | 8 bumps, 1/128 overclip, two-plane crease |
+| `0x828000` | `settle` | The slide used to drop back down; stops on a plane with n·up > 0.1 |
+| `0x806f20` | `stay_on_ground` | Probe down by step height, snap if walkable |
+| `0x81f070` | `categorize` | Probe by step height (walking) or 2; walkable at n·up ≥ 0.7; re-probes past a steep lip, alternating by command parity |
+| `0x81ebb0` | `set_ground` | Landing slowdown (`0x869a80`) |
+| `0x805710` | (surface) | Surface friction ×1.25, capped at 1, by the trace's surface index |
+
+## Traces
+
+Movement traces go through IEngineTrace (`*0xd413e80`) slots `+0x18`, `+0x20`, `+0x38` and `+0x40`;
+capture v3 hooks those. `Ray_t` (0x68 bytes): centre start, delta, start offset, half extents,
+up, flags at `+0x5c`/`+0x5d`. `trace_t` (0x180): start `+0x00`, end `+0x10`, normal `+0x20`,
+plane dist `+0x2c`, fraction `+0x30`, allsolid `+0x38`, startsolid `+0x39`, a step flag
+`+0x3b`, surface index `+0x48`, entity `+0x60`. The player hull is (−16,−16,0)–(16,16,72).
+
+## ConVars (from the dump)
+
+`sv_gravity 750`, `sv_maxvelocity 34000`, `sv_optimizedmovement 1`, `player_extraairaccelleration 2`,
+`jump_graceperiod 0.2`, `jump_keyboardgraceperiodmin 0.2`, `…max 0.5`, `jump_keyboardgrace_strength 0.7`,
+`jump_keyboardgrace_max 0.7`, `skip_time 1`, `skip_jump_height_speed 450`, `skip_jump_height_fraction 1`,
+`skip_speed_retain −1`, `skip_speed_reduce 100`, `slide_step_velocity_reduction 10`.
+
+## Ghidra caveat
+
+A raw image loaded writable makes Ghidra print some double constants as `0.0`. `dec.sh` marks
+memory read-only; a literal `0.0` or `1.4e306` that looks wrong is still checked against the
+assembly.
+
 ## Open
 
 - Friction and acceleration internals: `0x817c90`, `0x817ad0`, `0x826540`, `0x808d10`.
 - `0x8049e0`: a speed multiplier. It returns 1.0 unless the entity from `0x7d0870`
   (probably the active weapon) sets one at `+0x1a14`.
 - The constant drag term at settings `0x7e4` has no name in the registry.
-- The live check of assumption 1.
+- Duck, slide, wallrun/climb, mantle (traversal movetype 12) and superglide: not ported.
+- Jump and keyboard redirect are ported but no recording exercises them yet.
