@@ -192,5 +192,11 @@ assembly.
 - `0x8049e0`: a speed multiplier. It returns 1.0 unless the entity from `0x7d0870`
   (probably the active weapon) sets one at `+0x1a14`.
 - The constant drag term at settings `0x7e4` has no name in the registry.
-- Duck, slide, wallrun/climb, mantle (traversal movetype 12) and superglide: not ported.
-- Jump and keyboard redirect are ported but no recording exercises them yet.
+- Jump, keyboard redirect (lurch, tap strafe), crouch and slide are ported; no recording
+  exercises them yet.
+- Wall climb: `0x81ae40` with the wall-impact handler `0x81ca50`/`0x81bb60`. A climb swaps the
+  player's up vector (`+0x266c`) to the wall normal, and the move then runs the non-floor
+  branch of `0x818320` with the `climb*` settings. Not ported.
+- Mantle: traversal, movetype 12. Entry tests `0x811650` (automantle) and `0x810960`, ledge
+  finder `0x80f360`, move `0x8139e0`. Superglide comes out of mantle plus jump timing.
+  Not ported.
