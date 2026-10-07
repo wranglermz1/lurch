@@ -333,3 +333,43 @@ pub fn diff_move(ours: &MoveData, theirs: &MoveData) -> Vec<String> {
     field!(maxspeed);
     out
 }
+
+/// `base` with every modelled field taken from `state`: the simulation's own state carried
+/// into a call whose other inputs come from the oracle.
+pub fn with_state(mut base: Player, state: &Player) -> Player {
+    base.flags = state.flags.clone();
+    base.movetype = state.movetype.clone();
+    base.up = state.up.clone();
+    base.surface_friction = state.surface_friction.clone();
+    base.sprinting = state.sprinting.clone();
+    base.sprint_intent = state.sprint_intent.clone();
+    base.sprint_until = state.sprint_until.clone();
+    base.sprint_started_fresh = state.sprint_started_fresh.clone();
+    base.traversal_state = state.traversal_state.clone();
+    base.duck_timer = state.duck_timer.clone();
+    base.ducked_in_air = state.ducked_in_air.clone();
+    base.jump_suppressed = state.jump_suppressed.clone();
+    base.duck_held = state.duck_held.clone();
+    base.duck_state = state.duck_state.clone();
+    base.left_ground_time = state.left_ground_time.clone();
+    base.left_ground_up = state.left_ground_up.clone();
+    base.jumped_since_ground = state.jumped_since_ground.clone();
+    base.jumped_recently = state.jumped_recently.clone();
+    base.last_jump_time = state.last_jump_time.clone();
+    base.slide_boost_pending = state.slide_boost_pending.clone();
+    base.slide_start = state.slide_start.clone();
+    base.slide_boost = state.slide_boost.clone();
+    base.stamina = state.stamina.clone();
+    base.sliding = state.sliding.clone();
+    base.push = state.push.clone();
+    base.last_plane = state.last_plane.clone();
+    base.last_ground_time = state.last_ground_time.clone();
+    base.land_time = state.land_time.clone();
+    base.land_height = state.land_height.clone();
+    base.ground_normal = state.ground_normal.clone();
+    base.ground_plane = state.ground_plane.clone();
+    base.ledge_origin = state.ledge_origin.clone();
+    base.step_height = state.step_height.clone();
+    base.ground = state.ground;
+    base
+}
