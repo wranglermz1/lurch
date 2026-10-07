@@ -6,8 +6,8 @@
 use super::math::*;
 use super::Move;
 
-pub const IN_SPEED: u32 = 0x8000;
-const IN_WALK: u32 = 0x800;
+pub use super::buttons::IN_SPEED;
+use super::buttons::IN_WALK;
 const HOLD_WINDOW: f32 = 0.1;
 const PRESS_WINDOW: f32 = 3.0;
 const MIN_INPUT2: f32 = 0.64000005;

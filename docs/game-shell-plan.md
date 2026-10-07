@@ -230,7 +230,7 @@ impl Keys {
 `fill` writes the command:
 
 - `buttons = down | impulse_down`. This is `CalcButtonBits`, taken before the impulse clear unless M1 finds the other order.
-- `IN_SPEED_PRESSED` is added when `IN_SPEED` is in `buttons` and was not in `last`.
+- `IN_SPEED_PRESSED` is added when `IN_SPEED` (or `IN_DODGE`, as CreateMove does; the shell never binds it) is in `buttons` and was not in `last`.
 - `forward = key_state(FWD) - key_state(BACK)`.
 - `side = key_state(MOVERIGHT) - key_state(MOVELEFT)`.
 - Then `impulse_down = impulse_up = 0` and `last = buttons`.
@@ -662,7 +662,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 |---|---|---|---|
 | M0 | Plan in the repo, pointers, CLAUDE.md non-goals | cloud | done |
 | M1 | Client input path recovered from the oracle | cloud | done: Q1, Q3 settled; Q4 fallback (CL_Move is detoured into the SDK); Q2 not reached; clock rule recovered as a bonus |
-| M2 | lurch API for a shell (section 3) | cloud | not started |
+| M2 | lurch API for a shell (section 3) | cloud | done: `cargo test --test frame` 11 tests, finished in 0.02 s; root suite green, `step` unchanged; values from M1, not provisional |
 | M3 | `game/` scaffold, environment, CLAUDE.md rules | cloud (+ workstation smoke) | not started |
 | M4 | Input to commands (`CmdPlugin`) | cloud | not started |
 | M5 | Simulation loop (`SimPlugin`) | cloud | not started |

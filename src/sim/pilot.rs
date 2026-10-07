@@ -236,6 +236,7 @@ pub fn spawn(origin: V3) -> Player {
 }
 
 /// A pilot driven by commands, one movement call each, as RunCommand drives the player.
+#[derive(Clone, Debug)]
 pub struct Pilot {
     pub player: Player,
     pub origin: V3,
@@ -248,6 +249,26 @@ impl Pilot {
     /// read the first seconds as just after a jump, a landing and a slide: start it later.
     pub fn new(origin: V3) -> Self {
         Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0 }
+    }
+
+    pub fn oldbuttons(&self) -> u32 {
+        self.oldbuttons
+    }
+
+    /// Carries held buttons over to a new pilot, so keys held through a respawn make no edge.
+    pub fn with_oldbuttons(mut self, oldbuttons: u32) -> Self {
+        self.oldbuttons = oldbuttons;
+        self
+    }
+
+    /// The camera at game time `now`, for the player's `cl_fovScale` option.
+    pub fn eye(&self, s: &Settings, cl_fov_scale: f32, now: f32) -> Eye {
+        let p = &self.player;
+        Eye {
+            origin: p.eye_position(s, self.origin, p.view_angles, now),
+            angles: p.camera_angles(s, p.view_angles),
+            fov: p.view_fov(s, cl_fov_scale, now),
+        }
     }
 
     /// Runs `cmd` at game time `curtime`, with collision answered by `world`.
@@ -265,5 +286,45 @@ impl Pilot {
         self.origin = mv.origin;
         self.velocity = mv.velocity;
         self.oldbuttons = mv.buttons;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Eye {
+    pub origin: V3,
+    pub angles: V3,
+    pub fov: f32,
+}
+
+/// Our offline clock: an f64 sum of frametimes read as f32, as tests/testmap.rs drives, not
+/// the game's tick-and-remainder rule (docs/oracle.md, Client input). It starts late because a
+/// spawned player's event times are zero; the longest window measured from them is
+/// `slide_boost_cooldown` (2 s).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clock(f64);
+
+impl Clock {
+    pub const START: f64 = 100.0;
+
+    pub fn now(&self) -> f32 {
+        self.0 as f32
+    }
+
+    pub fn advance(&mut self, frametime: f32) {
+        self.0 += frametime as f64;
+    }
+
+    pub fn secs(&self) -> f64 {
+        self.0
+    }
+
+    pub fn from_secs(secs: f64) -> Self {
+        Clock(secs)
+    }
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Clock(Self::START)
     }
 }

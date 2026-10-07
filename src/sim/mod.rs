@@ -1,10 +1,12 @@
 //! The movement simulation. Names are ours; the structure follows the oracle's call tree so a
 //! divergence can be pinned to one function (docs/oracle.md maps each to its RVA).
 
+pub mod buttons;
 pub mod climb;
 pub mod collide;
 pub mod duck;
 pub mod ground;
+pub mod input;
 pub mod jump;
 pub mod math;
 pub mod pilot;
@@ -343,6 +345,14 @@ impl Player {
             self.left_ground_up = self.up;
         }
         self.update_floor_height();
+    }
+
+    pub fn ducked(&self) -> bool {
+        self.flags & 2 != 0
+    }
+
+    pub fn on_ground(&self) -> bool {
+        self.ground.is_some()
     }
 }
 

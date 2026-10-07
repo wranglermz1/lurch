@@ -6,8 +6,7 @@
 use super::math::*;
 use super::Move;
 
-pub const IN_DUCK: u32 = 0x4;
-pub const IN_TOGGLE_DUCK: u32 = 0x400_0000;
+pub use super::buttons::{IN_DUCK, IN_TOGGLE_DUCK};
 const DUCK_MS: i32 = 400;
 const SLIDE_DUCK_MS: i32 = 200;
 const UNDUCK_MS: i32 = 200;

@@ -6,12 +6,8 @@
 use super::math::*;
 use super::Move;
 
-pub const IN_JUMP: u32 = 0x2;
-pub const IN_FORWARD: u32 = 0x8;
-const IN_BACK: u32 = 0x10;
-const IN_MOVELEFT: u32 = 0x200;
-const IN_MOVERIGHT: u32 = 0x400;
-const IN_DODGE: u32 = 0x1000_0000;
+pub use super::buttons::{IN_FORWARD, IN_JUMP};
+use super::buttons::{IN_BACK, IN_DODGE, IN_MOVELEFT, IN_MOVERIGHT};
 const WALL_PUSH: f32 = 30.0;
 const SLIDE_JUMP_WINDOW: f32 = 0.4;
 

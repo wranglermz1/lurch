@@ -4,7 +4,7 @@ use super::math::*;
 use super::{MoveData, Settings};
 
 /// What a client sends for one movement call.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct UserCmd {
     pub command_number: u32,
     /// Pitch, yaw, roll in degrees.
@@ -16,6 +16,12 @@ pub struct UserCmd {
     pub buttons: u32,
     pub frametime: f32,
     pub random_seed: u32,
+}
+
+/// Ours: the game seeds from an MD5 of the command, which a replay cannot reproduce. Kick
+/// draws only need a well-mixed seed, and this one is a pure function of the number.
+pub fn command_seed(command_number: u32) -> u32 {
+    super::view::mix([command_number, 0, 0]) & 0x7fff_ffff
 }
 
 fn clamp_move(v: f32) -> f32 {
