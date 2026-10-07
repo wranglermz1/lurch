@@ -66,7 +66,7 @@ These are also exactly what a Source-style networked protocol (numbered commands
 | Units | lurch stays in inches on Source axes. The shell converts only at the render boundary: positions are multiplied by 0.0254 into metres and the axes are rotated into Bevy's. Bevy's light units and glTF assume metres |
 | Time | One command per `app.update()`. dt comes from `Time<Real>`, clamped. Never use `FixedUpdate`, `Time<Fixed>` or `Time<Virtual>`; Virtual clamps at 250 ms |
 | Audio, gamepad, glTF | Left out of the feature list. glTF and its companions arrive together in one later change (section 8) |
-| Tests | One integration-test binary, `game/tests/shell/main.rs`. Every Bevy-linked test binary is about 90 MB and relinks on each change |
+| Tests | One integration-test binary, `game/tests/shell/main.rs`. Every Bevy-linked test binary is about 90 MB (the `shell` binary measured 171 MB, since `render::` links the renderer) and relinks on each change |
 
 `game/Cargo.toml`, complete. The probe checked this feature list: all 27 names exist, it resolves to 474 packages, it builds, and it renders under xvfb (verified).
 
@@ -670,7 +670,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | M7 | Map, camera and body rendering | cloud | done: `convert::` 3 tests pass; ignored `render::` passes on lavapipe (top-left (140,178,217), centre (209,178,151), bottom-centre (192,192,192)). xvfb shots at wall 128, ramp 30 and hill: level horizon, every face drawn, sun-facing-away faces shaded not black, checker visible, sky above |
 | M8 | Playable core: flags, window, timing, cursor | cloud (+ workstation first play) | done in the cloud: `play::` 4 tests pass (every flag, both limiter timings); xvfb `--shot 30` exits 0 at 1600x900 and logs the llvmpipe adapter and `present mode AutoNoVsync (requested)`. Left: first real play on the workstation |
 | M9 | HUD, spots, script run under xvfb | cloud | done: `play::` R, `[`/`]` with wrapping and F1 pass; `tapstrafe.txt` gives the same `final` line headless and windowed under xvfb with `--shot 400`; the PNG shows the HUD's five lines and the crosshair dot |
-| M10 | Workstation verification and docs | workstation | not started |
+| M10 | Workstation verification and docs | workstation | not started: needs the workstation. Checklist and the Q1 recording are ready below, with M1's predicted values |
 
 ### M0. Plan in the repo (done)
 
@@ -882,7 +882,8 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
   - The cursor stays captured and turning never stops at the window edge (X11 Confined with raw motion, Q6). After alt-tab and a click, the grab comes back.
   - With vsync off, the HUD fps follows `--fps-max`. If it is locked to the refresh rate on Wayland, run under XWayland with `env -u WAYLAND_DISPLAY` and record which works (Q7).
   - Latency and fps: the default against `--pipelined`, and `--frame-latency 1` against unset. Keep the best default.
-  - One mousepad 360 matches Apex at the same `mouse_sensitivity`, unless M1 settled Q3.
+  - First real play (M8): `taskset -c 12-17 cargo run --manifest-path game/Cargo.toml -- --sens <yours> --fov-scale <yours>`. It starts paused; click to play, Escape to pause.
+  - One mousepad 360 matches Apex at the same `mouse_sensitivity`. M1 settled the scale (0.022°/count, Q3), so this checks only that winit's raw counts on X11 or Wayland equal what the game reads on Windows for the same mouse.
   - The FOV looks the same as Apex at the same `cl_fovScale` and aspect (Q2).
   - Wheel mode: which default feels like Apex on this mouse (Q8).
   - Each of these behaves as in the game: sprint, slide, slide hop, bunny hop, a wheel tap strafe, a climb on wall 256.
@@ -890,7 +891,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
   1. In the guest console, run `bind mwheeldown +forward`.
   2. On the host, run `MAP=mp_rr_arena_empty tools/record.sh pending/realkeys -:20`. An idle drive step stamps nothing.
   3. During those 20 s in the guest, press and hold W, tap W quickly, and scroll the wheel.
-  4. Run `cargo run --bin inspect traces/pending/realkeys.ltr`, which prints `btn` and `fwd` per command. Read the first command of each press and of each tap.
+  4. Run `cargo run --bin inspect traces/pending/realkeys.ltr`, which prints `btn` and `fwd` per command. Read the first command of each press and of each tap. M1 predicts: a press reads `fwd 0.5` on its first command, then 1; a release command reads 0 with bit `0x8` clear; a wheel notch reads `fwd 0.25` with bit `0x8` set on one command. A press that reads 1 on its first command, or a notch with no bit, means the SDK's frame loop runs ExtraMouseSample between commands (docs/oracle.md, Client input); then `key_state` stays and `Keys::fill` needs that loop's order.
   5. Move the recording to `traces/` only if `cargo test -- --ignored` passes on it.
 - **Acceptance.** The results are written under section 10's questions. Root and game suites are green. `test $(wc -l < CLAUDE.md) -le 200` passes.
 
@@ -1022,6 +1023,8 @@ Expected cost, measured with this Cargo.toml plus lurch (±20%; other agents may
 | Each integration-test binary | about 90 MB |
 | `game/target` after check and build | about 2.5 GB |
 
+Measured in the session that built M3 to M9: cold `cargo build` 11m36s while root test runs shared the CPUs; `cargo check --tests` afterwards 1m52s; binary 168 MB; the `shell` test binary 171 MB (it links the renderer for `render::`); `game/target` 2.6 GB after build, check, test and clippy. A relink after a change in `game/` takes about 2 s.
+
 Budget about 3 GB of disk.
 
 Lavapipe frame times say nothing about feel. Never judge movement or camera feel from the cloud.
@@ -1059,9 +1062,13 @@ Each question names the step that settles it, and the answer is written under it
 - **Q4. Frametime clamp (unverified in the oracle).** `[0.002857, 0.1]` are retail ConVars that the oracle image lacks. The recorded minimum is 0.0028575. Until settled, the clamp lives in the game crate. *Settle:* M1 tasks 2 and 3.
   - **Fallback.** RunCommand (`0x718460`) has no clamp and no sign check. The command's frametime is CL_Move's (`0x5ccde0` writes it), and CL_Move (`0x2c1a70`) is detoured into R5Reloaded's SDK, outside the image; the image's own body (0.1 cap, no command under 5 ms) contradicts the recordings, so it is not what runs. The clamp stays in the game crate at the retail values, which bound every recorded frametime (0.002857 to 0.0675).
 - **Q5. Apex default binds (unverified).** *Settle:* read R5Reloaded's default bind config in its `cfg/` on the workstation (M10).
+  - M1 did not touch binds. The shell's table is section 5's; changing one is a line in `binds.rs` (`Binds::default`).
 - **Q6. Raw motion at the window edge on X11 (likely).** X11 falls back to Confined. *Settle:* M10 checklist.
+  - Nothing for M1 here: it is the host's windowing, not the game. The shell reads `AccumulatedMouseMotion` (raw device motion), never cursor positions.
 - **Q7. Workstation GPU and present mode.** Whether Wayland locks the fps to the refresh rate. *Settle:* M10 checklist.
+  - Nothing for M1 here. The shell logs the requested present mode and the adapter at startup and shows both on the HUD; whether the driver honoured the mode is judged by the HUD fps against `--fps-max`.
 - **Q8. Wheel mode (ours).** `event` (Source's rule) against `notch` (our accumulator) on a high-resolution wheel. *Settle:* M10 checklist and the `realkeys` recording.
+  - M1 found how a press and release become a tap (Q1) but not how the input system turns wheel events into key events; that code was not reached.
 
 ### Risks
 
@@ -1073,7 +1080,8 @@ Each question names the step that settles it, and the answer is written under it
 - **Fixed-tick creep.** A future switch to a fixed-tick netcode crate would change fps-dependent mechanics, and the replay gates would not notice; only the shell tests would.
 - **Pipelined rendering off.** It may cost frame rate. Measured in M10, and `--pipelined` restores it.
 - **Wayland present modes.** No Immediate mode; Fifo fallback ignores `--fps-max`. Mitigated by XWayland; M10.
-- **Provisional input values.** If M1 does not settle Q1, the move values in M2 and M4 are Source's and the tests are marked provisional. A later answer changes `key_state` and the bit order in `fill`, nothing else.
+- **Provisional input values.** M1 settled Q1 from the image, so no test is provisional. If the `realkeys` recording shows ExtraMouseSample consuming impulses between commands, the change is in `Keys::fill`, nothing else.
+- **The SDK's frame loop.** CL_Move is detoured into R5Reloaded's SDK, outside the image (Q4). Its frametime policy and whether it calls ExtraMouseSample between commands are not in the dump. The SDK is distributed with R5Reloaded; reading its CL_Move on the workstation would settle both.
 - **Bevy 0.20.** It is at rc.2. Stay on 0.19.1 until the netcode crates move.
 
 ### Doc edits
