@@ -134,7 +134,7 @@ pub struct Chain {
     /// Calls whose input was not recorded; the chain restarts after each.
     pub unrecorded: usize,
     /// Calls where something outside movement changed the player between calls, as when the
-    /// game restores networked state; the chain restarts from the oracle without a resync.
+    /// game restores networked state; the chain takes those fields from the oracle and goes on.
     pub external: usize,
 }
 
@@ -154,6 +154,7 @@ fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
     let mut c = Chain { calls: 0, resyncs: Vec::new(), unrecorded: 0, external: 0 };
     let mut carried: Option<(Player, MoveData)> = None;
     let mut last_out: Option<Player> = None;
+    let mut last_clock = (0.0, 0.0);
     for rec in open(path)? {
         let rec = rec?;
         c.calls += 1;
@@ -163,8 +164,10 @@ fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
             continue;
         }
         let out = oracle::player(&rec.player_out);
+        let settings = settings_for(&rec, s);
         if let Some((cp, cmv)) = &mut carried {
             let g = oracle::globals(&rec.globals, cp.lagged);
+            cp.view_frame(&settings, cmv.velocity, last_clock.0, last_clock.1);
             cp.prev_velocity = cmv.velocity;
             cp.abs_origin = cmv.origin;
             cp.pre_think(g.curtime, cmv.velocity);
@@ -180,21 +183,25 @@ fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
             }
             if !d.is_empty() {
                 let external = last_out.as_mut().map_or(Vec::new(), |lo| {
+                    lo.view_frame(&settings, mvin.velocity, last_clock.0, last_clock.1);
                     lo.pre_think(g.curtime, mvin.velocity);
                     oracle::diff_player_values(lo, &theirs).iter().map(|e| e.split(' ').next().unwrap().to_string()).collect()
                 });
                 let ours = oracle::diff_player_values(cp, &theirs);
                 if moved || ours.iter().any(|e| !external.iter().any(|f| e.split(' ').next() == Some(f.as_str()))) {
                     c.resyncs.push((rec.seq, d.join("; ")));
+                    carried = None;
                 } else {
                     c.external += 1;
+                    let names: Vec<&str> = d.iter().filter_map(|e| e.split(' ').next()).collect();
+                    oracle::adopt(cp, &theirs, &names);
                 }
-                carried = None;
             }
         }
         let (st, p, mv) = run_as(&rec, carried.as_ref(), s);
         carried = if st.missing == 0 { Some((p, mv)) } else { None };
         last_out = Some(out);
+        last_clock = oracle::view_clock(&rec);
     }
     Ok(c)
 }

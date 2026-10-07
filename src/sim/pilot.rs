@@ -164,10 +164,18 @@ pub fn settings() -> Settings {
             sprint_tilt_max_vel: 2.0,
             sprint_tilt_turn_range: 120.0,
             punch_spring: view::Spring { constant: [65.0; 3], damping: [9.0; 3] },
+            slide_tilt_side: 15.0,
+            slide_tilt_player_speed: 400.0,
+            slide_tilt_increase: 5.0,
+            slide_tilt_decrease: 2.5,
         },
         viewkick_fall_dist_min: 10.0,
         viewkick_fall_dist_max: 70.0,
         viewkick_fall_dist_max_scale: 12.0,
+        sprint_tilt_max_roll: 2.0,
+        slide_fov_scale: 1.1,
+        slide_fov_lerp_in: 0.25,
+        slide_fov_lerp_out: 0.25,
         wall_start_kick: view::Kick { base: [-1.5, 0.0, 5.0], random: [0.5, 0.5, 0.5] },
     }
 }

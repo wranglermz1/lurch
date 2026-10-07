@@ -24,6 +24,10 @@ const VIEW_CONVARS: ViewTuning = ViewTuning {
     sprint_tilt_max_vel: 2.0,
     sprint_tilt_turn_range: 120.0,
     punch_spring: Spring { constant: [65.0; 3], damping: [9.0; 3] },
+    slide_tilt_side: 15.0,
+    slide_tilt_player_speed: 400.0,
+    slide_tilt_increase: 5.0,
+    slide_tilt_decrease: 2.5,
 };
 
 /// The wallrun_*, wallclimb_* and automantle_* ConVars the climb reads.
@@ -181,6 +185,10 @@ pub fn settings(blob: &[u8]) -> Settings {
         viewkick_fall_dist_min: f32_at(blob, 0x894),
         viewkick_fall_dist_max: f32_at(blob, 0x898),
         viewkick_fall_dist_max_scale: f32_at(blob, 0x89c),
+        sprint_tilt_max_roll: f32_at(blob, 0xd80),
+        slide_fov_scale: f32_at(blob, 0xa7c),
+        slide_fov_lerp_in: f32_at(blob, 0xa80),
+        slide_fov_lerp_out: f32_at(blob, 0xa84),
         wall_start_kick: Kick { base: [f32_at(blob, 0x9ec), f32_at(blob, 0x9f4), f32_at(blob, 0x9fc)], random: [f32_at(blob, 0x9f0), f32_at(blob, 0x9f8), f32_at(blob, 0xa00)] },
     }
 }
@@ -283,6 +291,11 @@ pub fn player(p: &[u8]) -> Player {
         weapon_punch_angle: vec3_at(p, 0x20bc),
         weapon_punch_vel: vec3_at(p, 0x20c8),
         fall_velocity: f32_at(p, 0x1a68),
+        slide_tilt: vec3_at(p, 0x30fc),
+        fov_start: f32_at(p, 0x4050),
+        fov_duration: f32_at(p, 0x4054),
+        fov_from: f32_at(p, 0x4058),
+        fov_to: f32_at(p, 0x405c),
     }
 }
 
@@ -328,6 +341,12 @@ pub fn move_in(rec: &Record) -> MoveData {
     mv.origin = vec3_at(&rec.player_in, 0x14c);
     mv.velocity = vec3_at(&rec.player_in, 0x140);
     mv
+}
+
+/// The clock the view setup runs on after this call: the frame's time (`+0x24`), not the
+/// command's, and the frame's frametime.
+pub fn view_clock(rec: &Record) -> (f32, f32) {
+    (f32_at(&rec.globals, 0x24), f32_at(&rec.globals, 0x30))
 }
 
 pub fn globals(g: &[u8], lagged: f32) -> Globals {
@@ -423,6 +442,76 @@ impl Tracer for LogTracer<'_> {
     }
 }
 
+/// Every modelled player field but `ground`, in one list for diffing, carrying and adopting.
+macro_rules! modelled_fields {
+    ($m:ident) => {
+        $m!(flags);
+        $m!(movetype);
+        $m!(up);
+        $m!(surface_friction);
+        $m!(sprinting);
+        $m!(sprint_intent);
+        $m!(sprint_until);
+        $m!(sprint_started_fresh);
+        $m!(traversal_state);
+        $m!(duck_timer);
+        $m!(ducked_in_air);
+        $m!(jump_suppressed);
+        $m!(duck_held);
+        $m!(duck_state);
+        $m!(left_ground_time);
+        $m!(left_ground_up);
+        $m!(jumped_since_ground);
+        $m!(jumped_recently);
+        $m!(last_jump_time);
+        $m!(slide_boost_pending);
+        $m!(slide_start);
+        $m!(slide_boost);
+        $m!(stamina);
+        $m!(sliding);
+        $m!(push);
+        $m!(last_plane);
+        $m!(last_ground_time);
+        $m!(land_time);
+        $m!(land_height);
+        $m!(ground_normal);
+        $m!(ground_plane);
+        $m!(ledge_origin);
+        $m!(step_height);
+        $m!(prev_velocity);
+        $m!(floor_height);
+        $m!(prev_up);
+        $m!(wall_start);
+        $m!(wall_count);
+        $m!(same_wall);
+        $m!(push_away_since);
+        $m!(wall_time);
+        $m!(wall_leave_time);
+        $m!(retry_time);
+        $m!(retry_origin);
+        $m!(retry_normal);
+        $m!(repel_normal);
+        $m!(repel_time);
+        $m!(repel_count);
+        $m!(hanging);
+        $m!(dodge_lock);
+        $m!(dodged);
+        $m!(sprint_tilt);
+        $m!(sprint_tilt_vel);
+        $m!(sprint_tilt_yaw);
+        $m!(punch_angle);
+        $m!(punch_vel);
+        $m!(weapon_punch_angle);
+        $m!(weapon_punch_vel);
+        $m!(fall_velocity);
+        $m!(slide_tilt);
+        $m!(fov_start);
+        $m!(fov_duration);
+        $m!(fov_from);
+        $m!(fov_to);
+    };
+}
+
 fn unsign_zeros(s: String) -> String {
     let s = s.replace("-0.0,", "0.0,").replace("-0.0]", "0.0]");
     if s == "-0.0" { "0.0".to_string() } else { s }
@@ -449,65 +538,7 @@ fn diff_player_as(ours: &Player, theirs: &Player, norm: fn(String) -> String) ->
             }
         };
     }
-    field!(flags);
-    field!(movetype);
-    field!(up);
-    field!(surface_friction);
-    field!(sprinting);
-    field!(sprint_intent);
-    field!(sprint_until);
-    field!(sprint_started_fresh);
-    field!(traversal_state);
-    field!(duck_timer);
-    field!(ducked_in_air);
-    field!(jump_suppressed);
-    field!(duck_held);
-    field!(duck_state);
-    field!(left_ground_time);
-    field!(left_ground_up);
-    field!(jumped_since_ground);
-    field!(jumped_recently);
-    field!(last_jump_time);
-    field!(slide_boost_pending);
-    field!(slide_start);
-    field!(slide_boost);
-    field!(stamina);
-    field!(sliding);
-    field!(push);
-    field!(last_plane);
-    field!(last_ground_time);
-    field!(land_time);
-    field!(land_height);
-    field!(ground_normal);
-    field!(ground_plane);
-    field!(ledge_origin);
-    field!(step_height);
-    field!(prev_velocity);
-    field!(floor_height);
-    field!(prev_up);
-    field!(wall_start);
-    field!(wall_count);
-    field!(same_wall);
-    field!(push_away_since);
-    field!(wall_time);
-    field!(wall_leave_time);
-    field!(retry_time);
-    field!(retry_origin);
-    field!(retry_normal);
-    field!(repel_normal);
-    field!(repel_time);
-    field!(repel_count);
-    field!(hanging);
-    field!(dodge_lock);
-    field!(dodged);
-    field!(sprint_tilt);
-    field!(sprint_tilt_vel);
-    field!(sprint_tilt_yaw);
-    field!(punch_angle);
-    field!(punch_vel);
-    field!(weapon_punch_angle);
-    field!(weapon_punch_vel);
-    field!(fall_velocity);
+    modelled_fields!(field);
     if ours.ground.is_some() != theirs.ground.is_some() {
         out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
     }
@@ -534,65 +565,24 @@ pub fn diff_move(ours: &MoveData, theirs: &MoveData) -> Vec<String> {
 /// `base` with every modelled field taken from `state`: the simulation's own state carried
 /// into a call whose other inputs come from the oracle.
 pub fn with_state(mut base: Player, state: &Player) -> Player {
-    base.flags = state.flags;
-    base.movetype = state.movetype;
-    base.up = state.up;
-    base.surface_friction = state.surface_friction;
-    base.sprinting = state.sprinting;
-    base.sprint_intent = state.sprint_intent;
-    base.sprint_until = state.sprint_until;
-    base.sprint_started_fresh = state.sprint_started_fresh;
-    base.traversal_state = state.traversal_state;
-    base.duck_timer = state.duck_timer;
-    base.ducked_in_air = state.ducked_in_air;
-    base.jump_suppressed = state.jump_suppressed;
-    base.duck_held = state.duck_held;
-    base.duck_state = state.duck_state;
-    base.left_ground_time = state.left_ground_time;
-    base.left_ground_up = state.left_ground_up;
-    base.jumped_since_ground = state.jumped_since_ground;
-    base.jumped_recently = state.jumped_recently;
-    base.last_jump_time = state.last_jump_time;
-    base.slide_boost_pending = state.slide_boost_pending;
-    base.slide_start = state.slide_start;
-    base.slide_boost = state.slide_boost;
-    base.stamina = state.stamina;
-    base.sliding = state.sliding;
-    base.push = state.push;
-    base.last_plane = state.last_plane;
-    base.last_ground_time = state.last_ground_time;
-    base.land_time = state.land_time;
-    base.land_height = state.land_height;
-    base.ground_normal = state.ground_normal;
-    base.ground_plane = state.ground_plane;
-    base.ledge_origin = state.ledge_origin;
-    base.step_height = state.step_height;
-    base.prev_velocity = state.prev_velocity;
-    base.floor_height = state.floor_height;
-    base.prev_up = state.prev_up;
-    base.wall_start = state.wall_start;
-    base.wall_count = state.wall_count;
-    base.same_wall = state.same_wall;
-    base.push_away_since = state.push_away_since;
-    base.wall_time = state.wall_time;
-    base.wall_leave_time = state.wall_leave_time;
-    base.retry_time = state.retry_time;
-    base.retry_origin = state.retry_origin;
-    base.retry_normal = state.retry_normal;
-    base.repel_normal = state.repel_normal;
-    base.repel_time = state.repel_time;
-    base.repel_count = state.repel_count;
-    base.hanging = state.hanging;
-    base.dodge_lock = state.dodge_lock;
-    base.dodged = state.dodged;
-    base.sprint_tilt = state.sprint_tilt;
-    base.sprint_tilt_vel = state.sprint_tilt_vel;
-    base.sprint_tilt_yaw = state.sprint_tilt_yaw;
-    base.punch_angle = state.punch_angle;
-    base.punch_vel = state.punch_vel;
-    base.weapon_punch_angle = state.weapon_punch_angle;
-    base.weapon_punch_vel = state.weapon_punch_vel;
-    base.fall_velocity = state.fall_velocity;
+    macro_rules! take {
+        ($f:ident) => {
+            base.$f = state.$f;
+        };
+    }
+    modelled_fields!(take);
     base.ground = state.ground;
     base
+}
+
+/// Takes the named fields from `theirs`: what the game changed between calls.
+pub fn adopt(ours: &mut Player, theirs: &Player, names: &[&str]) {
+    macro_rules! one {
+        ($f:ident) => {
+            if names.contains(&stringify!($f)) {
+                ours.$f = theirs.$f;
+            }
+        };
+    }
+    modelled_fields!(one);
 }

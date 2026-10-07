@@ -3,7 +3,10 @@
 How the oracle's camera answers movement, recovered from the image as behaviour. The first
 part runs inside the movement call, so the recordings hold its ground truth and
 `src/sim/view.rs` is gated on it like the movement fields. The second part runs in the
-client's view setup; it is recovered here as a spec and not yet ported or checked.
+client's view setup once a frame, between movement calls. Its state lives on the player
+too, so it is gated the same way: from the oracle's state after one call, our frame must
+reach the oracle's state before the next. What it renders (roll, FOV, eye height) is not
+recorded and so not checked.
 
 ## Kept by the movement call (ported, gated)
 
@@ -34,9 +37,14 @@ cannot draw a kick: it checks that the oracle kicked on the same call and takes 
 velocities. The model is confirmed by search instead: one seed reproduces jump.ltr's jump
 kick (seq `0x316d`) and one its landing kick (seq `0x3223`), bit for bit.
 
-## View setup (recovered, not ported)
+## View setup
 
-`0x67eff0` is the player's view calculation. Roll (`0x85ffc0`) adds, for plain movement:
+`0x67eff0` is the player's view calculation. It runs after each frame's movement call on
+the frame's clock: gpGlobals `+0x24` as the time, and the frame's frametime, which is the
+command's. Ported as `Player::view_frame` (state) and `Player::view_roll`; gated on the
+slide tilt and the FOV ease.
+
+Roll (`0x85ffc0`) adds, for plain movement:
 
 - sprint tilt: `sprinttiltMaxRoll` (2°) × `+0x1eb8`;
 - slide tilt: −`slide_viewTiltSide` (15°) × (view forward · `+0x30fc`). `+0x30fc` moves toward
@@ -46,12 +54,14 @@ kick (seq `0x316d`) and one its landing kick (seq `0x3223`), bit for bit.
   second (`0x85fb70`). No tilt looking along the slide, full tilt looking 90° off it;
 - `sv_rollangle` is 0, so no strafe roll. Dodge, wall-run and zipline rolls do not apply.
 
-FOV (`0x8610c0`, `0x860f40`): `cl_fovScale` clamped to [1, 1.7] times the `fov` setting (70),
+FOV (`0x8610c0`, `0x860f40`, not ported): `cl_fovScale` clamped to [1, 1.7] times the `fov` setting (70),
 rounded, plus headroom (up to +35, capped at 115) times script-driven fractions read through
 runtime handles (`0x285a5058`, `0x2859d658`, `0x285a0094`) that are not resolved yet. Sliding
 (`+0x2815` with `+0x2816`) eases the FOV scale to `slideFOVScale` (1.1) over
 `slideFOVLerpInTime` (0.25 s), and back to 1 over `slideFOVLerpOutTime` (0.25 s), linearly
 in game time (`SetFOVScale`, `0x683e20` / `0x683d90`).
+
+Not ported yet:
 
 Sprint view (`0x8585d0`, `0x865240`): the eye drops by `sprintViewOffset` (−6) ×
 sin(f · π/2), f the sprint fraction: it ramps in over `sprintStartFastDuration` and,

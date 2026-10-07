@@ -88,6 +88,10 @@ pub struct Settings {
     pub viewkick_fall_dist_max_scale: f32,
     /// `wallrun_viewpunch_onStart_*`.
     pub wall_start_kick: view::Kick,
+    pub sprint_tilt_max_roll: f32,
+    pub slide_fov_scale: f32,
+    pub slide_fov_lerp_in: f32,
+    pub slide_fov_lerp_out: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -209,6 +213,13 @@ pub struct Player {
     pub weapon_punch_vel: V3,
     /// Downward speed while airborne, which a landing reports to the view kick.
     pub fall_velocity: f32,
+    /// The view setup's state: the slide tilt, and the FOV scale's ease (start, duration,
+    /// from, to).
+    pub slide_tilt: V3,
+    pub fov_start: f32,
+    pub fov_duration: f32,
+    pub fov_from: f32,
+    pub fov_to: f32,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -158,3 +158,35 @@ fn setup_move_builds_the_recorded_move_data() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// The view setup runs once a frame between movement calls, on the frame's clock: from the
+/// oracle's state after one call it must reach the oracle's state before the next.
+#[test]
+fn view_frames_between_calls_match() {
+    let mut bad = Vec::new();
+    for p in recordings() {
+        let (mut frames, mut fails, mut first) = (0, 0, None);
+        let mut prev: Option<lurch::ltr::Record> = None;
+        for rec in lurch::ltr::open(p.to_str().unwrap()).unwrap() {
+            let rec = rec.unwrap();
+            if let Some(pr) = prev.as_ref().filter(|pr| lurch::oracle::input_recorded(pr) && lurch::oracle::input_recorded(&rec)) {
+                let s = lurch::oracle::settings(&pr.settings);
+                let mut ours = lurch::oracle::player(&pr.player_out);
+                let (t, dt) = lurch::oracle::view_clock(pr);
+                ours.view_frame(&s, lurch::oracle::move_in(&rec).velocity, t, dt);
+                let theirs = lurch::oracle::player(&rec.player_in);
+                let key = |p: &lurch::sim::Player| format!("{:?}", (p.slide_tilt, p.fov_start, p.fov_duration, p.fov_from, p.fov_to));
+                frames += 1;
+                if key(&ours) != key(&theirs) {
+                    fails += 1;
+                    first.get_or_insert_with(|| format!("after seq {:x}: {} want {}", pr.seq, key(&ours), key(&theirs)));
+                }
+            }
+            prev = Some(rec);
+        }
+        if let Some(f) = first {
+            bad.push(format!("{}: {fails} of {frames} frames differ, first {f}", p.display()));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}

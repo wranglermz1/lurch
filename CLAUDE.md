@@ -114,7 +114,7 @@ stops at the first slot outside .text and has no other terminator.
 ## Fidelity reached
 
 `cargo test` replays every recording two ways, and both must be bit-exact on origin,
-velocity and all 60 modelled player fields:
+velocity and all 65 modelled player fields:
 - call by call, each call starting from the oracle's state;
 - chained, the simulation carrying its own state from call to call for whole recordings.
 
@@ -130,9 +130,10 @@ crouch jump, air duck, slide, slide hop, slide jump; and seeded random input
 (`tools/fuzz.py`). Mantle is not ported.
 
 Camera: what the movement call keeps for the view (sprint tilt, view punch springs, fall
-speed) is among those fields. View kicks draw from the command's random seed, which the
-recordings lack; the replay checks the kick lands on the same call and takes the oracle's
-punch. The view setup itself is recovered in `docs/camera.md`, not ported.
+speed) is among those fields, and so is what the view setup updates once a frame between
+calls (slide tilt, FOV ease), checked from each call's output to the next call's input.
+View kicks draw from the command's random seed, which the recordings lack; the replay
+checks the kick lands on the same call and takes the oracle's punch. `docs/camera.md`.
 
 Collision: `src/world.rs` sweeps the hull against triangles (in memory, or a HAVM `.mesh`).
 Every mp_rr_arena_empty recording also replays chained with our own collision against its

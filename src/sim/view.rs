@@ -1,16 +1,21 @@
 //! What a movement call keeps for the camera: the sprint tilt, which rolls the view when
 //! turning at sprint speed, and the view punch, two damped springs that a landing kicks.
+//! And what the view setup updates once a frame between calls: the slide's FOV and tilt.
 
-use super::Move;
 use super::math::*;
+use super::{Move, Player, Settings};
 
-/// The `sprinttilt_*` and `viewpunch_base_spring*` ConVars.
+/// The `sprinttilt_*`, `viewpunch_base_spring*` and `slide_viewTilt*` ConVars.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewTuning {
     pub sprint_tilt_accel: f32,
     pub sprint_tilt_max_vel: f32,
     pub sprint_tilt_turn_range: f32,
     pub punch_spring: Spring,
+    pub slide_tilt_side: f32,
+    pub slide_tilt_player_speed: f32,
+    pub slide_tilt_increase: f32,
+    pub slide_tilt_decrease: f32,
 }
 
 /// A view kick's fixed part and the spread of its random part, pitch, yaw, roll.
@@ -247,5 +252,98 @@ impl Move<'_> {
         }
         let scale = landing_kick_scale(self.s, fall);
         self.kick(LANDING_SALT, true, |r| [scale * (r[0] * 0.75 + 2.0), scale * (r[1] * 0.0 + 0.0), scale * (r[2] + 0.0)]);
+    }
+}
+
+/// Moves `tilt` toward the horizontal velocity turned a quarter left, scaled from 0 at `lo`
+/// speed to 1 at `hi` and by `on`; at most `rise` per second while it grows, else `fall`.
+fn tilt_toward(tilt: &mut V3, on: f32, v: V3, (lo, hi): (f32, f32), (rise, fall): (f32, f32), dt: f32) {
+    let (lx, ly) = (-v[1], v[0]);
+    let len2 = ly * ly + lx * lx + 0.0;
+    let k = if hi * hi <= len2 {
+        Some(1.0 / len2.sqrt().max(TINY))
+    } else if lo * lo >= len2 {
+        None
+    } else {
+        let l = len2.sqrt();
+        Some((l - lo) / (hi - lo) / l)
+    };
+    let t = match k {
+        Some(k) => [k * lx * on, k * ly * on, k * 0.0 * on],
+        None => [0.0 * on; 3],
+    };
+    let s = *tilt;
+    let rate = if t[1] * t[1] + t[0] * t[0] + t[2] * t[2] > s[1] * s[1] + s[0] * s[0] + s[2] * s[2] { rise } else { fall };
+    let step = rate * dt;
+    let d = [t[0] - s[0], t[1] - s[1], t[2] - s[2]];
+    let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    *tilt = if d2 > step * step {
+        let k = step / d2.sqrt();
+        [k * d[0] + s[0], k * d[1] + s[1], k * d[2] + s[2]]
+    } else {
+        t
+    };
+}
+
+impl Player {
+    /// The FOV scale, eased linearly in game time toward the last one set (`SetFOVScale`).
+    pub fn fov_scale(&self, curtime: f32) -> f32 {
+        let start = self.fov_start;
+        let end = start + self.fov_duration;
+        let now = if curtime <= start { start } else { curtime };
+        if now < end {
+            if start == end {
+                return self.fov_from;
+            }
+            let mut f = (now - start) / (end - start);
+            if f <= 0.0 {
+                f = 0.0;
+            }
+            if 1.0 <= f {
+                f = 1.0;
+            }
+            return (self.fov_to - self.fov_from) * f + self.fov_from;
+        }
+        self.fov_to
+    }
+
+    fn set_fov_scale(&mut self, target: f32, time: f32, curtime: f32) {
+        if self.fov_to != target {
+            self.fov_from = self.fov_scale(curtime);
+            self.fov_start = curtime;
+            self.fov_duration = if time <= 0.0 { 0.0 } else { time };
+            self.fov_to = target;
+        }
+    }
+
+    /// The view setup's once-a-frame update, run after the frame's movement call with the
+    /// frame's clock and the velocity the call left.
+    pub fn view_frame(&mut self, s: &Settings, velocity: V3, curtime: f32, frametime: f32) {
+        if self.sliding && self.slide_boost_pending {
+            self.set_fov_scale(s.slide_fov_scale, s.slide_fov_lerp_in, curtime);
+        } else {
+            self.set_fov_scale(1.0, s.slide_fov_lerp_out, curtime);
+        }
+        let v = &s.view;
+        let on = if self.sliding { 1.0 } else { 0.0 };
+        let speeds = (s.slide_stop_speed, v.slide_tilt_player_speed);
+        tilt_toward(&mut self.slide_tilt, on, velocity, speeds, (v.slide_tilt_increase, v.slide_tilt_decrease), frametime);
+    }
+
+    /// The roll the view adds, in degrees: sprint tilt, and the slide's tilt when looking off
+    /// the slide's line.
+    pub fn view_roll(&self, s: &Settings, angles: V3) -> f32 {
+        let (f, _, _) = angle_vectors(angles);
+        let t = self.slide_tilt;
+        let slide = f[1] * t[1] + f[0] * t[0] + f[2] * t[2];
+        let r = angles[2] + (0.0 - slide * s.view.slide_tilt_side) + s.sprint_tilt_max_roll * self.sprint_tilt;
+        let r = r % 360.0;
+        if r > 180.0 {
+            r - 360.0
+        } else if r < -180.0 {
+            r + 360.0
+        } else {
+            r
+        }
     }
 }
