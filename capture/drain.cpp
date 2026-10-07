@@ -41,9 +41,17 @@ uint64_t find_ring(const Process& game) {
     const uint32_t size = game.read<uint32_t>(dll + lfanew + 24 + 56);
     std::vector<char> img(size);
     game.read_partial(dll, img.data(), size);
-    const void* hit = memmem(img.data(), size, LURCH_MAGIC, sizeof LURCH_MAGIC);
-    if (!hit) throw std::runtime_error("lurchcap.dll is loaded but its ring has no magic: it did not hook");
-    return dll + ((const char*)hit - img.data());
+    // The magic also sits in .rdata as the literal the DLL copies from; the ring is the hit
+    // whose header carries this drain's record size.
+    for (size_t at = 0; at + sizeof(lurch_ring::magic) + 8 <= size; at++) {
+        const char* hit = (const char*)memmem(img.data() + at, size - at, LURCH_MAGIC, sizeof LURCH_MAGIC);
+        if (!hit) break;
+        at = hit - img.data();
+        uint32_t rec_size;
+        memcpy(&rec_size, hit + offsetof(lurch_ring, rec_size), 4);
+        if (rec_size == sizeof(lurch_rec)) return dll + at;
+    }
+    throw std::runtime_error("lurchcap.dll is loaded but has no ring with this drain's layout: it did not hook, or ring.h differs");
 }
 
 void state(FILE* f, const char* tag, const lurch_state& s) {
@@ -89,8 +97,20 @@ int main(int argc, char** argv) {
             const uint32_t write = game.read<uint32_t>(ring + offsetof(lurch_ring, write));
             for (; read != write; read++) {
                 lurch_rec r;
-                if (!game.read_into(ring + offsetof(lurch_ring, recs) + (read % LURCH_CAP) * sizeof r, &r, sizeof r))
-                    throw std::runtime_error("ring read failed");
+                const uint64_t va = ring + offsetof(lurch_ring, recs) + (read % LURCH_CAP) * sizeof r;
+                size_t got = game.read_partial(va, &r, sizeof r);
+                if (got != sizeof r) {
+                    // The record reached a page the DLL only just faulted in, which MemProcFS's
+                    // page-table cache still holds as unmapped.
+                    VMMDLL_ConfigSet(vm.handle(), VMMDLL_OPT_REFRESH_FREQ_TLB, 1);
+                    got = game.read_partial(va, &r, sizeof r);
+                }
+                if (got != sizeof r) {
+                    char m[160];
+                    snprintf(m, sizeof m, "ring read failed: record %u at %#llx, %zu of %zu bytes (write %u)",
+                             read, (unsigned long long)va, got, sizeof r, write);
+                    throw std::runtime_error(m);
+                }
                 recs.push_back(r);
             }
             game.write_bytes(ring + offsetof(lurch_ring, read), &read, 4);
@@ -107,7 +127,7 @@ int main(int argc, char** argv) {
 
         for (const auto& r : kept)
             for (int k = 0; k < AUX_COUNT; k++)
-                if (bits(r.aux[k]) != bits(kept[0].aux[k])) {
+                if (r.aux[k] != kept[0].aux[k]) {
                     fprintf(stderr, "%s moved from %g to %g at seq %x: not a single-settings recording, nothing written\n",
                             AUX_NAMES[k], kept[0].aux[k], r.aux[k], r.seq);
                     return 1;
