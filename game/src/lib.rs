@@ -34,6 +34,8 @@ pub struct Config {
     pub wheel_down: Option<u32>,
     pub wheel_up: Option<u32>,
     pub wheel_mode: WheelMode,
+    /// The player's `cl_fovScale` option.
+    pub fov_scale: f32,
 }
 
 impl Default for Config {
@@ -47,6 +49,7 @@ impl Default for Config {
             wheel_down: Some(IN_FORWARD),
             wheel_up: Some(IN_JUMP),
             wheel_mode: WheelMode::Event,
+            fov_scale: 1.27216,
         }
     }
 }

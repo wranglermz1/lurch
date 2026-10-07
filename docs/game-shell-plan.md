@@ -665,7 +665,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | M2 | lurch API for a shell (section 3) | cloud | done: `cargo test --test frame` 11 tests, finished in 0.02 s; root suite green, `step` unchanged; values from M1, not provisional |
 | M3 | `game/` scaffold, environment, CLAUDE.md rules | cloud (+ workstation smoke) | done in the cloud: cold build 11m36s (sharing CPUs), smoke test passes, xvfb `--shot 30` is exactly sky (140,178,217) everywhere, fresh-clone root `cargo test --offline` passes. Left: the workstation smoke (`vulkaninfo`, one `cargo run`) |
 | M4 | Input to commands (`CmdPlugin`) | cloud | done: `input::` 21 tests pass headless (every case listed, plus the clamp); values asserted through `key_state` |
-| M5 | Simulation loop (`SimPlugin`) | cloud | not started |
+| M5 | Simulation loop (`SimPlugin`) | cloud | done: `sim::` 7 tests pass, shell equals a bare Pilot loop bit for bit over 599 frames with a slide and jumps; a mutation (view frame on the pre-step clock) fails it; grep rule prints nothing |
 | M6 | Scripts and the headless binary | cloud | not started |
 | M7 | Map, camera and body rendering | cloud | not started |
 | M8 | Playable core: flags, window, timing, cursor | cloud (+ workstation first play) | not started |
