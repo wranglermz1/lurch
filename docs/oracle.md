@@ -206,6 +206,11 @@ assembly.
 
 ## Open
 
+- World collision. The engine's sweep (`0x2dc940` setup, `0x2db2b0` BVH walk, per-primitive
+  handlers in tables at `0x13007f0`/`0x1300660`/`0x13006b0`) is not ported; `src/world.rs` is
+  a Source-style stand-in. On the arena floor it gives 99.98% of logged endpos bit-exact and
+  76% of fractions; the rest differ in the last bits.
+
 - Friction and acceleration internals: `0x817c90`, `0x817ad0`, `0x826540`, `0x808d10`.
 - `0x8049e0`: a speed multiplier. It returns 1.0 unless the entity from `0x7d0870`
   (probably the active weapon) sets one at `+0x1a14`.

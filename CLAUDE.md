@@ -48,7 +48,8 @@ Lives in the HAVM repo at /home/fz/HAVM/HAVM, already extracted. Do not re-deriv
   795 of them on the player. Names carry over; offsets do not fit the oracle build. The
   traversal state machine (`m_traversalState`, `m_traversalType`, `m_traversalProgress`,
   `m_traversalBegin/Mid/End`) and the wallrun and slide fields come from here.
-- `maps/*.mesh` — extracted collision geometry, retail maps. The guest hosts its own
+- `maps/*.mesh` — extracted collision geometry, retail maps. None of them is a map the
+  oracle runs, so none can verify collision against recordings. The guest hosts its own
   match under Flowstate. Recordings come from mp_rr_desertlands_64k_x_64k and
   mp_rr_arena_empty (large and flat; `map mp_rr_arena_empty` in the console).
   Keep `flowstate_modified_movement 0` (Apex movement) in the playlist.
@@ -111,8 +112,12 @@ velocity and all 35 modelled player fields:
 Recordings: walking over World's Edge terrain; on mp_rr_arena_empty jumps, sprint jumps,
 bunny hops, lurch, tap strafe, air turning, crouch, crouch jump, air duck, slide, slide hop,
 slide jump; and seeded random input (`tools/fuzz.py`). Still from the oracle each call:
-collision results (the trace log), settings, ConVars, view angles. Wall climb and mantle
-are not ported.
+settings, ConVars, view angles. Wall climb and mantle are not ported.
+
+Collision: `src/world.rs` sweeps the hull against triangles (in memory, or a HAVM `.mesh`).
+Every mp_rr_arena_empty recording also replays chained with our own collision against its
+floor, exact to `TOL`. No mesh exists for any R5Reloaded map, so collision beyond a flat
+floor is unverified.
 
 ## Approach
 

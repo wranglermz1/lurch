@@ -2,7 +2,7 @@
 
 use crate::ltr::{open, Record};
 use crate::oracle::{self, outcome, LogTracer, Outcome};
-use crate::sim::{Move, MoveData, Player, Scratch};
+use crate::sim::{Move, MoveData, Player, Scratch, Tracer};
 
 pub const TOL: f32 = 1e-3;
 
@@ -49,6 +49,15 @@ pub fn step(rec: &Record) -> Step {
 /// Run one call. With `carried`, the simulation's own player state and position from the
 /// previous call replace the oracle's; everything else still comes from the recording.
 pub fn run(rec: &Record, carried: Option<&(Player, MoveData)>) -> (Step, Player, MoveData) {
+    let mut tr = LogTracer::new(&rec.traces);
+    let (mut s, p, mv) = simulate(rec, carried, &mut tr);
+    s.missing = tr.missing.len();
+    s.unused = tr.unused();
+    (s, p, mv)
+}
+
+/// Run one call with collision answered by `tr` rather than by the oracle's log.
+pub fn simulate(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mut dyn Tracer) -> (Step, Player, MoveData) {
     let want = outcome(rec);
     let mut p = oracle::player(&rec.player_in);
     let mut mv = oracle::move_data(&rec.mv_in, rec.seq);
@@ -59,17 +68,16 @@ pub fn run(rec: &Record, carried: Option<&(Player, MoveData)>) -> (Step, Player,
     }
     let s = oracle::settings(&rec.settings);
     let g = oracle::globals(&rec.globals, p.lagged);
-    let mut tr = LogTracer::new(&rec.traces);
     let surface = |_: u32| DEFAULT_SURFACE_FRICTION;
     {
-        let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr: &mut tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
+        let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
         m.pre_think();
         m.process_movement(oracle::SV_OPTIMIZEDMOVEMENT);
     }
     let mut diffs = oracle::diff_player(&p, &oracle::player(&rec.player_out));
     diffs.extend(oracle::diff_move(&mv, &oracle::move_data(&rec.mv_out, rec.seq)));
     let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };
-    (Step { seq: rec.seq, want, got, missing: tr.missing.len(), unused: tr.unused(), diffs }, p, mv)
+    (Step { seq: rec.seq, want, got, missing: 0, unused: 0, diffs }, p, mv)
 }
 
 pub fn file(path: &str) -> std::io::Result<Vec<Step>> {
@@ -116,4 +124,28 @@ pub fn chain(path: &str) -> std::io::Result<Chain> {
         carried = if s.missing == 0 { Some((p, mv)) } else { None };
     }
     Ok(c)
+}
+
+/// Replay a whole recording with the simulation carrying its own state and answering its own
+/// collision from `world`; inputs, settings and view angles still come from the recording.
+/// Returns the worst origin and velocity error against the oracle over the run.
+pub fn chain_world(path: &str, world: &mut dyn Tracer) -> std::io::Result<(f32, f32)> {
+    let mut carried: Option<(Player, MoveData)> = None;
+    let (mut worst_origin, mut worst_velocity) = (0.0f32, 0.0f32);
+    for rec in open(path)? {
+        let rec = rec?;
+        if let Some((cp, cmv)) = &mut carried {
+            let g = oracle::globals(&rec.globals, cp.lagged);
+            cp.prev_velocity = cmv.velocity;
+            if cp.ground.is_some() {
+                cp.left_ground_time = g.curtime;
+                cp.left_ground_up = cp.up;
+            }
+        }
+        let (s, p, mv) = simulate(&rec, carried.as_ref(), world);
+        worst_origin = worst_origin.max(s.origin_err());
+        worst_velocity = worst_velocity.max(s.velocity_err());
+        carried = Some((p, mv));
+    }
+    Ok((worst_origin, worst_velocity))
 }

@@ -38,3 +38,23 @@ fn recordings_hold_when_the_simulation_carries_its_own_state() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// mp_rr_arena_empty's floor, the only geometry its recordings touch.
+const ARENA_FLOOR: f32 = -2688.0;
+
+#[test]
+fn arena_recordings_hold_with_our_own_collision() {
+    let mut bad = Vec::new();
+    for p in recordings() {
+        let path = p.to_str().unwrap();
+        if lurch::ltr::open(path).unwrap().map != "mp_rr_arena_empty" {
+            continue;
+        }
+        let mut world = lurch::world::World::floor(ARENA_FLOOR);
+        let (origin, velocity) = lurch::replay::chain_world(path, &mut world).unwrap();
+        if origin > lurch::replay::TOL || velocity > lurch::replay::TOL {
+            bad.push(format!("{}: worst origin {origin:e}, velocity {velocity:e}", p.display()));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
