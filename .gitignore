@@ -3,3 +3,4 @@ ghidra-cache/
 traces/local/
 maps/
 dumps/
+__pycache__/

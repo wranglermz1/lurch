@@ -1,10 +1,15 @@
 //! Every recording must replay through the simulation exactly: the committed ones in traces/
-//! and any local ones (traces/local/, too large to commit, e.g. fuzz runs).
+//! and any local ones (traces/local/, too large to commit, e.g. fuzz runs). Recordings of
+//! mechanics not ported yet wait in pending/ (and local/pending/); move one up once it passes.
 
 fn recordings() -> Vec<std::path::PathBuf> {
+    in_dirs(&["", "local"])
+}
+
+fn in_dirs(dirs: &[&str]) -> Vec<std::path::PathBuf> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/traces");
     let mut out = Vec::new();
-    for dir in [root.to_string(), format!("{root}/local")] {
+    for dir in dirs.iter().map(|d| format!("{root}/{d}")) {
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         out.extend(rd.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "ltr")));
     }
@@ -54,6 +59,23 @@ fn arena_recordings_hold_with_our_own_collision() {
         let (origin, velocity) = lurch::replay::chain_world(path, &mut world).unwrap();
         if origin > lurch::replay::TOL || velocity > lurch::replay::TOL {
             bad.push(format!("{}: worst origin {origin:e}, velocity {velocity:e}", p.display()));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The work queue: `cargo test --release -- --ignored` reports how far each pending recording
+/// is from replaying.
+#[test]
+#[ignore]
+fn pending_recordings() {
+    let mut bad = Vec::new();
+    for p in in_dirs(&["pending", "local/pending"]) {
+        let steps = lurch::replay::file(p.to_str().unwrap()).unwrap();
+        let fails = steps.iter().filter(|s| !s.ok()).count();
+        let resyncs = lurch::replay::chain(p.to_str().unwrap()).unwrap().resyncs.len();
+        if fails > 0 || resyncs > 0 {
+            bad.push(format!("{}: {fails} of {} calls diverge, {resyncs} resyncs", p.display(), steps.len()));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));

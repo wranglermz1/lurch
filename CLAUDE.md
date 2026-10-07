@@ -85,6 +85,9 @@ pattern. Retail strips it.
     src/              the lurch crate: trace parser, movement step, replay
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
     traces/local/     recordings too large to commit (fuzz runs); gated when present
+    traces/pending/   recordings of mechanics not ported yet; `cargo test -- --ignored`
+    docs/maps.md      getting R5Reloaded map collision into a mesh
+    docs/capture.md   recording on the guest
     dumps/            images, gitignored, hardlinked from HAVM on disk
     ref/              HAVM's extracted convar values and datamap offsets, retail build
 
@@ -118,6 +121,18 @@ Collision: `src/world.rs` sweeps the hull against triangles (in memory, or a HAV
 Every mp_rr_arena_empty recording also replays chained with our own collision against its
 floor, exact to `TOL`. No mesh exists for any R5Reloaded map, so collision beyond a flat
 floor is unverified.
+
+## Where a session runs
+
+The workstation has everything: the oracle image in `dumps/`, HAVM, Ghidra, the guest
+with the game. A cloud session has only this repo. It can build, run `cargo test`, read
+the recordings in `traces/` and the recovered behaviour in `docs/oracle.md`, and change
+`src/`. It cannot decompile (`dumps/` is never pushed), record, or load map meshes
+(`maps/` is local). Work that needs those goes back to the workstation; say so rather
+than guess at what the binary does.
+
+`cargo test` must stay green on a fresh clone. A new recording that fails goes in
+`traces/pending/` until the mechanic is ported, then moves up to `traces/`.
 
 ## Approach
 
