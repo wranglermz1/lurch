@@ -1,0 +1,11 @@
+# Sprint across the hill top, slide down the slope looking around, slide-jump near the bottom.
+0 spot hill
+1 down KeyW
+1 down ShiftLeft
+280 down ControlLeft
+300 look -60 0
+340 look 120 0
+380 look -60 0
+1100 tap Space
+1110 up ControlLeft
+1400 exit

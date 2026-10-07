@@ -50,20 +50,20 @@ fn drive(app: &mut App, frame: u64) {
 
 /// A bare pilot loop over the shell's logged commands: each frame's commands stepped, then
 /// one view frame.
-struct Reference {
-    pilot: Pilot,
-    clock: Clock,
+pub struct Reference {
+    pub pilot: Pilot,
+    pub clock: Clock,
     world: CollisionWorld,
 }
 
 impl Reference {
-    fn at(spot: &str) -> Self {
+    pub fn at(spot: &str) -> Self {
         let map = testmap::build();
         let origin = map.spot(spot).origin;
         Reference { pilot: Pilot::new(origin), clock: Clock::default(), world: CollisionWorld::from_tris(map.tris) }
     }
 
-    fn frame(&mut self, cmds: &[UserCmd], view_each: bool) {
+    pub fn frame(&mut self, cmds: &[UserCmd], view_each: bool) {
         let s = pilot::settings();
         for (i, c) in cmds.iter().enumerate() {
             self.pilot.step(&s, c, self.clock.now(), &mut self.world);

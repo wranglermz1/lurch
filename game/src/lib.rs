@@ -4,6 +4,7 @@ pub mod cmd;
 pub mod hud;
 pub mod limiter;
 pub mod look;
+pub mod script;
 pub mod sim;
 pub mod view;
 
@@ -15,6 +16,7 @@ use bevy::window::WindowFocused;
 use binds::{Binds, WheelMode};
 use lurch::sim::buttons::{IN_FORWARD, IN_JUMP};
 use lurch::sim::math::V3;
+use script::{Script, SCRIPT_FRAMETIME};
 
 pub use cmd::CmdPlugin;
 pub use hud::HudPlugin;
@@ -29,6 +31,9 @@ pub struct Config {
     pub shot: Option<(u64, PathBuf)>,
     /// Only scripted input drives the run: no pause, no focus loss, no window input.
     pub scripted: bool,
+    pub script: Option<Script>,
+    pub frametime: f32,
+    pub headless: bool,
     pub sens: f32,
     pub binds: Binds,
     pub wheel_down: Option<u32>,
@@ -44,6 +49,9 @@ impl Default for Config {
             spot: "wall 48".into(),
             shot: None,
             scripted: false,
+            script: None,
+            frametime: SCRIPT_FRAMETIME,
+            headless: false,
             sens: 5.0,
             binds: Binds::default(),
             wheel_down: Some(IN_FORWARD),
@@ -63,6 +71,10 @@ pub struct Paused(pub bool);
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HudVisible(pub bool);
+
+/// Screenshots requested and not yet saved; a script waits for them before exiting.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PendingShots(pub usize);
 
 impl Default for HudVisible {
     fn default() -> Self {
@@ -106,6 +118,7 @@ pub fn common(app: &mut App) {
         .init_resource::<FrameIndex>()
         .init_resource::<Paused>()
         .init_resource::<HudVisible>()
+        .init_resource::<PendingShots>()
         .add_message::<Respawn>()
         .add_message::<LookReset>()
         .add_message::<WindowFocused>()

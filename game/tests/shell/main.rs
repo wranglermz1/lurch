@@ -1,3 +1,4 @@
 mod input;
-mod sim;
 mod play;
+mod script;
+mod sim;

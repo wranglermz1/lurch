@@ -1,0 +1,23 @@
+# Sprint, jump, let go of W, then turn the view 90 degrees left over ten frames while the
+# wheel taps forward every other frame: each tap's edge bends the jump toward the new forward.
+0 spot wall 48
+1 down KeyW
+1 down ShiftLeft
+230 tap Space
+232 up KeyW
+234 look -81.818184 0
+234 wheel -1
+235 look -81.818184 0
+236 look -81.818184 0
+236 wheel -1
+237 look -81.818184 0
+238 look -81.818184 0
+238 wheel -1
+239 look -81.818184 0
+240 look -81.818184 0
+240 wheel -1
+241 look -81.818184 0
+242 look -81.818184 0
+242 wheel -1
+243 look -81.818184 0
+410 exit
