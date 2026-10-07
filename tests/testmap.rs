@@ -31,7 +31,7 @@ fn drive(spot: &str, steps: u32, mut press: impl FnMut(&Pilot) -> u32) -> Vec<St
     let mut clock = 100.0f64;
     let mut out = Vec::new();
     for i in 0..steps {
-        let cmd = UserCmd { command_number: i, angles: [0.0, yaw, 0.0], forward: 1.0, side: 0.0, up: 0.0, buttons: press(&p), frametime: DT };
+        let cmd = UserCmd { command_number: i, angles: [0.0, yaw, 0.0], forward: 1.0, side: 0.0, up: 0.0, buttons: press(&p), frametime: DT, random_seed: i };
         p.step(&s, &cmd, clock as f32, &mut world);
         clock += DT as f64;
         out.push(State { origin: p.origin, velocity: p.velocity, standing: p.player.ground.is_some() && is_world_up(p.player.up) });

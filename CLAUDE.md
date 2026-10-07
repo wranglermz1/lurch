@@ -85,6 +85,7 @@ pattern. Retail strips it.
     tools/record.sh   record one scripted scenario (drive + drain) into traces/
     tools/fuzz.py     seeded random drive script, for record.sh
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
+    docs/camera.md    the camera's answer to movement, recovered; what is ported and gated
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
     src/              the lurch crate: trace parser, movement step, replay, test map
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
@@ -113,7 +114,7 @@ stops at the first slot outside .text and has no other terminator.
 ## Fidelity reached
 
 `cargo test` replays every recording two ways, and both must be bit-exact on origin,
-velocity and all 55 modelled player fields:
+velocity and all 60 modelled player fields:
 - call by call, each call starting from the oracle's state;
 - chained, the simulation carrying its own state from call to call for whole recordings.
 
@@ -127,6 +128,11 @@ wall climbs there (walking, sprinting, ducking off, releasing, jumping off); on
 mp_rr_arena_empty jumps, sprint jumps, bunny hops, lurch, tap strafe, air turning, crouch,
 crouch jump, air duck, slide, slide hop, slide jump; and seeded random input
 (`tools/fuzz.py`). Mantle is not ported.
+
+Camera: what the movement call keeps for the view (sprint tilt, view punch springs, fall
+speed) is among those fields. View kicks draw from the command's random seed, which the
+recordings lack; the replay checks the kick lands on the same call and takes the oracle's
+punch. The view setup itself is recovered in `docs/camera.md`, not ported.
 
 Collision: `src/world.rs` sweeps the hull against triangles (in memory, or a HAVM `.mesh`).
 Every mp_rr_arena_empty recording also replays chained with our own collision against its

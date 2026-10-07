@@ -79,6 +79,7 @@ impl Move<'_> {
             return false;
         }
         self.p.last_ground_time = 0.0;
+        self.jump_kick();
 
         if self.p.sliding && self.p.slide_boost_pending {
             let v = self.mv.velocity;

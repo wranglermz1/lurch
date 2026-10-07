@@ -82,12 +82,24 @@ pub fn simulate_with(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mu
     }
     let g = oracle::globals(&rec.globals, p.lagged);
     let surface = |_: u32| pilot::SURFACE_FRICTION;
-    {
+    let unseeded_kick = {
         let mut m = Move { p: &mut p, mv: &mut mv, s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
         m.pre_think();
         m.process_movement(pilot::SV_OPTIMIZEDMOVEMENT);
+        m.scratch.unseeded_kick
+    };
+    let theirs = oracle::player(&rec.player_out);
+    let mut diffs = Vec::new();
+    // The kick's draws need the command's random seed, which recordings lack: check that the
+    // oracle kicked on the same call, then take its punch velocities.
+    if unseeded_kick {
+        if p.punch_vel == theirs.punch_vel && p.weapon_punch_vel == theirs.weapon_punch_vel {
+            diffs.push("view kick the oracle did not make".to_string());
+        }
+        p.punch_vel = theirs.punch_vel;
+        p.weapon_punch_vel = theirs.weapon_punch_vel;
     }
-    let mut diffs = oracle::diff_player(&p, &oracle::player(&rec.player_out));
+    diffs.extend(oracle::diff_player(&p, &theirs));
     diffs.extend(oracle::diff_move(&mv, &oracle::move_data(&rec.mv_out, rec.seq)));
     let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };
     (Step { seq: rec.seq, want, got, missing: 0, unused: 0, diffs }, p, mv)
@@ -155,7 +167,7 @@ fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
             let g = oracle::globals(&rec.globals, cp.lagged);
             cp.prev_velocity = cmv.velocity;
             cp.abs_origin = cmv.origin;
-            cp.pre_think(g.curtime);
+            cp.pre_think(g.curtime, cmv.velocity);
             let theirs = oracle::player(&rec.player_in);
             let mut d = oracle::diff_player(cp, &theirs);
             let mvin = oracle::move_in(&rec);
@@ -168,7 +180,7 @@ fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
             }
             if !d.is_empty() {
                 let external = last_out.as_mut().map_or(Vec::new(), |lo| {
-                    lo.pre_think(g.curtime);
+                    lo.pre_think(g.curtime, mvin.velocity);
                     oracle::diff_player_values(lo, &theirs).iter().map(|e| e.split(' ').next().unwrap().to_string()).collect()
                 });
                 let ours = oracle::diff_player_values(cp, &theirs);
@@ -199,7 +211,7 @@ pub fn chain_world(path: &str, world: &mut dyn Tracer, s: Option<&Settings>) -> 
             let g = oracle::globals(&rec.globals, cp.lagged);
             cp.prev_velocity = cmv.velocity;
             cp.abs_origin = cmv.origin;
-            cp.pre_think(g.curtime);
+            cp.pre_think(g.curtime, cmv.velocity);
         }
         let (st, p, mv) = simulate_with(&rec, carried.as_ref(), world, &settings_for(&rec, s));
         worst_origin = worst_origin.max(st.origin_err());
@@ -226,7 +238,7 @@ pub fn from_commands(path: &str, mut world: Option<&mut dyn Tracer>) -> std::io:
         let pl = pilot.get_or_insert_with(|| Pilot::new(oracle::move_in(&rec).origin));
         let input = oracle::move_data(&rec.mv_in, rec.seq);
         let clock = oracle::globals(&rec.globals, 1.0);
-        let cmd = UserCmd { command_number: rec.seq, angles: input.angles, forward: input.forward, side: input.side, up: input.up, buttons: input.buttons, frametime: clock.frametime };
+        let cmd = UserCmd { command_number: rec.seq, angles: input.angles, forward: input.forward, side: input.side, up: input.up, buttons: input.buttons, frametime: clock.frametime, random_seed: 0 };
         let mut log = LogTracer::new(&rec.traces);
         let tr: &mut dyn Tracer = match world.as_deref_mut() {
             Some(w) => w,

@@ -15,6 +15,7 @@ pub struct UserCmd {
     pub up: f32,
     pub buttons: u32,
     pub frametime: f32,
+    pub random_seed: u32,
 }
 
 fn clamp_move(v: f32) -> f32 {
@@ -92,6 +93,7 @@ pub fn setup_move(s: &Settings, cmd: &UserCmd, oldbuttons: u32, origin: V3, velo
         maxspeed: 0.0,
         hull_height: st.hull_max[2] - st.hull_min[2],
         hull_half_width: (st.hull_max[0] - st.hull_min[0]) * 0.5,
+        random_seed: Some(cmd.random_seed),
         origin,
         velocity,
     }

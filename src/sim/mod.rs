@@ -83,6 +83,11 @@ pub struct Settings {
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
     pub view: view::ViewTuning,
+    pub viewkick_fall_dist_min: f32,
+    pub viewkick_fall_dist_max: f32,
+    pub viewkick_fall_dist_max_scale: f32,
+    /// `wallrun_viewpunch_onStart_*`.
+    pub wall_start_kick: view::Kick,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -198,6 +203,12 @@ pub struct Player {
     pub sprint_tilt: f32,
     pub sprint_tilt_vel: f32,
     pub sprint_tilt_yaw: f32,
+    pub punch_angle: V3,
+    pub punch_vel: V3,
+    pub weapon_punch_angle: V3,
+    pub weapon_punch_vel: V3,
+    /// Downward speed while airborne, which a landing reports to the view kick.
+    pub fall_velocity: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -223,6 +234,8 @@ pub struct MoveData {
     pub maxspeed: f32,
     pub hull_height: f32,
     pub hull_half_width: f32,
+    /// The command's random seed, which view kicks draw from. Recordings do not hold it.
+    pub random_seed: Option<u32>,
     pub origin: V3,
     pub velocity: V3,
 }
@@ -269,6 +282,8 @@ pub trait Tracer {
 pub struct Scratch {
     pub probe: Option<Trace>,
     pub probe_end: V3,
+    /// A view kick was due but the command carried no random seed to draw it from.
+    pub unseeded_kick: bool,
 }
 
 pub struct Move<'a> {
@@ -289,7 +304,11 @@ const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
 impl Player {
     /// Runs before each movement call: while standing, remember when and with which up
     /// vector, for the jump grace period; and keep the height climbs are measured from.
-    pub fn pre_think(&mut self, curtime: f32) {
+    /// Airborne, the fall speed is taken from the velocity the call starts with.
+    pub fn pre_think(&mut self, curtime: f32, velocity: V3) {
+        if self.ground.is_none() {
+            self.fall_velocity = (velocity[1] * 0.0 + velocity[0] * 0.0) - velocity[2] * 1.0;
+        }
         if self.ground.is_some() {
             self.left_ground_time = curtime;
             self.left_ground_up = self.up;
@@ -300,7 +319,7 @@ impl Player {
 
 impl Move<'_> {
     pub fn pre_think(&mut self) {
-        self.p.pre_think(self.g.curtime);
+        self.p.pre_think(self.g.curtime, self.mv.velocity);
     }
 
     /// C_GameMovement::ProcessMovement: the whole movement call for one command.
@@ -317,6 +336,7 @@ impl Move<'_> {
 
     pub fn player_move(&mut self, optimized: bool) {
         self.stance_index = Some(if self.p.stance_gate < 1 { 2 } else { ((self.p.flags >> 1) & 1) as usize });
+        self.punch_springs();
         if 0 < self.p.duck_timer {
             self.p.duck_timer = (self.p.duck_timer - (self.g.frametime * 1000.0) as i32).max(0);
         }
@@ -328,6 +348,10 @@ impl Move<'_> {
             } else if self.p.movetype != 2 || !self.on_ground() || !self.stay_on_ground() {
                 self.categorize(false);
             }
+        }
+        if !self.on_ground() {
+            let v = self.mv.velocity;
+            self.p.fall_velocity = (0.0 * v[1] + 0.0 * v[0]) + -1.0 * v[2];
         }
         self.duck();
         self.update_sprint();

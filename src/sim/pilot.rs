@@ -159,7 +159,16 @@ pub fn settings() -> Settings {
         sv_gravity: 750.0,
         sv_maxvelocity: 34000.0,
         extra_air_accel: 2.0,
-        view: view::ViewTuning { sprint_tilt_accel: 35.0, sprint_tilt_max_vel: 2.0, sprint_tilt_turn_range: 120.0 },
+        view: view::ViewTuning {
+            sprint_tilt_accel: 35.0,
+            sprint_tilt_max_vel: 2.0,
+            sprint_tilt_turn_range: 120.0,
+            punch_spring: view::Spring { constant: [65.0; 3], damping: [9.0; 3] },
+        },
+        viewkick_fall_dist_min: 10.0,
+        viewkick_fall_dist_max: 70.0,
+        viewkick_fall_dist_max_scale: 12.0,
+        wall_start_kick: view::Kick { base: [-1.5, 0.0, 5.0], random: [0.5, 0.5, 0.5] },
     }
 }
 

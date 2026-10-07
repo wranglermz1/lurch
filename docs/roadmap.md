@@ -40,6 +40,12 @@ climb and a mantle. This is client code in the same image (`C_BasePlayer` view s
 capture hook records the engine's view setup each frame (eye origin, view angles with
 punch, FOV, view matrix), and a replay gate compares ours to it as the movement gate does.
 
+Done: the state the movement call keeps (sprint tilt, view punch springs and the jump,
+landing and wall kicks) is ported and exact on the recordings, and the view setup that
+reads it (roll, slide tilt, FOV, sprint eye drop, sprint shake) is recovered in
+`docs/camera.md`. Next: port that view setup, resolve the script-driven FOV fractions, and
+on the workstation record the command's random seed so kicks can be drawn in replay.
+
 ## 4. Viewmodel
 
 First a stand-in model driven by the recovered sway and bob. The real arms and weapon need

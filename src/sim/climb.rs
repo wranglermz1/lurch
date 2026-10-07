@@ -272,6 +272,9 @@ impl Move<'_> {
                 self.p.same_wall = true;
             }
         }
+        if 0.25 < self.g.curtime - self.p.wall_time {
+            self.wall_start_kick();
+        }
         self.p.wall_start = self.mv.origin;
         self.p.wall_time = self.g.curtime;
         self.p.push_away_since = 0.0;

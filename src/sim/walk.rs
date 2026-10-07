@@ -75,6 +75,7 @@ impl Move<'_> {
             self.mv.velocity = reject(self.mv.velocity, self.p.up);
         }
         self.check_velocity();
+        self.landing_kick();
     }
 
     /// Forward and right along the ground plane. On a wall the view's right vector, not its
@@ -224,6 +225,7 @@ impl Move<'_> {
     }
 
     pub fn ground_move(&mut self, dt: f32) {
+        self.p.fall_velocity = 0.0;
         let up = self.p.up;
         self.mv.velocity = reject(self.mv.velocity, up);
         let (fwd_dir, r) = self.ground_axes();

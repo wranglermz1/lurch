@@ -139,7 +139,7 @@ fn setup_move_builds_the_recorded_move_data() {
                 continue;
             }
             let want = lurch::oracle::move_data(&rec.mv_in, rec.seq);
-            let cmd = UserCmd { command_number: rec.seq, angles: want.angles, forward: want.forward, side: want.side, up: want.up, buttons: want.buttons, frametime: 0.0 };
+            let cmd = UserCmd { command_number: rec.seq, angles: want.angles, forward: want.forward, side: want.side, up: want.up, buttons: want.buttons, frametime: 0.0, random_seed: 0 };
             let got = setup_move(&s, &cmd, want.oldbuttons, want.origin, want.velocity);
             let key = |m: &lurch::sim::MoveData| {
                 format!(

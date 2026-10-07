@@ -6,7 +6,7 @@ use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
 use crate::sim::climb::Climb;
 use crate::sim::jump::{Lurch, Skip};
-use crate::sim::view::ViewTuning;
+use crate::sim::view::{Kick, Spring, ViewTuning};
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
 const STANCE_BLOCK: usize = 0x78;
@@ -19,7 +19,12 @@ const SV_MAXVELOCITY: f32 = 34000.0;
 const EXTRA_AIR_ACCEL: f32 = 2.0;
 const SKIP_TIME: f32 = 1.0;
 const JUMP_GRACEPERIOD: f32 = 0.2;
-const VIEW_CONVARS: ViewTuning = ViewTuning { sprint_tilt_accel: 35.0, sprint_tilt_max_vel: 2.0, sprint_tilt_turn_range: 120.0 };
+const VIEW_CONVARS: ViewTuning = ViewTuning {
+    sprint_tilt_accel: 35.0,
+    sprint_tilt_max_vel: 2.0,
+    sprint_tilt_turn_range: 120.0,
+    punch_spring: Spring { constant: [65.0; 3], damping: [9.0; 3] },
+};
 
 /// The wallrun_*, wallclimb_* and automantle_* ConVars the climb reads.
 const WALL_CONVARS: Climb = Climb {
@@ -173,6 +178,10 @@ pub fn settings(blob: &[u8]) -> Settings {
         sv_maxvelocity: SV_MAXVELOCITY,
         extra_air_accel: EXTRA_AIR_ACCEL,
         view: VIEW_CONVARS,
+        viewkick_fall_dist_min: f32_at(blob, 0x894),
+        viewkick_fall_dist_max: f32_at(blob, 0x898),
+        viewkick_fall_dist_max_scale: f32_at(blob, 0x89c),
+        wall_start_kick: Kick { base: [f32_at(blob, 0x9ec), f32_at(blob, 0x9f4), f32_at(blob, 0x9fc)], random: [f32_at(blob, 0x9f0), f32_at(blob, 0x9f8), f32_at(blob, 0xa00)] },
     }
 }
 
@@ -269,6 +278,11 @@ pub fn player(p: &[u8]) -> Player {
         sprint_tilt: f32_at(p, 0x1eb8),
         sprint_tilt_vel: f32_at(p, 0x282c),
         sprint_tilt_yaw: f32_at(p, 0x2828),
+        punch_angle: vec3_at(p, 0x20a4),
+        punch_vel: vec3_at(p, 0x20b0),
+        weapon_punch_angle: vec3_at(p, 0x20bc),
+        weapon_punch_vel: vec3_at(p, 0x20c8),
+        fall_velocity: f32_at(p, 0x1a68),
     }
 }
 
@@ -292,6 +306,7 @@ pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
         maxspeed: f32_at(mv, 0xd4),
         hull_height: f32_at(mv, 0xc8),
         hull_half_width: f32_at(mv, 0xd0),
+        random_seed: None,
         origin: vec3_at(mv, 0x118),
         velocity: vec3_at(mv, 0x124),
     }
@@ -488,6 +503,11 @@ fn diff_player_as(ours: &Player, theirs: &Player, norm: fn(String) -> String) ->
     field!(sprint_tilt);
     field!(sprint_tilt_vel);
     field!(sprint_tilt_yaw);
+    field!(punch_angle);
+    field!(punch_vel);
+    field!(weapon_punch_angle);
+    field!(weapon_punch_vel);
+    field!(fall_velocity);
     if ours.ground.is_some() != theirs.ground.is_some() {
         out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
     }
@@ -568,6 +588,11 @@ pub fn with_state(mut base: Player, state: &Player) -> Player {
     base.sprint_tilt = state.sprint_tilt;
     base.sprint_tilt_vel = state.sprint_tilt_vel;
     base.sprint_tilt_yaw = state.sprint_tilt_yaw;
+    base.punch_angle = state.punch_angle;
+    base.punch_vel = state.punch_vel;
+    base.weapon_punch_angle = state.weapon_punch_angle;
+    base.weapon_punch_vel = state.weapon_punch_vel;
+    base.fall_velocity = state.fall_velocity;
     base.ground = state.ground;
     base
 }
