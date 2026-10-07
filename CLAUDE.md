@@ -79,6 +79,7 @@ pattern. Retail strips it.
     tools/sect.py     is a dump complete and in the clear?
     tools/rtti.py     resolve a class name to its vtable and vfunc RVAs
     tools/dec.sh      decompile oracle functions by RVA (Ghidra headless, /opt/ghidra)
+    tools/decomp.sh   the same with Ghidra's C++ decompiler built from source, no install
     tools/settings.py name the player-settings offset globals
     tools/annotate.py name ConVars, settings and constants in dec.sh output
     tools/record.sh   record one scripted scenario (drive + drain) into traces/
@@ -131,9 +132,10 @@ floor is unverified.
 
 The workstation has everything: HAVM, Ghidra, the guest with the game. A cloud session
 has this repo, and with it the oracle image (unpacked to `dumps/current.bin` at session
-start; needs `zstd`). It can build, test, read the recordings and decompile once Ghidra
-is installed: Ghidra 12.x at `/opt/ghidra` (or `GHIDRA=`) with a JDK 21+. It cannot
-record or load map meshes (`maps/` is local). Work that needs those goes back to the
+start; needs `zstd`). It can build, test, read the recordings and decompile: with
+Ghidra 12.x at `/opt/ghidra` (or `GHIDRA=`) and a JDK 21+, or with `tools/decomp.sh`,
+which builds the decompiler from a Ghidra clone where release downloads are blocked.
+It cannot record or load map meshes (`maps/` is local). Work that needs those goes back to the
 workstation; say so rather than guess at what the game does.
 
 `cargo test` must stay green on a fresh clone. A new recording that fails goes in

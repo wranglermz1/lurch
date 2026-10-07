@@ -56,7 +56,7 @@ def main(dump, src):
         return ('cv_' if mo.group(3) == '68' else 'cvi_') + n
 
     text = re.sub(r'\*\((float|int|uint|undefined4) \*\)\(_?DAT_([0-9a-f]{8}) \+ 0x(68|6c)\)', cv, text)
-    text = re.sub(r'\*\((?:float|int|uint) \*\)\(lRam0*([0-9a-f]{7,8}) \+ 0x(68|6c)\)',
+    text = re.sub(r'\*\((?:float4?|u?int4?) \*\)\([il]Ram0*([0-9a-f]{7,8}) \+ 0x(68|6c)\)',
                   lambda mo: (('cv_' if mo.group(2) == '68' else 'cvi_') + (convar(int(mo.group(1), 16)) or mo.group(1))), text)
 
     def dat(mo):
@@ -73,6 +73,8 @@ def main(dump, src):
 
     text = re.sub(r'\(ulonglong\)_DAT_([0-9a-f]{8})', lambda mo: dat(mo), text)
     text = re.sub(r'_DAT_([0-9a-f]{8})(?![0-9a-f])', dat, text)
+    text = re.sub(r'\(uint8\)[ui]Ram0*([0-9a-f]{7,8})\b', dat, text)
+    text = re.sub(r'\b[ui]Ram0*([0-9a-f]{7,8})\b', lambda mo: dat(mo) if int(mo.group(1), 16) in names else mo.group(0), text)
 
     def s(mo):
         a = int(mo.group(1), 16)
