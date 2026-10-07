@@ -7,13 +7,15 @@ pub mod duck;
 pub mod ground;
 pub mod jump;
 pub mod math;
+pub mod pilot;
+pub mod setup;
 pub mod sprint;
 pub mod walk;
 
 use math::V3;
 
 /// Per-stance block of the player settings.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stance {
     pub hull_min: V3,
     pub hull_max: V3,
@@ -27,7 +29,7 @@ pub struct Stance {
     pub sprint_deceleration: f32,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
     pub stances: [Stance; 3],
     pub speed_scale_side: f32,

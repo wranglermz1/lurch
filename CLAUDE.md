@@ -117,12 +117,16 @@ velocity and all 52 modelled player fields:
 - call by call, each call starting from the oracle's state;
 - chained, the simulation carrying its own state from call to call for whole recordings.
 
+Both pass again on the built-in pilot settings (`src/sim/pilot.rs`). A third run takes
+nothing from the oracle but each command and the clock: a pilot spawned where the
+recording starts, move data built from the command (`src/sim/setup.rs`). It is bit-exact
+on origin and velocity for every recording.
+
 Recordings: walking, turning, sliding and seeded random input over World's Edge terrain;
 wall climbs there (walking, sprinting, ducking off, releasing, jumping off); on
 mp_rr_arena_empty jumps, sprint jumps, bunny hops, lurch, tap strafe, air turning, crouch,
 crouch jump, air duck, slide, slide hop, slide jump; and seeded random input
-(`tools/fuzz.py`). Still from the oracle each call: settings, ConVars, view angles. Mantle
-is not ported.
+(`tools/fuzz.py`). Mantle is not ported.
 
 Collision: `src/world.rs` sweeps the hull against triangles (in memory, or a HAVM `.mesh`).
 Every mp_rr_arena_empty recording also replays chained with our own collision against its

@@ -76,11 +76,19 @@ retail layout; only the bit meanings carry over to this build.
 | `0x03c`, `0x048`, `0x054` | `AngleVectors` forward, right, up |
 | `0x060`, `0x06c` | forward and right flattened to z = 0, normalised |
 | `0x078` | flat wish direction: fwd·flatForward + side·flatRight, normalised only if longer than 1 |
+| `0x090`, `0x09c` | forward and right with their component along `0x0a8` removed, normalised |
 | `0x0a8` | ground plane normal, initialised to (0, 0, 1) |
+| `0x0b4` | ground wish: fwd·`0x090` + side·`0x09c`, normalised only if longer than 1 |
+| `0x0c8`, `0x0d0` | standing hull height, and half its width |
 | `0x0d4` | max speed (`0x804af0`) |
 | `0x0f0` | f32[3], accumulated by the ground move |
 | `0x118` | origin |
 | `0x124` | velocity |
+
+`src/sim/setup.rs` builds all of it from a command (checked against every recorded call's
+CMoveData). Old buttons are the previous command's buttons. What a run from commands also
+needs from the game's side of RunCommand: the player's view angles (`+0x2188`) are the
+command's, `+0x3a92`/`+0x3a93` are set on every recorded player, and so is flag `0x40`.
 
 ## Player (oracle)
 

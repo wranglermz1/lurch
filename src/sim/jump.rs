@@ -15,7 +15,7 @@ const IN_DODGE: u32 = 0x1000_0000;
 const WALL_PUSH: f32 = 30.0;
 const SLIDE_JUMP_WINDOW: f32 = 0.4;
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Lurch {
     pub period_min: f32,
     pub period_max: f32,
@@ -23,7 +23,7 @@ pub struct Lurch {
     pub max: f32,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Skip {
     pub time: f32,
     pub height_speed: f32,

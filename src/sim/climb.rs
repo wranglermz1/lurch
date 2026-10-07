@@ -10,7 +10,7 @@ use super::math::*;
 use super::{HullQuery, Move, Trace};
 
 /// Player settings and ConVars the climb reads.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Climb {
     pub enabled: bool,
     pub height: f32,
