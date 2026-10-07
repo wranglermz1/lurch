@@ -317,7 +317,6 @@ impl Move<'_> {
             let ground = if self.on_ground() && is_world_up(self.p.up) { Some(self.p.ground_plane) } else { None };
             let step = self.p.step_height;
             let stepped = self.step_slide(&mut pos, &mut vel, dt, step, t, ground);
-            if std::env::var("DBG").is_ok() { eprintln!("step seq {:x} stepped {:?}", self.mv.command_number, stepped); }
             if self.p.sliding && 0.0 < stepped[2] {
                 let speed = (vel[0] * vel[0] + vel[1] * vel[1]).sqrt();
                 if 0.0 < speed {

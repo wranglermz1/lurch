@@ -168,7 +168,6 @@ impl Move<'_> {
         if self.p.sliding {
             newspeed *= self.s.slide_velocity_decay.powf(1.0 * self.g.frametime);
         }
-        if std::env::var("DBG").is_ok() { eprintln!("friction seq {:x} v {:?} speed {speed} decel {decel} drop {drop} newspeed {newspeed} sliding {} duckheld {} btn {:x} dt {}", self.mv.command_number, v, self.p.sliding, self.p.duck_held, self.mv.buttons, self.g.frametime); }
         if newspeed < speed {
             self.mv.velocity = add(keep, scale(vt, newspeed / speed));
         }
@@ -207,9 +206,7 @@ impl Move<'_> {
         let wishspeed = l.min(1.0) * self.mv.maxspeed;
         let accel = self.ground_accel();
         self.ground_friction(wishdir, wishspeed);
-        let vf = self.mv.velocity;
         self.ground_accelerate(wishdir, wishspeed, accel);
-        if std::env::var("DBG").is_ok() { eprintln!("ground seq {:x} wish {:?} ws {wishspeed} accel {accel} after friction {:?} after accel {:?}", self.mv.command_number, wish, vf, self.mv.velocity); }
 
         let speed = len(self.mv.velocity);
         if self.p.sliding && speed < self.s.slide_stop_speed && self.p.duck_state != 3 {

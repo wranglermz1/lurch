@@ -261,9 +261,6 @@ impl Tracer for LogTracer<'_> {
                 return decode(&r.result);
             }
         }
-        if std::env::var("DBG").is_ok() {
-            eprintln!("missing trace start {:?} end {:?} mins {:?} maxs {:?}", q.start, q.end, q.mins, q.maxs);
-        }
         self.missing.push(*q);
         Trace { start: q.start, endpos: q.end, fraction: 1.0, ..Default::default() }
     }
