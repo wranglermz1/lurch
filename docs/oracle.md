@@ -188,6 +188,16 @@ plane dist `+0x2c`, fraction `+0x30`, allsolid `+0x38`, startsolid `+0x39`, a st
   and slide steering removes `v·d·(1/|v|²)`, not `v·(d/|v|²)`. Either changes outcomes by a
   rounding residual that normalises into a full-length wish direction.
 
+- AngleVectors uses the engine's own SIMD sine/cosine (`0x42c3a0`: reduction by pi/2 in three
+  parts, then minimax polynomials). The platform's sin/cos differ by an ULP often enough to
+  break exact replay.
+- powf (`0x11c57c0`) is matched by rounding the double-precision power to float.
+- The sprint-allowed test uses the command's view angles (`+0x2188`, via `0x856c10` and
+  `0x86b530`) when `+0x3a92` and `+0x3a93` are set, not the quantised eye angles at `+0x1ebc`.
+  Found by fuzzed input: the quantisation flips the test when facing is near perpendicular
+  to velocity.
+- `+0x41c` is the previous call's final velocity (FinishMove).
+
 ## Ghidra caveat
 
 A raw image loaded writable makes Ghidra print some double constants as `0.0`. `dec.sh` marks

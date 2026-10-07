@@ -78,10 +78,12 @@ pattern. Retail strips it.
     tools/settings.py name the player-settings offset globals
     tools/annotate.py name ConVars, settings and constants in dec.sh output
     tools/record.sh   record one scripted scenario (drive + drain) into traces/
+    tools/fuzz.py     seeded random drive script, for record.sh
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
     src/              the lurch crate: trace parser, movement step, replay
-    traces/           recorded oracle traces; `cargo test` gates on them
+    traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
+    traces/local/     recordings too large to commit (fuzz runs); gated when present
     dumps/            images, committed, hardlinked from HAVM on disk
     ref/              HAVM's extracted convar values and datamap offsets, retail build
 
@@ -101,11 +103,16 @@ stops at the first slot outside .text and has no other terminator.
 
 ## Fidelity reached
 
-Every recording in `traces/` replays with zero error on origin and velocity, every trace
-matched (`cargo test`, tolerance 1e-3): walking over World's Edge terrain (walls, slopes,
-step-ups, sprint cancel) and, on mp_rr_arena_empty, jumps, sprint jumps, lurch, tap strafe,
-air turning, crouch, crouch walk, slide and slide jump. Wall climb and mantle are not ported:
-the empty arena has no reachable walls.
+`cargo test` replays every recording two ways, and both must be bit-exact on origin,
+velocity and all 35 modelled player fields:
+- call by call, each call starting from the oracle's state;
+- chained, the simulation carrying its own state from call to call for whole recordings.
+
+Recordings: walking over World's Edge terrain; on mp_rr_arena_empty jumps, sprint jumps,
+bunny hops, lurch, tap strafe, air turning, crouch, crouch jump, air duck, slide, slide hop,
+slide jump; and seeded random input (`tools/fuzz.py`). Still from the oracle each call:
+collision results (the trace log), settings, ConVars, view angles. Wall climb and mantle
+are not ported.
 
 ## Approach
 
