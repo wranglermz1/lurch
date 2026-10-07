@@ -18,8 +18,8 @@ top. Each item names how it is checked.
 - **Superglide.** Mantle plus a timed jump. Record once mantle replays.
 - **Superjump.** On the tech list, not yet recorded.
 
-Climb and mantle need the binary. A behavioural spec written into `docs/oracle.md` on the
-workstation is what lets a session without it port them.
+Any session can decompile these (`tools/dec.sh`, once Ghidra is installed). Write what
+is recovered into `docs/oracle.md` as behaviour, not decompiler output.
 
 ## 2. Settings without a recording
 
