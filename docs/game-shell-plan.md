@@ -664,7 +664,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | M1 | Client input path recovered from the oracle | cloud | done: Q1, Q3 settled; Q4 fallback (CL_Move is detoured into the SDK); Q2 not reached; clock rule recovered as a bonus |
 | M2 | lurch API for a shell (section 3) | cloud | done: `cargo test --test frame` 11 tests, finished in 0.02 s; root suite green, `step` unchanged; values from M1, not provisional |
 | M3 | `game/` scaffold, environment, CLAUDE.md rules | cloud (+ workstation smoke) | done in the cloud: cold build 11m36s (sharing CPUs), smoke test passes, xvfb `--shot 30` is exactly sky (140,178,217) everywhere, fresh-clone root `cargo test --offline` passes. Left: the workstation smoke (`vulkaninfo`, one `cargo run`) |
-| M4 | Input to commands (`CmdPlugin`) | cloud | not started |
+| M4 | Input to commands (`CmdPlugin`) | cloud | done: `input::` 21 tests pass headless (every case listed, plus the clamp); values asserted through `key_state` |
 | M5 | Simulation loop (`SimPlugin`) | cloud | not started |
 | M6 | Scripts and the headless binary | cloud | not started |
 | M7 | Map, camera and body rendering | cloud | not started |
@@ -763,7 +763,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
     - `MouseMotion { delta: (100, 0) }` at sensitivity 5 gives yaw -11.0 (±1e-4).
     - Pitch stops at 89, and yaw wraps into (-180, 180].
   - **Command fields.** frametime has exactly the bits of `clamp_frametime(manual dt)`, and `random_seed == command_seed(n)`.
-  - **Actions.** R, `[` and `]` write `Respawn::Spot(0)`, `Spot(-1)` and `Spot(1)`. Check through `SimPlugin` in M5 or by reading `Messages<Respawn>`.
+  - **Actions.** R, `[` and `]` write `Respawn::Spot(0)`, `Spot(-1)` and `Spot(1)`. Check through `SimPlugin` in M5 or by reading `Messages<Respawn>` with one cursor kept across updates (`get_cursor_current()` before the first): messages are double-buffered, so a fresh cursor also returns the previous frame's.
 
 ### M5. Simulation loop
 
@@ -794,7 +794,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 - **Steps.**
   - `script.rs` parses lines of the form `FRAME ACTION ARGS`.
     - `#` starts a comment. Frames are non-decreasing. Frame F is the F-th update from 0. Frame 0 makes no command, so input on frame 0 first shows in command 1.
-    - Actions: `down KEY`, `up KEY`, `tap KEY` (press and release in the same frame), `wheel N` (one `MouseWheel { unit: Line, x: 0.0, y: N }`; negative is down), `look DX DY` (one `MouseMotion`), `spot NAME` (`Respawn::Named`), and `exit`.
+    - Actions: `down KEY`, `up KEY`, `tap KEY` (press and release in the same frame), `wheel N` (one `MouseWheel { unit: Line, x: 0.0, y: N, window, phase: TouchPhase::Moved }`; 0.19.1's `MouseWheel` has a `phase` field; negative is down), `look DX DY` (one `MouseMotion`), `spot NAME` (`Respawn::Named`), and `exit`.
     - KEY is one of `KeyW KeyA KeyS KeyD Space ControlLeft ShiftLeft KeyC KeyR BracketLeft BracketRight F1`.
   - `ScriptPlugin(Script)`: `inject_script`, `ScriptFrametime`, `script_end`.
   - `script_end`, at the `exit` frame:

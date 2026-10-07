@@ -1,7 +1,9 @@
 pub mod args;
+pub mod binds;
 pub mod cmd;
 pub mod hud;
 pub mod limiter;
+pub mod look;
 pub mod sim;
 pub mod view;
 
@@ -10,6 +12,8 @@ use std::path::PathBuf;
 use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::window::WindowFocused;
+use binds::{Binds, WheelMode};
+use lurch::sim::buttons::{IN_FORWARD, IN_JUMP};
 use lurch::sim::math::V3;
 
 pub use cmd::CmdPlugin;
@@ -23,11 +27,27 @@ pub use view::ViewPlugin;
 pub struct Config {
     pub spot: String,
     pub shot: Option<(u64, PathBuf)>,
+    /// Only scripted input drives the run: no pause, no focus loss, no window input.
+    pub scripted: bool,
+    pub sens: f32,
+    pub binds: Binds,
+    pub wheel_down: Option<u32>,
+    pub wheel_up: Option<u32>,
+    pub wheel_mode: WheelMode,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { spot: "wall 48".into(), shot: None }
+        Config {
+            spot: "wall 48".into(),
+            shot: None,
+            scripted: false,
+            sens: 5.0,
+            binds: Binds::default(),
+            wheel_down: Some(IN_FORWARD),
+            wheel_up: Some(IN_JUMP),
+            wheel_mode: WheelMode::Event,
+        }
     }
 }
 
