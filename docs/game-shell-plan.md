@@ -669,7 +669,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | M6 | Scripts and the headless binary | cloud | done: `script::` 5 tests pass; both scripts print one identical `final` line on two headless runs. `tour.txt` sprints, slides 3.3 s down the hill and slide-jumps; `tapstrafe.txt` bends a jump about 73° with wheel taps on alternate frames (taps on consecutive frames edge once, by design) |
 | M7 | Map, camera and body rendering | cloud | done: `convert::` 3 tests pass; ignored `render::` passes on lavapipe (top-left (140,178,217), centre (209,178,151), bottom-centre (192,192,192)). xvfb shots at wall 128, ramp 30 and hill: level horizon, every face drawn, sun-facing-away faces shaded not black, checker visible, sky above |
 | M8 | Playable core: flags, window, timing, cursor | cloud (+ workstation first play) | done in the cloud: `play::` 4 tests pass (every flag, both limiter timings); xvfb `--shot 30` exits 0 at 1600x900 and logs the llvmpipe adapter and `present mode AutoNoVsync (requested)`. Left: first real play on the workstation |
-| M9 | HUD, spots, script run under xvfb | cloud | not started |
+| M9 | HUD, spots, script run under xvfb | cloud | done: `play::` R, `[`/`]` with wrapping and F1 pass; `tapstrafe.txt` gives the same `final` line headless and windowed under xvfb with `--shot 400`; the PNG shows the HUD's five lines and the crosshair dot |
 | M10 | Workstation verification and docs | workstation | not started |
 
 ### M0. Plan in the repo (done)

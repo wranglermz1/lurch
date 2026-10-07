@@ -25,12 +25,11 @@ is recovered into `docs/oracle.md` as behaviour, not decompiler output.
 
 ## 2. Game shell
 
-Window, mouse and keyboard into usercmds (per-command button edges, so a scroll-wheel tap
-strafe works), first-person camera, the test map (`src/testmap.rs`) drawn flat-shaded. The
-simulation side is ready: `pilot::Pilot` is the loop a frame runs, one `step` per command,
-then `Player::view_frame`, and the camera comes from `eye_position`, `camera_angles` and
-`view_fov`. Bevy 0.19.1 is approved for a separate `game/` crate; the plan and its status
-are in `docs/game-shell-plan.md`.
+Built in the cloud (M1 to M9 of `docs/game-shell-plan.md`, which holds its status): `game/`
+plays the test map in a window at one command per frame, from raw input with per-command
+button edges, through `Pilot::step` and `Player::view_frame`, with the camera from
+`Pilot::eye`. Scripts drive it headless or under xvfb to the same result. Next: M10, play and
+measure on the workstation (its checklist is in the plan).
 
 ## 3. Camera feel
 
@@ -54,6 +53,9 @@ composed.
 
 First a stand-in model driven by the recovered sway and bob. The real arms and weapon need
 the game's models and animations, which are art and stay out of scope until asked for.
+In the shell it is a second `Camera3d` (`order: 1`) rendering `RenderLayers::layer(1)`, the
+sun on layers 0 to 2 (it already is), and `IsDefaultUiCamera` on the main camera so the HUD
+stays put (`docs/game-shell-plan.md` section 8).
 
 ## 5. Collision polish
 

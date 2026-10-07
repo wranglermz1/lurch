@@ -79,3 +79,86 @@ fn limiter_plugin_headless() {
     }
     assert!(t.elapsed().as_secs_f64() >= 0.24, "{:?}", t.elapsed());
 }
+
+fn spot_name(app: &App) -> String {
+    app.world().resource::<lurch_game::sim::Spots>().spot().name.clone()
+}
+
+fn tap(app: &mut App, k: KeyCode) {
+    super::input::down(app, k);
+    super::input::up(app, k);
+    app.update();
+}
+
+#[test]
+fn r_respawns_at_the_current_spot() {
+    let mut app = super::sim::sim_app(Config::default());
+    app.update();
+    super::input::down(&mut app, KeyCode::KeyW);
+    for _ in 0..100 {
+        app.update();
+    }
+    super::input::up(&mut app, KeyCode::KeyW);
+    app.update();
+    let spot = app.world().resource::<lurch_game::sim::Spots>().spot().origin;
+    assert!(app.world().resource::<lurch_game::sim::Sim>().pilot.origin[0] > spot[0] + 50.0);
+    tap(&mut app, KeyCode::KeyR);
+    let p = app.world().resource::<lurch_game::sim::Sim>().pilot.origin;
+    assert!((0..3).all(|i| (p[i] - spot[i]).abs() < 0.1), "{p:?} vs {spot:?}");
+    assert_eq!(spot_name(&app), "wall 48");
+}
+
+#[test]
+fn brackets_move_between_spots_and_wrap() {
+    let mut app = super::sim::sim_app(Config::default());
+    app.update();
+    let names: Vec<String> = app.world().resource::<lurch_game::sim::Spots>().list.iter().map(|s| s.name.clone()).collect();
+    tap(&mut app, KeyCode::BracketLeft);
+    assert_eq!(spot_name(&app), *names.last().unwrap());
+    tap(&mut app, KeyCode::BracketRight);
+    assert_eq!(spot_name(&app), names[0]);
+    tap(&mut app, KeyCode::BracketRight);
+    assert_eq!(spot_name(&app), names[1]);
+    let spot = app.world().resource::<lurch_game::sim::Spots>().spot().origin;
+    let p = app.world().resource::<lurch_game::sim::Sim>().pilot.origin;
+    assert!((0..3).all(|i| (p[i] - spot[i]).abs() < 0.1), "{p:?} vs {spot:?}");
+}
+
+#[test]
+fn f1_flips_the_hud() {
+    let mut app = super::sim::sim_app(Config::default());
+    app.update();
+    assert!(app.world().resource::<lurch_game::HudVisible>().0);
+    tap(&mut app, KeyCode::F1);
+    assert!(!app.world().resource::<lurch_game::HudVisible>().0);
+    tap(&mut app, KeyCode::F1);
+    assert!(app.world().resource::<lurch_game::HudVisible>().0);
+}
+
+#[test]
+fn hud_text_reports_speed_state_and_pause() {
+    use lurch_game::hud::{hud_text, FpsMeter, HudView};
+    use lurch_game::sim::{Pose, Sim, Spots};
+    use lurch_game::view::DisplayInfo;
+    let mut app = super::sim::sim_app(Config::default());
+    app.world_mut().resource_mut::<Sim>().pilot.velocity = [299.0, 0.0, -120.0];
+    let w = app.world();
+    let (fps, display) = (FpsMeter::default(), DisplayInfo::default());
+    let text = |paused| {
+        hud_text(&HudView {
+            sim: w.resource::<Sim>(),
+            pose: w.resource::<Pose>(),
+            builder: w.resource::<lurch_game::cmd::CmdBuilder>(),
+            cfg: w.resource::<Config>(),
+            spots: w.resource::<Spots>(),
+            fps: &fps,
+            display: &display,
+            paused,
+        })
+    };
+    let playing = text(false);
+    assert!(playing.starts_with("speed 299 u/s  27.3 km/h   vz -120\nground"), "{playing}");
+    assert!(playing.contains("spot wall 48") && playing.contains("wheel event") && playing.contains("cmd 0"), "{playing}");
+    assert!(!playing.contains("click to play"));
+    assert!(text(true).ends_with("\nclick to play"));
+}
