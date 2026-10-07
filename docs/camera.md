@@ -81,6 +81,11 @@ movement fields. The pitch offset (`0x858170`) moves the eye forward by `pitchOf
 (9.2) × sin(pitch), halved looking up, × (0.6 + 0.4 sin((1 − duck)·π/2)) (`0x869500`).
 Lean, jetpack and prediction-error smoothing terms are left out.
 
+Angles (`0x67eff0`, ported as `Player::camera_angles`): the view angles plus the punch
+(`0x8580b0`: base `+0x20a4` + weapon `+0x20bc`, the weapon's pitch and yaw scaled by
+1 − ADS fraction), plus a weapon-side offset (`0x857770`, `0x857980`, not recovered), then
+the roll above computed on the punched angles.
+
 Not ported yet:
 
 

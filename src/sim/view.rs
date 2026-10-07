@@ -435,6 +435,15 @@ impl Player {
         f
     }
 
+    /// The camera's angles for view angles `angles`: the base punch and the weapon's added,
+    /// then the roll. Aiming down sights would scale the weapon's pitch and yaw down; weapon
+    /// view kick and drift are left out.
+    pub fn camera_angles(&self, s: &Settings, angles: V3) -> V3 {
+        let (b, w) = (self.punch_angle, self.weapon_punch_angle);
+        let a = [w[0] + b[0] + angles[0], w[1] + b[1] + angles[1], w[2] + b[2] + angles[2]];
+        [a[0], a[1], self.view_roll(s, a)]
+    }
+
     /// The roll the view adds, in degrees: sprint tilt, and the slide's tilt when looking off
     /// the slide's line.
     pub fn view_roll(&self, s: &Settings, angles: V3) -> f32 {
