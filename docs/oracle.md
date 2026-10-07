@@ -180,6 +180,14 @@ plane dist `+0x2c`, fraction `+0x30`, allsolid `+0x38`, startsolid `+0x39`, a st
 `jump_keyboardgrace_max 0.7`, `skip_time 1`, `skip_jump_height_speed 450`, `skip_jump_height_fraction 1`,
 `skip_speed_retain −1`, `skip_speed_reduce 100`, `slide_step_velocity_reduction 10`.
 
+## Things that only showed up in replay
+
+- PlayerMove picks the stance block once on entry; unducking mid-call keeps the ducked
+  stance's speeds for that call.
+- Float evaluation order matters: plane push-off measures against the rounded destination,
+  and slide steering removes `v·d·(1/|v|²)`, not `v·(d/|v|²)`. Either changes outcomes by a
+  rounding residual that normalises into a full-length wish direction.
+
 ## Ghidra caveat
 
 A raw image loaded writable makes Ghidra print some double constants as `0.0`. `dec.sh` marks
@@ -192,8 +200,7 @@ assembly.
 - `0x8049e0`: a speed multiplier. It returns 1.0 unless the entity from `0x7d0870`
   (probably the active weapon) sets one at `+0x1a14`.
 - The constant drag term at settings `0x7e4` has no name in the registry.
-- Jump, keyboard redirect (lurch, tap strafe), crouch and slide are ported; no recording
-  exercises them yet.
+- Jump, keyboard redirect (lurch, tap strafe), crouch and slide are ported and verified.
 - Wall climb: `0x81ae40` with the wall-impact handler `0x81ca50`/`0x81bb60`. A climb swaps the
   player's up vector (`+0x266c`) to the wall normal, and the move then runs the non-floor
   branch of `0x818320` with the `climb*` settings. Not ported.

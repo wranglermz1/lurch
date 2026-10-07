@@ -48,8 +48,10 @@ Lives in the HAVM repo at /home/fz/HAVM/HAVM, already extracted. Do not re-deriv
   795 of them on the player. Names carry over; offsets do not fit the oracle build. The
   traversal state machine (`m_traversalState`, `m_traversalType`, `m_traversalProgress`,
   `m_traversalBegin/Mid/End`) and the wallrun and slide fields come from here.
-- `maps/*.mesh` — extracted collision geometry, retail maps. The guest plays
-  mp_rr_desertlands_64k_x_64k under the Flowstate mod, hosting its own match.
+- `maps/*.mesh` — extracted collision geometry, retail maps. The guest hosts its own
+  match under Flowstate. Recordings come from mp_rr_desertlands_64k_x_64k and
+  mp_rr_arena_empty (large and flat; `map mp_rr_arena_empty` in the console).
+  Keep `flowstate_modified_movement 0` (Apex movement) in the playlist.
 - `dumps/current.bin` (HAVM `dumps/5dba2a2f-02ae8471/dump.bin`) — full plaintext image of `r5apex.exe` under
   R5Reloaded main. `.text` and `.rdata` 100% held, no encrypted pages.
 - `dump.bin` — retail `r5apex_dx12.exe`, probably build 6abfe359 (same capture
@@ -99,9 +101,11 @@ stops at the first slot outside .text and has no other terminator.
 
 ## Fidelity reached
 
-Walking on the oracle's own terrain (walk, back, strafe, diagonal into walls and up slopes,
-with sprint) replays with zero error on origin and velocity, every trace matched
-(`cargo test`). Tolerance in the gate is 1e-3. Jump and lurch are ported, unverified.
+Every recording in `traces/` replays with zero error on origin and velocity, every trace
+matched (`cargo test`, tolerance 1e-3): walking over World's Edge terrain (walls, slopes,
+step-ups, sprint cancel) and, on mp_rr_arena_empty, jumps, sprint jumps, lurch, tap strafe,
+air turning, crouch, crouch walk, slide and slide jump. Wall climb and mantle are not ported:
+the empty arena has no reachable walls.
 
 ## Approach
 
