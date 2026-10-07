@@ -85,7 +85,7 @@ pattern. Retail strips it.
     src/              the lurch crate: trace parser, movement step, replay
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
     traces/local/     recordings too large to commit (fuzz runs); gated when present
-    dumps/            images, committed, hardlinked from HAVM on disk
+    dumps/            images, gitignored, hardlinked from HAVM on disk
     ref/              HAVM's extracted convar values and datamap offsets, retail build
 
 Run the tools from the repo root.
@@ -141,5 +141,5 @@ simulation that eats a usercmd stream and emits a per-tick trajectory to diff.
 ## Legal
 
 Decompiler output is derivative. Recovered constants and a clean reimplementation written
-from a behavioural spec are the defensible shape. No lifted bytes in the source. Exception: `dumps/` holds the oracle image so the repo
-is self-contained; it stays local and is never pushed.
+from a behavioural spec are the defensible shape. No lifted bytes in the source. `dumps/` holds the oracle image on disk only; it is
+gitignored and was removed from history, so it is never pushed.
