@@ -149,6 +149,7 @@ replaying recordings through `src/sim`. Names are ours.
 | `0x8221b0` | `player_move` | With `sv_optimizedmovement` and an unmoved origin, skips categorize unless moving up faster than 200 |
 | `0x865510` | `update_sprint` | `+speed` hold window, can-keep (`0x865160`) and allowed (`0x864d90`) tests; allowed needs last tick's velocity (`+0x41c`) in front of the eye yaw (`+0x1ebc`) |
 | `0x81a080` | `full_walk_move` | |
+| `0x8089e0` | `half_gravity` | While sliding on the ground, also pushes downhill: `v.xy += dv · plane.xy · plane.z` with the ground plane `+0x3e60` |
 | `0x809cb0` | `check_jump` | Grace period, skip penalty, anti multi-jump, slide jump, wall push |
 | `0x818320` | `ground_move` | Velocity re-projected along the ground plane (`+0x3e60`) for the move only |
 | `0x808d10` | `ground_accel` | sprintAcceleration above speed−1, lowAcceleration below lowSpeed, else acceleration |
@@ -162,7 +163,7 @@ replaying recordings through `src/sim`. Names are ours.
 | `0x828000` | `settle` | The slide used to drop back down; stops on a plane with n·up > 0.1 |
 | `0x806f20` | `stay_on_ground` | Probe down by step height, snap if walkable |
 | `0x81f070` | `categorize` | Probe by step height (walking) or 2; walkable at n·up ≥ 0.7; re-probes past a steep lip, alternating by command parity |
-| `0x81ebb0` | `set_ground` | Landing slowdown (`0x869a80`) |
+| `0x81ebb0` | `set_ground` | Landing slowdown (`0x869a80`); leaving the ground clears `+0x30ed` (jumped recently), which a jump then sets again |
 | `0x805710` | (surface) | Surface friction ×1.25, capped at 1, by the trace's surface index |
 
 ## Traces
@@ -197,6 +198,8 @@ plane dist `+0x2c`, fraction `+0x30`, allsolid `+0x38`, startsolid `+0x39`, a st
   Found by fuzzed input: the quantisation flips the test when facing is near perpendicular
   to velocity.
 - `+0x41c` is the previous call's final velocity (FinishMove).
+- Slip (`slipSpeed`, `slipAcceleration`, `0x808e40`) only acts while the player touches
+  entities listed at `+0x2ac8`; on plain ground its direction is zero and it does nothing.
 
 ## Ghidra caveat
 

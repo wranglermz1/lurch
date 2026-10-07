@@ -6,8 +6,6 @@ top. Each item names how it is checked.
 
 ## 1. Movement still to port
 
-- **Slope jump bookkeeping.** `jumped_recently` diverges on slopes. Recordings:
-  `traces/pending/terrain_turn.ltr`, `terrain_fuzz.ltr`. Fixable from the recordings alone.
 - **Wall climb.** `0x81ae40`, wall contact `0x81ca50` / `0x81bb60`. A climb makes the wall
   the ground: up vector `+0x266c` turns to the wall normal and the non-floor branch of
   `0x818320` runs with the `climb*` settings. Recordings: `traces/pending/climb_*.ltr`.

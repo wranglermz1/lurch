@@ -24,7 +24,14 @@ impl Move<'_> {
         let k = if self.s.gravity_scale * g != 0.0 { self.s.gravity_scale * g } else { 1.0 };
         let dv = ((k * self.s.sv_gravity) as f64 * 0.5 * t as f64 * 1.0) as f32;
         let v = self.mv.velocity;
-        self.mv.velocity = [GRAVITY_DIR[0] * dv + v[0], GRAVITY_DIR[1] * dv + v[1], v[2] + GRAVITY_DIR[2] * dv];
+        let mut x = GRAVITY_DIR[0] * dv + v[0];
+        let mut y = GRAVITY_DIR[1] * dv + v[1];
+        if self.p.sliding && self.on_ground() {
+            let gp = self.p.ground_plane;
+            x += dv * gp[0] * gp[2];
+            y += dv * gp[1] * gp[2];
+        }
+        self.mv.velocity = [x, y, v[2] + GRAVITY_DIR[2] * dv];
     }
 
     /// Clamp to sv_maxvelocity per axis and keep the origin inside the world.
