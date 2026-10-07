@@ -42,11 +42,9 @@ impl Move<'_> {
                 let k = self.landing_slowdown();
                 self.mv.velocity = add(scale(sub(v, vu), k), vu);
             }
-            if let Some(t) = t.filter(|_| new.is_some()) {
-                if self.p.traversal_state.wrapping_sub(1) < 2 {
-                    let landing = self.p.ground.is_none();
-                    self.start_slide(t.normal, landing);
-                }
+            if let Some(t) = t.filter(|_| new.is_some() && self.p.traversal_state.wrapping_sub(1) < 2) {
+                let landing = self.p.ground.is_none();
+                self.start_slide(t.normal, landing);
             }
             if new.is_none() && self.p.movetype == MOVETYPE_TRAVERSE {
                 self.p.movetype = MOVETYPE_WALK;
@@ -138,11 +136,10 @@ impl Move<'_> {
                 }
             };
             let mut nz = dot(up, t.normal);
-            if t.entity != 0 && nz < WALKABLE && world_up && 0.0 < nz && self.on_ground() {
-                if let Some(n) = self.edge_probe(&t, nz, reach) {
-                    t.normal = n;
-                    nz = dot(up, n);
-                }
+            let steep_lip = t.entity != 0 && nz < WALKABLE && world_up && 0.0 < nz && self.on_ground();
+            if let Some(n) = steep_lip.then(|| self.edge_probe(&t, nz, reach)).flatten() {
+                t.normal = n;
+                nz = dot(up, n);
             }
             let stands = t.entity != 0 && !(nz < WALKABLE && world_up);
             if stands {

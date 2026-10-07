@@ -95,7 +95,7 @@ pub fn angle_vectors(angles: V3) -> (V3, V3, V3) {
     let (sr, cr) = sin_cos_deg(angles[2]);
     let forward = [cy * cp, cp * sy, -sp];
     let srsp = sr * sp;
-    let right = [cr * sy - srsp * cy, cr * -1.0 * cy - srsp * sy, sr * -1.0 * cp];
+    let right = [cr * sy - srsp * cy, -cr * cy - srsp * sy, -sr * cp];
     let crsp = cr * sp;
     let up = [sr * sy + crsp * cy, crsp * sy - cy * sr, cr * cp];
     (forward, right, up)

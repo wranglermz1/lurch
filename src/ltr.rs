@@ -138,7 +138,7 @@ impl<R: Read> Iterator for Reader<R> {
             return Some(Err(e));
         }
         let rec = self.record(u32::from_le_bytes(b));
-        Some(rec.map(|rec| {
+        Some(rec.inspect(|rec| {
             self.prev = Some(Record {
                 seq: rec.seq,
                 traces_lost: 0,
@@ -150,7 +150,6 @@ impl<R: Read> Iterator for Reader<R> {
                 player_out: rec.player_out.clone(),
                 traces: Vec::new(),
             });
-            rec
         }))
     }
 }

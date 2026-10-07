@@ -336,7 +336,7 @@ impl Move<'_> {
             return;
         }
         let vz = self.mv.velocity[2];
-        if 0.0 < nz && nz < WALKABLE_AIR && self.mv.origin[2] == start_z && 0.0 <= vz && vz <= 0.013531647 {
+        if 0.0 < nz && nz < WALKABLE_AIR && self.mv.origin[2] == start_z && (0.0..=0.013531647).contains(&vz) {
             let up = self.p.up;
             let mut ledge = t;
             ledge.normal = up;
@@ -349,10 +349,8 @@ impl Move<'_> {
 }
 
 fn pin_shallow(mut t: Trace, plane: Option<V3>) -> Trace {
-    if let Some(g) = plane {
-        if t.normal[2] < 0.5 && 0.0 < t.normal[2] {
-            t.normal = super::collide::pin_vertical(t.normal, g);
-        }
+    if let Some(g) = plane.filter(|_| t.normal[2] < 0.5 && 0.0 < t.normal[2]) {
+        t.normal = super::collide::pin_vertical(t.normal, g);
     }
     t
 }

@@ -63,13 +63,11 @@ impl Move<'_> {
                             }
                         }
                         let mut t = self.trace(*pos, dest);
-                        if let Some(g) = ground {
-                            if t.normal[2] < 0.5 && t.normal[2] > 0.0 {
-                                let steep = planes.iter().fold(g, |a, p| if a[2] < p[2] { *p } else { a });
-                                let pinned = pin_vertical(t.normal, steep);
-                                if !planes.iter().any(|p| p[2] == 0.0 && pinned[0] * p[0] + pinned[1] * p[1] > 0.99) {
-                                    t.normal = pinned;
-                                }
+                        if let Some(g) = ground.filter(|_| t.normal[2] < 0.5 && t.normal[2] > 0.0) {
+                            let steep = planes.iter().fold(g, |a, p| if a[2] < p[2] { *p } else { a });
+                            let pinned = pin_vertical(t.normal, steep);
+                            if !planes.iter().any(|p| p[2] == 0.0 && pinned[0] * p[0] + pinned[1] * p[1] > 0.99) {
+                                t.normal = pinned;
                             }
                         }
                         t
