@@ -57,6 +57,12 @@ fn args_parse() {
     ] {
         assert!(args(bad).is_err(), "{bad} should be refused");
     }
+    let endless = std::env::temp_dir().join(format!("lurch-endless-{}.txt", std::process::id()));
+    std::fs::write(&endless, "1 down KeyW\n").unwrap();
+    let endless = endless.to_str().unwrap();
+    assert!(args(&format!("--script {endless}")).is_ok());
+    assert!(args(&format!("--script {endless} --headless")).unwrap_err().contains("exit"));
+    std::fs::remove_file(endless).unwrap();
 }
 
 #[test]

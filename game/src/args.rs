@@ -59,6 +59,9 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
     if !cfg.scripted && (cfg.headless || frametime.is_some()) {
         return Err("--headless and --frametime need --script".into());
     }
+    if cfg.headless && cfg.script.as_ref().is_some_and(|s| s.exit_frame().is_none()) {
+        return Err("--headless needs a script that ends with exit".into());
+    }
     if let Some(ft) = frametime {
         cfg.frametime = ft;
     }

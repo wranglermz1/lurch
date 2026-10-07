@@ -130,11 +130,11 @@ Notes on the feature list:
 game/
   Cargo.toml  Cargo.lock
   src/main.rs      args into Config, App assembly (windowed or --headless)
-  src/lib.rs       Config, FrameIndex, Frame sets, shared messages, common(), plugin exports
+  src/lib.rs       Config, FrameIndex, Paused, HudVisible, PendingShots, Frame sets, shared messages, common(), plugin exports
   src/args.rs      hand-parsed flags -> Config
   src/binds.rs     Action, bind table, held-input set, wheel modes
   src/look.rs      mouse counts -> view angles (plain Rust)
-  src/cmd.rs       CmdPlugin: Paused, pause_input, read_input, make_cmd, CmdQueue, CmdLog, frametime clamp
+  src/cmd.rs       CmdPlugin: pause_input, read_input, make_cmd, CmdQueue, CmdLog, ScriptFrametime, frametime clamp
   src/sim.rs       SimPlugin: Sim, Map, Spots, History/Snapshot, Respawn, run_cmds, pose, without_view
   src/script.rs    ScriptPlugin: parser, inject_script, ScriptFrametime, final_line, script_end
   src/convert.rs   Source -> Bevy positions, rotation, FOV (glam only)
