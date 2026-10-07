@@ -74,6 +74,10 @@ fractions in 1/1023 steps), so they are gated with the movement fields.
 
 Not ported yet:
 
+Eye height: the stance blocks carry a view offset at `+0x18` (0, 0, 60) standing, 32
+crouched, 14 in stance 2. `m_vecViewOffset` (`+0x56c`) stays zero, so the eye is placed by
+the view code; how it moves through a duck is not recovered.
+
 Sprint shake scale (`0x626110`): `sprint_view_shake_style` 1 eases between 1 and 0.25 over
 the sprint transition with a half cosine; style 0 between 1 and 0.5.
 

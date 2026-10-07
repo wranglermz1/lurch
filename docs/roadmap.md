@@ -56,6 +56,12 @@ the game's models and animations, which are art and stay out of scope until aske
 - About 1 ms per trace against a full map mesh; keep the area around the player in memory.
 - The engine leaves a hull about 0.014 units closer to triangle leaves than the 1/32 skin
   in `src/world.rs`. The kernel is reached through the handler tables at `0x1300660` etc.
+- On the arena floor the 1/32 skin is already right: every logged floor hit (34,130 of them)
+  ends where `World` puts it. Only about a third of the fractions match to the bit: the
+  engine's numerator is off from the exact distance by ~1e-6, as if the hit were solved in a
+  local frame of magnitude ~10 (Respawn's quantised collision vertices relative to a node
+  origin). Matching that needs the map's collision tree, so it waits for the workstation;
+  it is the drift `chain_world` tolerates within `TOL`.
 
 ## Later
 
