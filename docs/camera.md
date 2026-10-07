@@ -72,11 +72,18 @@ behind; and out over `sprintEndDuration` (0.15 s). Each starts from the fraction
 sprinting turned. `update_sprint` stamps those times and fractions (`+0x2608` to `+0x2618`,
 fractions in 1/1023 steps), so they are gated with the movement fields.
 
+Eye (`0x858710`, ported as `Player::eye_position`): origin + the view offset `+0xb8` +
+the pitch offset + the sprint eye drop on z. The view offset is the stance's (+0x18 in the
+stance block: 60 standing, 32 crouched) eased through a duck inside the movement call
+(`0x8214c0`, from `0x821610`): smoothstep of the duck timer, and for a duck begun in the air
+shifted by half the hull difference, as the hull moves instead. It is gated with the
+movement fields. The pitch offset (`0x858170`) moves the eye forward by `pitchOffsetScale`
+(9.2) × sin(pitch), halved looking up, × (0.6 + 0.4 sin((1 − duck)·π/2)) (`0x869500`).
+Lean, jetpack and prediction-error smoothing terms are left out.
+
 Not ported yet:
 
-Eye height: the stance blocks carry a view offset at `+0x18` (0, 0, 60) standing, 32
-crouched, 14 in stance 2. `m_vecViewOffset` (`+0x56c`) stays zero, so the eye is placed by
-the view code; how it moves through a duck is not recovered.
+
 
 Sprint shake scale (`0x626110`): `sprint_view_shake_style` 1 eases between 1 and 0.25 over
 the sprint transition with a half cosine; style 0 between 1 and 0.5.

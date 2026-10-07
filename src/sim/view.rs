@@ -286,6 +286,10 @@ fn tilt_toward(tilt: &mut V3, on: f32, v: V3, (lo, hi): (f32, f32), (rise, fall)
     };
 }
 
+fn smoothstep(f: f32) -> f32 {
+    (3.0 - (f + f)) * (f * f)
+}
+
 fn clamp01(mut f: f32) -> f32 {
     if f <= 0.0 {
         f = 0.0;
@@ -312,6 +316,43 @@ impl Player {
         let slow = ramp(now, s.sprint_start_delay + self.sprint_intent_time, s.sprint_start_duration);
         let slow = if 0.0 <= slow { slow } else { 0.0 };
         clamp01(if slow <= fast { slow } else { fast } + self.sprint_start_frac)
+    }
+
+    /// How far into a duck the player is, 0 standing to 1 crouched, eased as the eye is.
+    pub fn duck_frac(&self) -> f32 {
+        let t = self.duck_timer as f32;
+        match self.traversal_state {
+            1 => 1.0 - smoothstep(clamp01(if self.sliding { t / 200.0 } else { t / 400.0 })),
+            2 => 1.0,
+            3 => smoothstep(clamp01(t / 200.0)),
+            _ => 0.0,
+        }
+    }
+
+    /// Looking down moves the eye forward, by up to `pitchOffsetScale`, less crouched.
+    fn pitch_offset(&self, s: &Settings, angles: V3) -> V3 {
+        if s.pitch_offset_scale == 0.0 {
+            return [0.0; 3];
+        }
+        let (f, _, _) = angle_vectors(angles);
+        let len2 = f[0] * f[0] + f[1] * f[1];
+        if len2 == 0.0 {
+            return [0.0; 3];
+        }
+        let inv = 1.0 / (len2 + 0.0).sqrt().max(TINY);
+        let down = engine_sin(angles[0] * PI / 180.0 + 0.0);
+        let side = if angles[0] < 0.0 { 0.5 } else { 1.0 };
+        let crouch = engine_sin((1.0 - self.duck_frac()) * PI * 0.5 + 0.0) * 0.4 + 0.6;
+        let k = crouch * down * s.pitch_offset_scale * side;
+        [f[0] * inv * k, f[1] * inv * k, k * inv * 0.0]
+    }
+
+    /// Where the camera sits for a player standing at `origin` and looking along `angles`.
+    pub fn eye_position(&self, s: &Settings, origin: V3, angles: V3, now: f32) -> V3 {
+        let p = self.pitch_offset(s, angles);
+        let o = self.view_offset;
+        let drop = self.sprint_eye_drop(s, now);
+        [o[0] + origin[0] + (p[0] + 0.0), o[1] + origin[1] + (p[1] + 0.0), o[2] + origin[2] + (drop + p[2] + 0.0)]
     }
 
     /// How far sprinting lowers the eye: `sprintViewOffset` eased in on a quarter sine.

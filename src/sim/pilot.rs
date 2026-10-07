@@ -17,6 +17,7 @@ pub fn settings() -> Settings {
             Stance {
                 hull_min: [-16.0, -16.0, 0.0],
                 hull_max: [16.0, 16.0, 72.0],
+                view_offset: [0.0, 0.0, 60.0],
                 low_speed: 120.0,
                 speed: 173.5,
                 sprint_speed: 260.0,
@@ -29,6 +30,7 @@ pub fn settings() -> Settings {
             Stance {
                 hull_min: [-16.0, -16.0, 0.0],
                 hull_max: [16.0, 16.0, 47.0],
+                view_offset: [0.0, 0.0, 32.0],
                 low_speed: -1.0,
                 speed: 80.0,
                 sprint_speed: 0.0,
@@ -41,6 +43,7 @@ pub fn settings() -> Settings {
             Stance {
                 hull_min: [-16.0, -16.0, 0.0],
                 hull_max: [16.0, 16.0, 72.0],
+                view_offset: [0.0, 0.0, 14.0],
                 low_speed: -1.0,
                 speed: 120.0,
                 sprint_speed: 0.0,
@@ -182,6 +185,7 @@ pub fn settings() -> Settings {
         sprint_end_duration: 0.15,
         sprint_view_offset: -6.0,
         fov: 70.0,
+        pitch_offset_scale: 9.2,
         wall_start_kick: view::Kick { base: [-1.5, 0.0, 5.0], random: [0.5, 0.5, 0.5] },
     }
 }
@@ -200,6 +204,7 @@ pub fn spawn(origin: V3) -> Player {
         mask: 0x201_400b,
         hull_min: stand.hull_min,
         hull_max: stand.hull_max,
+        view_offset: stand.view_offset,
         hull_duck_min: duck.hull_min,
         hull_duck_max: duck.hull_max,
         step_height: 22.0,

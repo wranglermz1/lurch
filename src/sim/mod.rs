@@ -20,6 +20,8 @@ use math::V3;
 pub struct Stance {
     pub hull_min: V3,
     pub hull_max: V3,
+    /// The eye above the origin.
+    pub view_offset: V3,
     pub low_speed: f32,
     pub speed: f32,
     pub sprint_speed: f32,
@@ -98,6 +100,7 @@ pub struct Settings {
     pub sprint_end_duration: f32,
     pub sprint_view_offset: f32,
     pub fov: f32,
+    pub pitch_offset_scale: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -233,6 +236,8 @@ pub struct Player {
     pub sprint_end_time: f32,
     pub sprint_end_frac: f32,
     pub sprint_intent_time: f32,
+    /// The eye above the origin, eased through a duck.
+    pub view_offset: V3,
 }
 
 #[derive(Clone, Debug, Default)]

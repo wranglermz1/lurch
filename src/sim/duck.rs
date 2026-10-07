@@ -18,6 +18,14 @@ const GOING_DOWN: u32 = 1;
 const DOWN: u32 = 2;
 const COMING_UP: u32 = 3;
 
+fn clamp01(f: f32) -> f32 {
+    if 0.0 > f { 0.0 } else if 1.0 < f { 1.0 } else { f }
+}
+
+fn smoothstep(f: f32) -> f32 {
+    (3.0 - (f + f)) * (f * f)
+}
+
 impl Move<'_> {
     pub(super) fn hull_shift(&self) -> V3 {
         let p = &*self.p;
@@ -184,8 +192,12 @@ impl Move<'_> {
                 }
                 _ => {}
             }
-            if self.p.traversal_state == COMING_UP && self.p.duck_timer < 1 {
-                self.p.traversal_state = STANDING;
+            if self.p.traversal_state == COMING_UP {
+                if self.p.duck_timer < 1 {
+                    self.p.traversal_state = STANDING;
+                }
+                let f = clamp01(self.p.duck_timer as f32 / UNDUCK_MS as f32);
+                self.ease_view(smoothstep(f));
             }
         } else {
             if !was_down {
@@ -209,17 +221,40 @@ impl Move<'_> {
                 }
                 _ => {}
             }
-            if self.p.traversal_state == GOING_DOWN && self.p.duck_timer < 1 {
-                let was = self.p.flags;
-                self.p.flags |= 2;
-                self.p.traversal_state = DOWN;
-                if was & 2 == 0 && self.p.ducked_in_air {
-                    self.mv.origin = add(scale(self.hull_shift(), 0.5), self.mv.origin);
+            if self.p.traversal_state == GOING_DOWN {
+                if self.p.duck_timer < 1 {
+                    let was = self.p.flags;
+                    self.p.flags |= 2;
+                    self.p.traversal_state = DOWN;
+                    if was & 2 == 0 && self.p.ducked_in_air {
+                        self.mv.origin = add(scale(self.hull_shift(), 0.5), self.mv.origin);
+                    }
+                    self.categorize(false);
                 }
-                self.categorize(false);
+                let f = clamp01(self.p.duck_timer as f32 / full as f32);
+                self.ease_view(1.0 - smoothstep(f));
             }
         }
         self.after_duck(was_down);
+    }
+
+    /// Sets the eye's height above the origin `f` of the way from standing to crouched. A
+    /// duck begun in the air moves the hull rather than the eye, so the eye starts or ends
+    /// half the hull's difference away.
+    fn ease_view(&mut self, f: f32) {
+        let p = &*self.p;
+        let mut down = self.s.stances[1].view_offset[2];
+        let mut up = self.s.stances[0].view_offset[2];
+        if p.traversal_state != DOWN && p.ducked_in_air {
+            let stand = p.hull_max[2] - p.hull_min[2];
+            let duck = p.hull_duck_max[2] - p.hull_duck_min[2];
+            if p.flags & 2 == 0 {
+                down += (stand - duck) * 0.5;
+            } else if p.traversal_state == COMING_UP {
+                up += (duck - stand) * 0.5;
+            }
+        }
+        self.p.view_offset[2] = (1.0 - f) * up + down * f;
     }
 
     fn duck_fraction(&self, sliding: bool) -> f32 {

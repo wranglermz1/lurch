@@ -91,6 +91,7 @@ pub fn settings(blob: &[u8]) -> Settings {
         Stance {
             hull_min: vec3_at(blob, o),
             hull_max: vec3_at(blob, o + 0xc),
+            view_offset: vec3_at(blob, o + 0x18),
             low_speed: f32_at(blob, o + 0x44),
             speed: f32_at(blob, o + 0x48),
             sprint_speed: f32_at(blob, o + 0x4c),
@@ -195,6 +196,7 @@ pub fn settings(blob: &[u8]) -> Settings {
         sprint_end_duration: f32_at(blob, 0xd7c),
         sprint_view_offset: f32_at(blob, 0xd6c),
         fov: f32_at(blob, 0x7ac),
+        pitch_offset_scale: f32_at(blob, 0xdd4),
         wall_start_kick: Kick { base: [f32_at(blob, 0x9ec), f32_at(blob, 0x9f4), f32_at(blob, 0x9fc)], random: [f32_at(blob, 0x9f0), f32_at(blob, 0x9f8), f32_at(blob, 0xa00)] },
     }
 }
@@ -307,6 +309,7 @@ pub fn player(p: &[u8]) -> Player {
         sprint_end_time: f32_at(p, 0x2610),
         sprint_end_frac: f32_at(p, 0x2614),
         sprint_intent_time: f32_at(p, 0x2618),
+        view_offset: vec3_at(p, 0xb8),
     }
 }
 
@@ -525,6 +528,7 @@ macro_rules! modelled_fields {
         $m!(sprint_end_time);
         $m!(sprint_end_frac);
         $m!(sprint_intent_time);
+        $m!(view_offset);
     };
 }
 
