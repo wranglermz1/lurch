@@ -5,9 +5,9 @@ HAVM_SRC := $(addprefix $(HAVM)/src/,vm/vmm.cpp vm/process.cpp vm/scatter.cpp ac
             acquire/memmap.cpp sig/pattern.cpp sig/scan.cpp)
 HAVM_LIB := $(HAVM)/MemProcFS/files
 
-all: lurchcap.dll inject.exe drain
+all: lurchcap3.dll inject.exe drain drive
 
-lurchcap.dll: lurchcap.c ring.h
+lurchcap3.dll: lurchcap.c ring.h
 	$(WINCC) $(WFLAGS) -shared -o $@ $<
 
 inject.exe: inject.c
@@ -17,7 +17,11 @@ drain: drain.cpp ring.h
 	g++ -O2 -std=c++17 -DLINUX -D_GNU_SOURCE -I. -I$(HAVM)/src -I$(HAVM) -I$(HAVM)/MemProcFS/includes \
 	    $< $(HAVM_SRC) -o $@ -pthread -L$(HAVM_LIB) -l:vmm.so -Wl,-rpath,$(HAVM_LIB)
 
+drive: drive.cpp
+	g++ -O2 -std=c++17 -DLINUX -D_GNU_SOURCE -I$(HAVM)/src -I$(HAVM) -I$(HAVM)/MemProcFS/includes \
+	    $< $(HAVM_SRC) -o $@ -pthread -L$(HAVM_LIB) -l:vmm.so -Wl,-rpath,$(HAVM_LIB)
+
 clean:
-	rm -f lurchcap.dll inject.exe drain
+	rm -f lurchcap3.dll inject.exe drain drive
 
 .PHONY: all clean

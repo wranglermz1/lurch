@@ -1,66 +1,35 @@
-/* Ring layout shared by lurchcap.dll (writer, in the guest) and drain (reader, on the host).
- * Private to the capture side: the text trace is the only contract with the Rust code. */
+/* Ring layout shared by lurchcap3.dll (writer, in the guest) and drain (reader, on the host).
+ * Each slot is one C_GameMovement::ProcessMovement call: raw snapshots of everything the
+ * call reads or writes, and every movement trace it made with the engine's answer. */
 #pragma once
 #include <stdint.h>
 
-#define LURCH_MAGIC "lurchcap-ring-1"
-#define LURCH_CAP 8192
+#define LURCH_MAGIC "lurchcap-ring-3"
+#define LURCH_CAP 512
+#define LURCH_MAX_TRACES 48
 
-/* Values sampled per call that drain turns into the trace's settings line. Each must hold
- * still for a whole recording; drain fails the recording if one moves. */
-#define LURCH_AUX(X)                  \
-    X(gravity)                        \
-    X(speedScale)                     \
-    X(accelScale)                     \
-    X(timeScale)                      \
-    X(frictionScale)                  \
-    X(lagged)                         \
-    X(airSpeed)                       \
-    X(airAcceleration)                \
-    X(normalX)                        \
-    X(normalY)                        \
-    X(normalZ)                        \
-    X(frictionRampEnd)                \
-    X(weaponSpeedScale)               \
-    X(movetype)                       \
-    X(stance)                         \
-    X(lowSpeed)                       \
-    X(speed)                          \
-    X(sprintspeed)                    \
-    X(acceleration)                   \
-    X(deceleration)                   \
-    X(lowAcceleration)                \
-    X(sprintAcceleration)             \
-    X(sprintDeceleration)             \
-    X(speedScaleSide)                 \
-    X(speedScaleBack)                 \
-    X(gravityScale)                   \
-    X(airDrag)                        \
-    X(airDragConstant)                \
-    X(airStrafeEnabled)               \
-    X(sv_gravity)                     \
-    X(player_extraairaccelleration)
+#define SNAP_PLAYER 0x4800
+#define SNAP_MV 0x200
+#define SNAP_SETTINGS 0x1000
+#define SNAP_GLOBALS 0x60
+#define TRACE_RAY 0x68
+#define TRACE_RESULT 0x180
 
-#define LURCH_AUX_ENUM(n) AUX_##n,
-enum { LURCH_AUX(LURCH_AUX_ENUM) AUX_COUNT };
-
-#define FLAG_SPRINT 1u
-#define FLAG_DUCKED 2u
-#define FLAG_SLIDE 4u
+/* One engine trace: which IEngineTrace slot, its mask argument, the Ray_t (for slot 0x40,
+ * which takes no ray, its start and end vectors instead) and the trace_t it filled. */
+typedef struct {
+    uint32_t slot, mask;
+    uint8_t ray[TRACE_RAY];
+    uint8_t result[TRACE_RESULT];
+} lurch_trace;
 
 typedef struct {
-    float origin[3], velocity[3];
-    uint32_t flags, onground;
-} lurch_state;
-
-typedef struct {
-    uint32_t seq;
-    float frametime, curtime;
-    float angles[3], move[3];
-    uint32_t buttons, oldbuttons;
-    lurch_state in, out;
-    float maxspeed;
-    float aux[AUX_COUNT];
+    uint32_t seq, ntraces, traces_lost, pad;
+    uint8_t globals[SNAP_GLOBALS];
+    uint8_t settings[SNAP_SETTINGS];
+    uint8_t mv_in[SNAP_MV], mv_out[SNAP_MV];
+    uint8_t player_in[SNAP_PLAYER], player_out[SNAP_PLAYER];
+    lurch_trace traces[LURCH_MAX_TRACES];
 } lurch_rec;
 
 /* write counts records ever written; read is advanced by drain through a guest write.
@@ -68,6 +37,6 @@ typedef struct {
 typedef struct {
     char magic[16];
     uint32_t rec_size, cap;
-    volatile uint32_t write, read, dropped, server_calls;
+    volatile uint32_t write, read, dropped, server_calls, trace_hooked, pad;
     lurch_rec recs[LURCH_CAP];
 } lurch_ring;

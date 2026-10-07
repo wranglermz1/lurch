@@ -6,6 +6,9 @@ import java.io.*;
 public class Dec extends GhidraScript {
   public void run() throws Exception {
     String[] a = getScriptArgs();
+    int tx = currentProgram.startTransaction("read-only");
+    for (ghidra.program.model.mem.MemoryBlock b : currentProgram.getMemory().getBlocks()) b.setWrite(false);
+    currentProgram.endTransaction(tx, true);
     DecompInterface d = new DecompInterface();
     d.openProgram(currentProgram);
     PrintWriter out = new PrintWriter(new FileWriter(a[0]));

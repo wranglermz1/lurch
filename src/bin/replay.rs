@@ -1,46 +1,75 @@
-use lurch::movement::max_speed;
-use lurch::replay::{TOL, replay};
-use lurch::trace::{State, parse};
+use lurch::ltr::open;
+use lurch::oracle::{self, outcome, LogTracer, Outcome};
+use lurch::sim::{Move, Scratch};
 use std::process::ExitCode;
 
-fn show(tag: &str, s: &State) -> String {
-    format!(
-        "{tag} origin {:?} velocity {:?} flags {:x} onground {}",
-        s.origin, s.velocity, s.flags, s.onground
-    )
+const TOL: f32 = 1e-3;
+
+fn err(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (0..3).map(|i| (a[i] - b[i]).abs()).fold(0.0, f32::max)
 }
 
 fn main() -> ExitCode {
     let paths: Vec<String> = std::env::args().skip(1).collect();
-    if paths.is_empty() {
-        eprintln!("usage: replay TRACE...");
-        return ExitCode::from(2);
-    }
+    let verbose = std::env::var("VERBOSE").is_ok();
     let mut ok = true;
-    for p in &paths {
-        let t = match std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|s| parse(&s)) {
-            Ok(t) => t,
+    for path in &paths {
+        let reader = match open(path) {
+            Ok(r) => r,
             Err(e) => {
-                println!("{p}: {e}");
+                println!("{path}: {e}");
                 ok = false;
                 continue;
             }
         };
-        let r = replay(&t);
-        println!(
-            "{p}: {} steps, {} single-step failures at tol {TOL}, max error origin {:.6} velocity {:.6}; trajectory max error origin {:.6} velocity {:.6}",
-            r.steps, r.failures, r.max_origin, r.max_velocity, r.trajectory_max_origin, r.trajectory_max_velocity
-        );
-        if let Some((seq, why)) = r.unsupported {
-            println!("  out of scope from seq {seq:x}: {why}");
+        let (mut n, mut fails, mut missing, mut unused) = (0, 0, 0, 0);
+        let (mut eo, mut ev) = (0.0f32, 0.0f32);
+        let mut first: Option<String> = None;
+        for rec in reader {
+            let rec = rec.expect("record");
+            n += 1;
+            let want = outcome(&rec);
+            let mut p = oracle::player(&rec.player_in);
+            let mut mv = oracle::move_data(&rec.mv_in);
+            let s = oracle::settings(&rec.settings);
+            let g = oracle::globals(&rec.globals, p.lagged);
+            let mut tr = LogTracer::new(&rec.traces);
+            let out_friction = want.surface_friction;
+            let surface = move |_: u32| out_friction / 1.25;
+            {
+                let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr: &mut tr, surface: &surface, scratch: Scratch::default() };
+                m.player_move(oracle::SV_OPTIMIZEDMOVEMENT);
+            }
+            let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };
+            let (o, v) = (err(got.origin, want.origin), err(got.velocity, want.velocity));
+            eo = eo.max(o);
+            ev = ev.max(v);
+            missing += tr.missing.len();
+            unused += tr.unused();
+            let bad = o > TOL || v > TOL || got.on_ground != want.on_ground || !tr.missing.is_empty();
+            if bad {
+                fails += 1;
+            }
+            if (bad && first.is_none()) || (verbose && bad) {
+                let msg = format!(
+                    "seq {:x}: origin err {o:.5} vel err {v:.5}\n    in  {:?} {:?} ground {}\n    want {want:?}\n    got  {got:?}\n    traces logged {} missing {:?}",
+                    rec.seq,
+                    oracle::move_data(&rec.mv_in).origin,
+                    oracle::move_data(&rec.mv_in).velocity,
+                    oracle::ground_of(&rec.player_in).is_some(),
+                    rec.traces.len(),
+                    tr.missing
+                );
+                if verbose {
+                    println!("{msg}");
+                }
+                first.get_or_insert(msg);
+            }
         }
-        if let Some((s, ours)) = r.first_failure {
+        println!("{path}: {n} calls, {fails} failing at {TOL}, max err origin {eo:.5} velocity {ev:.5}, {missing} traces not in log, {unused} logged traces unused");
+        if let Some(f) = first {
             ok = false;
-            println!("  first failure seq {:x} (line {}): {:?}", s.cmd.seq, s.line, s.cmd);
-            println!("  {}", show("in   ", &s.input));
-            println!("  {}", show("out  ", &s.output));
-            println!("  {}", show("ours ", &ours));
-            println!("  maxspeed oracle {} ours {}", s.maxspeed, max_speed(&t.settings, s.input.flags));
+            println!("  first failure {f}");
         }
     }
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }

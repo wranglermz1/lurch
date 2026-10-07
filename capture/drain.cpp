@@ -1,8 +1,22 @@
-// drain OUT.trace [--all] [--map NAME]: follow lurchcap's ring in the guest and write a text
-// trace on Ctrl-C. Built against HAVM's reader (capture/Makefile). PROC overrides the process.
+// drain OUT.ltr [--all] [--map NAME] [--seconds N]: follow lurchcap3's ring in the guest and
+// write a binary trace when stopped (Ctrl-C or --seconds). Built against HAVM's reader
+// (capture/Makefile). PROC overrides the process name.
+//
+// File: header, then one record per ProcessMovement call. Snapshots are stored as runs of
+// bytes that differ from a reference, so a record costs what actually changed:
+//   header  "lurchtr3" u32 player mv settings globals trace_ray trace_result, char map[32]
+//   record  u32 seq ntraces traces_lost
+//           globals    vs previous record's globals
+//           settings   vs previous record's settings
+//           mv_in      vs previous record's mv_in
+//           mv_out     vs this record's mv_in
+//           player_in  vs previous record's player_in
+//           player_out vs this record's player_in
+//           ntraces x { u32 slot, u32 mask, ray, result } raw (ring.h lurch_trace)
+//   runs    { u32 offset, u32 length, bytes } ... terminated by length 0
 //
 // By default only the first execution of each seq is kept: prediction re-runs a command it
-// has already run, and the re-run starts from corrected state, not from the previous out.
+// has already run, from corrected state.
 #include "vm/vmm.hpp"
 extern "C" {
 #include "ring.h"
@@ -15,6 +29,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -25,18 +40,9 @@ namespace {
 
 std::atomic<bool> stop{false};
 
-#define LURCH_AUX_NAME(n) #n,
-const char* const AUX_NAMES[] = {LURCH_AUX(LURCH_AUX_NAME)};
-
-uint32_t bits(float f) {
-    uint32_t u;
-    memcpy(&u, &f, 4);
-    return u;
-}
-
 uint64_t find_ring(const Process& game) {
-    const uint64_t dll = game.module_base("lurchcap.dll");
-    if (!dll) throw std::runtime_error("lurchcap.dll is not loaded");
+    const uint64_t dll = game.module_base("lurchcap3.dll");
+    if (!dll) throw std::runtime_error("lurchcap3.dll is not loaded");
     const uint32_t lfanew = game.read<uint32_t>(dll + 0x3c);
     const uint32_t size = game.read<uint32_t>(dll + lfanew + 24 + 56);
     std::vector<char> img(size);
@@ -51,14 +57,26 @@ uint64_t find_ring(const Process& game) {
         memcpy(&rec_size, hit + offsetof(lurch_ring, rec_size), 4);
         if (rec_size == sizeof(lurch_rec)) return dll + at;
     }
-    throw std::runtime_error("lurchcap.dll is loaded but has no ring with this drain's layout: it did not hook, or ring.h differs");
+    throw std::runtime_error("lurchcap3.dll is loaded but has no ring with this drain's layout");
 }
 
-void state(FILE* f, const char* tag, const lurch_state& s) {
-    fprintf(f, "%s", tag);
-    for (float v : s.origin) fprintf(f, " %08x", bits(v));
-    for (float v : s.velocity) fprintf(f, " %08x", bits(v));
-    fprintf(f, " %x %x", s.flags, s.onground);
+void put32(FILE* f, uint32_t v) { fwrite(&v, 4, 1, f); }
+
+void runs(FILE* f, const uint8_t* now, const uint8_t* ref, uint32_t n) {
+    for (uint32_t i = 0; i < n;) {
+        if (ref && now[i] == ref[i]) {
+            i++;
+            continue;
+        }
+        uint32_t j = i;
+        while (j < n && !(ref && now[j] == ref[j])) j++;
+        put32(f, i);
+        put32(f, j - i);
+        fwrite(now + i, 1, j - i, f);
+        i = j;
+    }
+    put32(f, 0);
+    put32(f, 0);
 }
 
 }  // namespace
@@ -67,13 +85,15 @@ int main(int argc, char** argv) {
     const char* out = nullptr;
     const char* map = "unknown";
     bool all = false;
+    double seconds = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--all")) all = true;
         else if (!strcmp(argv[i], "--map") && i + 1 < argc) map = argv[++i];
+        else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = atof(argv[++i]);
         else out = argv[i];
     }
     if (!out) {
-        fprintf(stderr, "usage: drain OUT.trace [--all] [--map NAME]\n");
+        fprintf(stderr, "usage: drain OUT.ltr [--all] [--map NAME] [--seconds N]\n");
         return 2;
     }
     signal(SIGINT, [](int) { stop = true; });
@@ -82,78 +102,76 @@ int main(int argc, char** argv) {
         Vmm vm = Vmm::open_qemu();
         Process game = vm.process(proc);
         const uint64_t ring = find_ring(game);
-        const uint32_t rec_size = game.read<uint32_t>(ring + offsetof(lurch_ring, rec_size));
-        const uint32_t cap = game.read<uint32_t>(ring + offsetof(lurch_ring, cap));
-        if (rec_size != sizeof(lurch_rec) || cap != LURCH_CAP)
-            throw std::runtime_error("ring layout differs from this drain's ring.h: rebuild both");
+        if (!game.read<uint32_t>(ring + offsetof(lurch_ring, trace_hooked)))
+            fprintf(stderr, "warning: the trace detour is not in place; records carry no traces\n");
         uint32_t read = game.read<uint32_t>(ring + offsetof(lurch_ring, write));
         game.write_bytes(ring + offsetof(lurch_ring, read), &read, 4);
         const uint32_t dropped0 = game.read<uint32_t>(ring + offsetof(lurch_ring, dropped));
         const uint32_t server0 = game.read<uint32_t>(ring + offsetof(lurch_ring, server_calls));
-        fprintf(stderr, "draining %s ring at %#llx; Ctrl-C to stop\n", proc, (unsigned long long)ring);
+        fprintf(stderr, "draining %s ring at %#llx\n", proc, (unsigned long long)ring);
 
-        std::vector<lurch_rec> recs;
-        while (!stop) {
+        FILE* f = fopen(out, "wb");
+        if (!f) throw std::runtime_error(std::string("cannot write ") + out);
+        fwrite("lurchtr3", 1, 8, f);
+        for (uint32_t v : {SNAP_PLAYER, SNAP_MV, SNAP_SETTINGS, SNAP_GLOBALS, TRACE_RAY, TRACE_RESULT}) put32(f, v);
+        char mapname[32] = {};
+        strncpy(mapname, map, sizeof mapname - 1);
+        fwrite(mapname, 1, sizeof mapname, f);
+
+        auto r = std::make_unique<lurch_rec>();
+        auto prev = std::make_unique<lurch_rec>();
+        bool have_prev = false;
+        std::set<uint32_t> seen;
+        size_t calls = 0, kept = 0, gaps = 0, lost = 0;
+        uint32_t last_seq = 0;
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!stop && (seconds <= 0 || std::chrono::steady_clock::now() - t0 < std::chrono::duration<double>(seconds))) {
             const uint32_t write = game.read<uint32_t>(ring + offsetof(lurch_ring, write));
             for (; read != write; read++) {
-                lurch_rec r;
-                const uint64_t va = ring + offsetof(lurch_ring, recs) + (read % LURCH_CAP) * sizeof r;
-                size_t got = game.read_partial(va, &r, sizeof r);
-                if (got != sizeof r) {
-                    // The record reached a page the DLL only just faulted in, which MemProcFS's
-                    // page-table cache still holds as unmapped.
-                    VMMDLL_ConfigSet(vm.handle(), VMMDLL_OPT_REFRESH_FREQ_TLB, 1);
-                    got = game.read_partial(va, &r, sizeof r);
-                }
-                if (got != sizeof r) {
-                    char m[160];
-                    snprintf(m, sizeof m, "ring read failed: record %u at %#llx, %zu of %zu bytes (write %u)",
-                             read, (unsigned long long)va, got, sizeof r, write);
-                    throw std::runtime_error(m);
-                }
-                recs.push_back(r);
+                const uint64_t va = ring + offsetof(lurch_ring, recs) + (uint64_t)(read % LURCH_CAP) * sizeof(lurch_rec);
+                // Read the fixed part, then only the traces the call made: the unused trace
+                // slots are pages the DLL never touched, which do not exist to be read. A record
+                // can also reach pages only just faulted in, which MemProcFS's page-table cache
+                // still holds as unmapped until it is refreshed.
+                const size_t fixed = offsetof(lurch_rec, traces);
+                auto fetch = [&](uint64_t at, void* dst, size_t n) {
+                    for (int tries = 0; game.read_partial(at, dst, n) != n; tries++) {
+                        if (tries == 20) throw std::runtime_error("ring read failed");
+                        VMMDLL_ConfigSet(vm.handle(), VMMDLL_OPT_REFRESH_FREQ_TLB, 1);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+                };
+                fetch(va, r.get(), fixed);
+                if (r->ntraces > LURCH_MAX_TRACES) throw std::runtime_error("corrupt record: ntraces");
+                if (r->ntraces) fetch(va + fixed, r->traces, r->ntraces * sizeof(lurch_trace));
+                calls++;
+                if (!all && !seen.insert(r->seq).second) continue;
+                if (have_prev && !all && r->seq != last_seq + 1) gaps++;
+                last_seq = r->seq;
+                lost += r->traces_lost;
+                const lurch_rec* p = have_prev ? prev.get() : nullptr;
+                put32(f, r->seq);
+                put32(f, r->ntraces);
+                put32(f, r->traces_lost);
+                runs(f, r->globals, p ? p->globals : nullptr, SNAP_GLOBALS);
+                runs(f, r->settings, p ? p->settings : nullptr, SNAP_SETTINGS);
+                runs(f, r->mv_in, p ? p->mv_in : nullptr, SNAP_MV);
+                runs(f, r->mv_out, r->mv_in, SNAP_MV);
+                runs(f, r->player_in, p ? p->player_in : nullptr, SNAP_PLAYER);
+                runs(f, r->player_out, r->player_in, SNAP_PLAYER);
+                fwrite(r->traces, sizeof(lurch_trace), r->ntraces, f);
+                std::swap(r, prev);
+                have_prev = true;
+                kept++;
             }
             game.write_bytes(ring + offsetof(lurch_ring, read), &read, 4);
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
+        fclose(f);
         const uint32_t dropped = game.read<uint32_t>(ring + offsetof(lurch_ring, dropped)) - dropped0;
         const uint32_t server = game.read<uint32_t>(ring + offsetof(lurch_ring, server_calls)) - server0;
-
-        std::vector<lurch_rec> kept;
-        std::set<uint32_t> seen;
-        for (const auto& r : recs)
-            if (all || seen.insert(r.seq).second) kept.push_back(r);
-        if (kept.empty()) throw std::runtime_error("no records");
-
-        for (const auto& r : kept)
-            for (int k = 0; k < AUX_COUNT; k++)
-                if (r.aux[k] != kept[0].aux[k]) {
-                    fprintf(stderr, "%s moved from %g to %g at seq %x: not a single-settings recording, nothing written\n",
-                            AUX_NAMES[k], kept[0].aux[k], r.aux[k], r.seq);
-                    return 1;
-                }
-
-        FILE* f = fopen(out, "w");
-        if (!f) throw std::runtime_error(std::string("cannot write ") + out);
-        fprintf(f, "# lurch-trace 1 build=5dba2a2f-02ae8471 map=%s\nsettings", map);
-        for (int k = 0; k < AUX_COUNT; k++) fprintf(f, " %s=%08x", AUX_NAMES[k], bits(kept[0].aux[k]));
-        fprintf(f, "\n");
-        uint32_t gaps = 0;
-        for (size_t i = 0; i < kept.size(); i++) {
-            const auto& r = kept[i];
-            if (i && !all && r.seq != kept[i - 1].seq + 1) gaps++;
-            fprintf(f, "cmd %x %08x %08x", r.seq, bits(r.frametime), bits(r.curtime));
-            for (float v : r.angles) fprintf(f, " %08x", bits(v));
-            for (float v : r.move) fprintf(f, " %08x", bits(v));
-            fprintf(f, " %x %x\n", r.buttons, r.oldbuttons);
-            state(f, "in ", r.in);
-            fprintf(f, "\n");
-            state(f, "out", r.out);
-            fprintf(f, " %08x\n", bits(r.maxspeed));
-        }
-        fclose(f);
-        fprintf(stderr, "%zu calls, %zu written, %u seq gaps, %u dropped in the guest, %u server ProcessMovement calls\n",
-                recs.size(), kept.size(), gaps, dropped, server);
+        fprintf(stderr, "%zu calls, %zu written, %zu seq gaps, %u dropped in the guest, %zu traces lost, %u server calls\n",
+                calls, kept, gaps, dropped, lost, server);
     } catch (const std::exception& e) {
         fprintf(stderr, "drain: %s\n", e.what());
         return 1;

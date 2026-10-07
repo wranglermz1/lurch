@@ -1,0 +1,204 @@
+//! The movement simulation. Names are ours; the structure follows the oracle's call tree so a
+//! divergence can be pinned to one function (docs/oracle.md maps each to its RVA).
+
+pub mod collide;
+pub mod ground;
+pub mod math;
+pub mod walk;
+
+use math::V3;
+
+/// Per-stance block of the player settings.
+#[derive(Clone, Debug, Default)]
+pub struct Stance {
+    pub hull_min: V3,
+    pub hull_max: V3,
+    pub low_speed: f32,
+    pub speed: f32,
+    pub sprint_speed: f32,
+    pub acceleration: f32,
+    pub deceleration: f32,
+    pub low_acceleration: f32,
+    pub sprint_acceleration: f32,
+    pub sprint_deceleration: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Settings {
+    pub stances: [Stance; 3],
+    pub speed_scale_side: f32,
+    pub speed_scale_back: f32,
+    pub gravity_scale: f32,
+    pub air_drag: f32,
+    pub air_drag_constant: f32,
+    pub air_strafe_disabled: bool,
+    pub boost_enabled: bool,
+    pub land_slowdown_duration: f32,
+    pub land_slowdown_frac: f32,
+    pub land_slowdown_time_power: f32,
+    pub land_slowdown_height_min: f32,
+    pub land_slowdown_height_max: f32,
+    pub wallrun: bool,
+    pub sv_gravity: f32,
+    pub sv_maxvelocity: f32,
+    pub extra_air_accel: f32,
+    pub skip_time: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Globals {
+    pub curtime: f32,
+    pub frametime: f32,
+}
+
+/// The last move trace, which the oracle keeps on the player.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MoveTraceInfo {
+    pub endpos: V3,
+    pub normal: V3,
+    pub kind: u32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Player {
+    pub flags: u32,
+    pub ground: Option<u64>,
+    pub movetype: u8,
+    pub up: V3,
+    pub stance_gate: i32,
+    pub collision_group: u8,
+    pub mask: u32,
+    pub hull_min: V3,
+    pub hull_max: V3,
+    pub hull_duck_min: V3,
+    pub hull_duck_max: V3,
+    pub step_height: f32,
+    pub can_step: bool,
+    pub speed_scale: f32,
+    pub accel_scale: f32,
+    /// Friction of the surface stood on, scaled by 1.25 and capped at 1; 0.25 just after
+    /// leaving the ground upwards.
+    pub surface_friction: f32,
+    pub friction_scale: f32,
+    pub lagged: f32,
+    pub gravity: f32,
+    pub sprinting: bool,
+    pub sliding: bool,
+    pub no_accel: bool,
+    pub air_speed: f32,
+    pub air_acceleration: f32,
+    pub ramp_end: f32,
+    pub push: V3,
+    pub last_plane: V3,
+    pub last_ground_time: f32,
+    pub land_time: f32,
+    pub land_height: f32,
+    pub ground_normal: V3,
+    /// The walkable plane under a walking player, used to keep the slide loop off it.
+    pub ground_plane: V3,
+    pub ledge_origin: V3,
+    pub move_trace: MoveTraceInfo,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MoveData {
+    /// The player's origin was moved since the last movement call by something else.
+    pub origin_changed: bool,
+    pub angles: V3,
+    pub buttons: u32,
+    pub oldbuttons: u32,
+    pub forward: f32,
+    pub side: f32,
+    pub up: f32,
+    pub flat_wish: V3,
+    pub ground_plane: V3,
+    pub maxspeed: f32,
+    pub origin: V3,
+    pub velocity: V3,
+}
+
+impl MoveData {
+    pub fn pressed(&self) -> u32 {
+        self.buttons & !self.oldbuttons
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Trace {
+    pub start: V3,
+    pub endpos: V3,
+    pub normal: V3,
+    pub fraction: f32,
+    pub allsolid: bool,
+    pub startsolid: bool,
+    /// trace_t +0x3b: lets a step land whatever the slope.
+    pub flag3b: bool,
+    pub surface: u32,
+    pub entity: u64,
+}
+
+/// A swept player hull, as the oracle's trace wrapper builds it.
+#[derive(Clone, Copy, Debug)]
+pub struct HullQuery {
+    pub start: V3,
+    pub end: V3,
+    pub mins: V3,
+    pub maxs: V3,
+    pub mask: u32,
+}
+
+pub trait Tracer {
+    fn hull(&mut self, q: &HullQuery) -> Trace;
+}
+
+/// Whatever the movement code knows about where it is in one ProcessMovement call: the
+/// ground probe it can reuse, and where that probe ended.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Scratch {
+    pub probe: Option<Trace>,
+    pub probe_end: V3,
+}
+
+pub struct Move<'a> {
+    pub p: &'a mut Player,
+    pub mv: &'a mut MoveData,
+    pub s: &'a Settings,
+    pub g: Globals,
+    pub tr: &'a mut dyn Tracer,
+    /// Friction of a collision surface by its index; world data, like the collision itself.
+    pub surface: &'a dyn Fn(u32) -> f32,
+    pub scratch: Scratch,
+}
+
+const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
+
+impl Move<'_> {
+    pub fn player_move(&mut self, optimized: bool) {
+        if self.p.movetype != 12 {
+            if self.p.movetype == 2 && !self.mv.origin_changed && optimized {
+                if OPTIMIZED_LEAVE_SPEED < math::dot(self.p.up, self.mv.velocity) {
+                    self.set_ground(None);
+                }
+            } else if self.p.movetype != 2 || !self.on_ground() || !self.stay_on_ground() {
+                self.categorize(false);
+            }
+        }
+        self.mv.maxspeed = self.max_speed();
+        if matches!(self.p.movetype, 2 | 7) {
+            self.full_walk_move();
+        }
+    }
+
+    pub fn stance(&self) -> &Stance {
+        let i = if self.p.stance_gate < 1 { 2 } else { ((self.p.flags >> 1) & 1) as usize };
+        &self.s.stances[i]
+    }
+
+    pub fn ducked(&self) -> bool {
+        self.p.flags & 2 != 0
+    }
+
+    pub fn on_ground(&self) -> bool {
+        self.p.ground.is_some()
+    }
+}
