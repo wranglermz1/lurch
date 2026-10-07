@@ -311,6 +311,7 @@ pub fn diff_player(ours: &Player, theirs: &Player) -> Vec<String> {
     field!(ground_plane);
     field!(ledge_origin);
     field!(step_height);
+    field!(prev_velocity);
     if ours.ground.is_some() != theirs.ground.is_some() {
         out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
     }
@@ -370,6 +371,7 @@ pub fn with_state(mut base: Player, state: &Player) -> Player {
     base.ground_plane = state.ground_plane.clone();
     base.ledge_origin = state.ledge_origin.clone();
     base.step_height = state.step_height.clone();
+    base.prev_velocity = state.prev_velocity.clone();
     base.ground = state.ground;
     base
 }

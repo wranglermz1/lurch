@@ -259,6 +259,11 @@ impl Move<'_> {
         self.mv.oldbuttons = self.mv.buttons;
     }
 
+    /// FinishMove's part that later movement reads: the velocity the call ended with.
+    pub fn finish_move(&mut self) {
+        self.p.prev_velocity = self.mv.velocity;
+    }
+
     pub fn player_move(&mut self, optimized: bool) {
         self.stance_index = Some(if self.p.stance_gate < 1 { 2 } else { ((self.p.flags >> 1) & 1) as usize });
         if 0 < self.p.duck_timer {

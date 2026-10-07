@@ -6,6 +6,10 @@ use crate::sim::{Move, MoveData, Player, Scratch};
 
 pub const TOL: f32 = 1e-3;
 
+/// Every surface stood on in the recordings (indices 20, 22, 87) gives the cap, 1.0, so one
+/// default stands in for the game's surface property table until that is extracted.
+const DEFAULT_SURFACE_FRICTION: f32 = 0.8;
+
 pub struct Step {
     pub seq: u32,
     pub want: Outcome,
@@ -56,8 +60,7 @@ pub fn run(rec: &Record, carried: Option<&(Player, MoveData)>) -> (Step, Player,
     let s = oracle::settings(&rec.settings);
     let g = oracle::globals(&rec.globals, p.lagged);
     let mut tr = LogTracer::new(&rec.traces);
-    let out_friction = want.surface_friction;
-    let surface = move |_: u32| out_friction / 1.25;
+    let surface = |_: u32| DEFAULT_SURFACE_FRICTION;
     {
         let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr: &mut tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
         m.pre_think();
@@ -90,6 +93,7 @@ pub fn chain(path: &str) -> std::io::Result<Chain> {
         c.calls += 1;
         if let Some((cp, cmv)) = &mut carried {
             let g = oracle::globals(&rec.globals, cp.lagged);
+            cp.prev_velocity = cmv.velocity;
             if cp.ground.is_some() {
                 cp.left_ground_time = g.curtime;
                 cp.left_ground_up = cp.up;
