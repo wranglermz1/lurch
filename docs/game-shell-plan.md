@@ -170,9 +170,11 @@ Source's `KeyState` table (Source 2007, unverified for R5):
 | impulse up, with or without down (`4`, `5`) | released this frame | 0 |
 | nothing (`0`) | up | 0 |
 
-**Button bits.** Source's `CalcButtonBits` sets the command's bit when `state & 3` (down or impulse down). Whether R5 builds the bits before or after `KeyState` clears the impulse bits decides whether a wheel tap sets `IN_FORWARD`. That order is unverified.
+**Button bits.** Source's `CalcButtonBits` sets the command's bit when `state & 3` (down or impulse down). Whether R5 builds the bits before or after `KeyState` clears the impulse bits decides whether a wheel tap sets `IN_FORWARD`.
 
 M1 settles this table and the bit order by decompiling. M2 then writes `Keys` and `key_state` from the result. If M1 runs out of time, M2 uses Source's table, takes the bits before the impulse clear, and marks the move-value tests provisional. Every test asserts through `key_state(..)` rather than literals, so a later answer changes one function.
+
+**M1's answer (docs/oracle.md, Client input).** R5 keeps Source's KeyState table exactly (`0x702350`). CreateMove runs KeyState first, which clears the impulses, then GetButtonBits (`0x705500`); but R5's kbutton has a press latch, set by a fresh press and cleared by GetButtonBits, that sets the bit too. So a command's bit is "down, or pressed since the last command", which is `down | impulse_down` read before the clear. A wheel tap sets its bit for one command and moves 0.25. Not provisional.
 
 ### 3.2 `src/sim/buttons.rs` (new; add `pub mod buttons;` in `src/sim/mod.rs`)
 
@@ -285,7 +287,7 @@ What each piece is for:
 - **`eye`.** It composes `eye_position(s, origin, player.view_angles, now)`, `camera_angles(s, player.view_angles)` and `view_fov(s, cl_fov_scale, now)`. `step` sets `view_angles` to the pitch-clamped command angles (`pilot.rs:257`).
 - **`with_oldbuttons`.** It lets a respawn carry the held keys over, so a key held through a respawn makes no new edge. `from_commands` keeps using `Pilot::new`.
 - **No `Pilot::frame`.** The shell's loop runs `step` per command and `view_frame` once per frame (section 4.6), and the tests write that order out explicitly.
-- **`Clock`.** It is ours. The game's curtime follows neither rule exactly. f32 addition of each frametime matches 895 of 1317 calls in bhop and 41 of 563 in jump, and an f64 accumulator matches 79 and 10 (verified). `secs` and `from_secs` let a snapshot be stored and restored without a later API change.
+- **`Clock`.** It is ours. f32 addition of each frametime matches 895 of 1317 calls in bhop and 41 of 563 in jump, and an f64 accumulator matches 79 and 10 (verified). M1 recovered the game's own rule (a 0.05 s tick count plus a remainder quantised to 0.05/1023 s, docs/oracle.md, Clock), which reproduces all 62,638 recorded calls; adopting it is a later change, not part of M2. `secs` and `from_secs` let a snapshot be stored and restored without a later API change.
 
 **Spawn FOV fix (done).** `spawn()` sets `fov_from: 1.0, fov_to: 1.0`. Before, both defaulted to 0, so `view_fov` returned 1 degree at spawn and eased to 70 over 0.25 s. `tests/testmap.rs` `a_spawned_pilot_sees_the_class_fov` covers it. No replay gate reads a spawned pilot's FOV.
 
@@ -423,12 +425,13 @@ fn make_cmd(time: Res<Time<Real>>, script: Option<Res<ScriptFrametime>>, paused:
 
 `Look { yaw, pitch, sens }` with `apply(delta)`, `angles() -> V3` and `reset(yaw)`.
 
-The convention is Source's (likely), until M1 recovers R5's:
+The convention is Source's, and M1 confirmed R5 keeps it (`0x706560`, `0x7067d0`, `0x702090`; Q3):
 
 - Degrees per count = 0.022 × `mouse_sensitivity`, retail default 5.
 - `yaw -= k·dx` and `pitch += k·dy`, where dx and dy are raw counts from `AccumulatedMouseMotion`.
-- Clamp pitch to ±89 in the accumulator. `setup_move` clamps only its own copy, so motion past the clamp would otherwise be lost.
-- Wrap yaw to (-180, 180] every frame. Recordings stay in that range, and f32 range reduction degrades for huge yaw.
+- Clamp pitch to ±89 in the accumulator, as the game clamps its stored view angles to the pilot's `pitchMaxUp`/`pitchMaxDown` (89, 89). `setup_move` clamps only its own copy, so motion past the clamp would otherwise be lost.
+- Wrap yaw to (-180, 180] every frame (ours; the game's mouse code does not wrap). Recordings stay in that range, and f32 range reduction degrades for huge yaw.
+- The game also scales sensitivity while zoomed and lets mouse motion absorb weapon punch (`ucmd+0x18`). Neither applies to the shell: no zoom, and no field for it in `UserCmd`.
 
 Never use `CursorMoved`. `MouseMotion` is winit's raw `DeviceEvent::MouseMotion` (verified).
 
@@ -658,7 +661,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | | Delivers | Where | Status |
 |---|---|---|---|
 | M0 | Plan in the repo, pointers, CLAUDE.md non-goals | cloud | done |
-| M1 | Client input path recovered from the oracle | cloud | not started |
+| M1 | Client input path recovered from the oracle | cloud | done: Q1, Q3 settled; Q4 fallback (CL_Move is detoured into the SDK); Q2 not reached; clock rule recovered as a bonus |
 | M2 | lurch API for a shell (section 3) | cloud | not started |
 | M3 | `game/` scaffold, environment, CLAUDE.md rules | cloud (+ workstation smoke) | not started |
 | M4 | Input to commands (`CmdPlugin`) | cloud | not started |
@@ -1048,9 +1051,13 @@ Guest vCPUs own host cores 0-11, so builds and the game stay on cores 12-17. The
 Each question names the step that settles it, and the answer is written under it.
 
 - **Q1. KeyState fractions, bit order (unverified).** The table for press, hold, tap, re-press and release, and whether the command's bits are built before KeyState clears the impulses. The old evidence for "tap moves 0, press moves 1" is an artefact of `capture/drive.cpp` stamping 0x1 and 0x4. *Settle:* M1 task 1 (decompile), then the M10 `realkeys` recording.
+  - **Settled (rva 0x702350, 0x705500, 0x703a70).** Source's table exactly: held 1, press 0.5, tap 0.25, re-press 0.75, release 0. The bit is set when the key is down or was pressed since the last command (R5's press latch), so a tap sets it for one command. Still open: ExtraMouseSample (`0x702990`) would consume a tap if the SDK's frame loop ran it between commands; the M10 `realkeys` recording confirms.
 - **Q2. FOV definition (likely).** That `view_fov` is a horizontal FOV at 4:3, widened Hor+, is a Source convention. *Settle:* M1 task 5 if time allows, M10's screenshot comparison, and later the view-setup hook (roadmap item 3).
+  - **Fallback.** M1 did not reach the projection (the two 4/3 constants found belong to a loading screen and an aspect-ratio picker). The shell keeps Source's 4:3 Hor+.
 - **Q3. Mouse scale (likely).** 0.022°/count × sensitivity is Source's convention, and the oracle has no `m_yaw` ConVar. *Settle:* M1 task 4, then M10's 360 comparison.
+  - **Settled (rva 0x706560, 0x7067d0, 0x702090).** 0.022°/count × `mouse_sensitivity` from raw counts, yaw minus dx, pitch plus dy (`m_invert_pitch` flips), pitch clamped to ±89, no acceleration (`m_acceleration` 0). Zoom scaling applies only while aiming. A 360 on the workstation still confirms that winit's raw counts equal the game's.
 - **Q4. Frametime clamp (unverified in the oracle).** `[0.002857, 0.1]` are retail ConVars that the oracle image lacks. The recorded minimum is 0.0028575. Until settled, the clamp lives in the game crate. *Settle:* M1 tasks 2 and 3.
+  - **Fallback.** RunCommand (`0x718460`) has no clamp and no sign check. The command's frametime is CL_Move's (`0x5ccde0` writes it), and CL_Move (`0x2c1a70`) is detoured into R5Reloaded's SDK, outside the image; the image's own body (0.1 cap, no command under 5 ms) contradicts the recordings, so it is not what runs. The clamp stays in the game crate at the retail values, which bound every recorded frametime (0.002857 to 0.0675).
 - **Q5. Apex default binds (unverified).** *Settle:* read R5Reloaded's default bind config in its `cfg/` on the workstation (M10).
 - **Q6. Raw motion at the window edge on X11 (likely).** X11 falls back to Confined. *Settle:* M10 checklist.
 - **Q7. Workstation GPU and present mode.** Whether Wayland locks the fps to the refresh rate. *Settle:* M10 checklist.

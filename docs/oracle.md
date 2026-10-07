@@ -212,6 +212,94 @@ plane dist `+0x2c`, fraction `+0x30`, allsolid `+0x38`, startsolid `+0x39`, a st
 `jump_keyboardgrace_max 0.7`, `skip_time 1`, `skip_jump_height_speed 450`, `skip_jump_height_fraction 1`,
 `skip_speed_retain −1`, `skip_speed_reduce 100`, `slide_step_velocity_reduction 10`.
 
+## Client input
+
+How a frame's input becomes a usercmd, for the game shell (`docs/game-shell-plan.md`).
+Read from the image by xref scan and decompile; nothing here is checked against a recording
+except the clock rule at the end.
+
+**Key buttons.** Each `+name`/`-name` ConCommand inlines Source's `KeyDown`/`KeyUp` on a
+kbutton: two key-code slots `down[2]` at `+0`, `state` at `+8`, and a press latch byte at
+`+0xc` that Source does not have. `in_forward` is `0xd4151a8` (`+forward` `0x6fecd0`,
+`-forward` `0x6fed50`); the others are listed in `capture/drive.cpp`.
+
+- Press: a key already in a slot is a repeat and ignored; otherwise it takes the first free
+  slot (a third key is ignored). If the button was not already down, `state |= 3` and the
+  latch is set.
+- Release: the key leaves its slot; once neither slot holds a key and the button was down,
+  `state = (state & ~1) | 4`. A `-name` with no key code clears both slots and sets
+  `state = 4`.
+
+**KeyState**, inlined for forward, back, moveright and moveleft in ComputeMove (`0x702350`):
+with impulse-down (`state & 2`) it returns `0.25·impulseUp + 0.5·down`; otherwise 1 if down
+without impulse-up, else 0. Then `state &= 1`. This is Source's table exactly:
+
+| state | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| value | 0 | 1 | 0 | 0.5 | 0 | 0 | 0.25 | 0.75 |
+
+**Move values.** `forward += KeyState(forward) − KeyState(back)` and
+`side += KeyState(moveright) − KeyState(moveleft)`, with no speed ConVar, no IN_WALK scale and
+no normalisation (SetupMove clamps each to [−1, 1] and limits the wish to unit length). All
+four KeyStates run, clearing impulses, before a gate (`CInput+8`, input enabled) decides
+whether they are added. With `+strafe` (`0xd4150d8`) held, `+left`/`+right` add to side.
+Up uses `cl_upspeed`; no recording has an up value.
+
+**Button bits.** GetButtonBits (`0x705500`, CInput slot `+0x18`) sets a button's bit when
+`state & 3` is non-zero **or** its press latch is set. With reset it clears impulse-down
+(and down too for buttons in the clear-input mask) and the latch. CreateMove runs
+ComputeMove first and GetButtonBits(reset) after, so a command's bit is "down, or pressed
+since the last command": a scroll-wheel tap (press and release before the command) sets its
+bit for exactly one command and moves 0.25. That is `down | impulse_down` read before
+KeyState's clear.
+
+**CreateMove** (`0x703a70`, CInput slot `+0x20`; CInput at `0x22d0710`, vtable `0x13ffce8`):
+
+- The command slot is `sequence % 750`, reset by `0x8a6910` (frametime 0).
+- Angles: the engine's view angles (engine slot `+0x1d0`) after keyboard turning
+  (`0x702180`), ComputeMove, and the mouse (`0x7027d0` → `0x706a00`).
+- Buttons: GetButtonBits(reset) once per command. When IN_SPEED (`0x8000`) or IN_DODGE
+  (`0x1000_0000`) is set and was not in the previous command's buttons (`CInput+0xb4`), the
+  command also gets `0x2000_0000`; while zoomed (`+0x1881`) that edge clears IN_SPEED.
+- Gamepad only: while sprinting with a controller active (`0x6fd070`), forward repeats the
+  previous command's.
+- The seed is set last (`0x8ac6d0`, see `docs/camera.md`).
+
+**Frametime.** ClientModeShared::CreateMove (`0x5ccde0`) writes `ucmd+0x270` = the frametime
+CL_Move passes, when `cl_move_use_dt` (live 1). CL_Move (`0x2c1a70`) is detoured in this
+image: its first instruction jumps out of the image into R5Reloaded's SDK, so the frame loop
+that runs is not in the dump. The image's own body (dead here) clamps to 0.1 × `host_timescale`
+and makes no command below 0.005 s, which the recordings contradict (most of their frametimes
+are 2.86 to 5 ms). Recorded frametimes run from 0.002857 to 0.0675. RunCommand (`0x718460`)
+copies `ucmd+0x270` into `gpGlobals->frametime` with no clamp and no sign check
+(`sv_clampPlayerFrameTime` live 0).
+
+**ExtraMouseSample** (`0x702990`, CInput slot `+0x28`) also runs ComputeMove and
+GetButtonBits(reset), so a frame that runs it between two commands would consume a tap. No
+direct caller is in the image (its client DLL slot is `+0xe8`); with one command per frame
+it does not run between them. Unverified until a recording with real key presses.
+
+**Mouse** (`0x706a00`): raw counts from the input system (slot `+0x150` of `0xd413e30`),
+as integers. Scale (`0x706560`) = `mouse_sensitivity` (live 2.25; retail default 5), times,
+only while zoomed, a per-scope scalar and tan(fov/2)/tan(base fov/2) (`0x5d4300`); times
+`m_acceleration`'s power curve when set (live 0). Then (`0x7067d0`): yaw −= 0.022 × scale × dx,
+pitch += 0.022 × scale × dy (−0.022 with `m_invert_pitch`), with `+strafe` or `lookstrafe`
+turning them into side and forward instead (`m_side`, `m_forward`). Pitch is clamped
+(`0x702090`) to the class's `pitchMaxUp`/`pitchMaxDown` (settings `0x814`/`0x818`, 89 and 89
+for the pilot) in the stored view angles. Yaw is not wrapped there. For the local player,
+mouse motion against the weapon punch (`+0x20bc`) absorbs it (`0x806650`) and the absorbed
+part goes in `ucmd+0x18`; with no weapon punch the motion passes through unchanged.
+
+**Clock** (end of RunCommand): the player keeps a tick count `+0x1910` and a remainder
+`+0x1914`. Each command adds its frametime to the remainder, moves whole
+`interval_per_tick` (0.05) into the count (remainder floored at 0), then quantises the
+remainder to 0.05/1023 s with `cvtss2si` (round half to even); curtime `+0x1d18` is
+count × interval + remainder, all in f32. This reproduces every one of the 62,638
+consecutive recorded calls bit for bit, both the player's fields and gpGlobals curtime.
+The game shell's `Clock` does not use it yet.
+
+Not recovered: where `view_fov` becomes a frustum (whether it is 4:3 Hor+); the SDK's CL_Move.
+
 ## Things that only showed up in replay
 
 - PlayerMove picks the stance block once on entry; unducking mid-call keeps the ducked
