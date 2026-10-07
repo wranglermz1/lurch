@@ -70,6 +70,7 @@ pub struct Settings {
     pub anti_multi_jump_time_max: f32,
     pub anti_multi_jump_height_frac: f32,
     pub jump_grace_period: f32,
+    pub skip_replenish: bool,
     pub lurch: jump::Lurch,
     pub skip: jump::Skip,
     pub wallrun: bool,
@@ -249,6 +250,13 @@ impl Move<'_> {
             self.p.left_ground_time = self.g.curtime;
             self.p.left_ground_up = self.p.up;
         }
+    }
+
+    /// C_GameMovement::ProcessMovement: the whole movement call for one command.
+    pub fn process_movement(&mut self, optimized: bool) {
+        self.mv.maxspeed = self.max_speed();
+        self.player_move(optimized);
+        self.mv.oldbuttons = self.mv.buttons;
     }
 
     pub fn player_move(&mut self, optimized: bool) {

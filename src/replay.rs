@@ -12,6 +12,8 @@ pub struct Step {
     pub got: Outcome,
     pub missing: usize,
     pub unused: usize,
+    /// Modelled fields beyond the outcome that disagree with the oracle.
+    pub diffs: Vec<String>,
 }
 
 impl Step {
@@ -24,7 +26,11 @@ impl Step {
     }
 
     pub fn ok(&self) -> bool {
-        self.origin_err() <= TOL && self.velocity_err() <= TOL && self.got.on_ground == self.want.on_ground && self.missing == 0
+        self.origin_err() <= TOL
+            && self.velocity_err() <= TOL
+            && self.got.on_ground == self.want.on_ground
+            && self.missing == 0
+            && self.diffs.is_empty()
     }
 }
 
@@ -44,10 +50,12 @@ pub fn step(rec: &Record) -> Step {
     {
         let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr: &mut tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
         m.pre_think();
-        m.player_move(oracle::SV_OPTIMIZEDMOVEMENT);
+        m.process_movement(oracle::SV_OPTIMIZEDMOVEMENT);
     }
+    let mut diffs = oracle::diff_player(&p, &oracle::player(&rec.player_out));
+    diffs.extend(oracle::diff_move(&mv, &oracle::move_data(&rec.mv_out, rec.seq)));
     let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };
-    Step { seq: rec.seq, want, got, missing: tr.missing.len(), unused: tr.unused() }
+    Step { seq: rec.seq, want, got, missing: tr.missing.len(), unused: tr.unused(), diffs }
 }
 
 pub fn file(path: &str) -> std::io::Result<Vec<Step>> {

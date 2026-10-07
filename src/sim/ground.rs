@@ -55,6 +55,10 @@ impl Move<'_> {
         }
         self.p.ground = new;
         if let Some(t) = t.filter(|_| new.is_some()) {
+            let since = self.g.curtime - self.p.land_time;
+            if (self.s.skip_replenish || self.s.skip.time < since) && (is_world_up(self.p.up) || self.s.wallrun) {
+                self.p.jumped_since_ground = false;
+            }
             if self.p.movetype != MOVETYPE_LADDER {
                 self.mv.velocity = reject(self.mv.velocity, self.p.up);
             }

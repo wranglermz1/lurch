@@ -82,6 +82,7 @@ pub fn settings(blob: &[u8]) -> Settings {
         anti_multi_jump_time_max: f32_at(blob, 0x850),
         anti_multi_jump_height_frac: f32_at(blob, 0x848),
         jump_grace_period: JUMP_GRACEPERIOD,
+        skip_replenish: true,
         lurch: Lurch { period_min: 0.2, period_max: 0.5, strength: 0.7, max: 0.7 },
         skip: Skip { time: SKIP_TIME, height_speed: 450.0, height_fraction: 1.0, speed_retain: -1.0, speed_reduce: 100.0 },
         wallrun: byte(blob, 0xe0b) != 0,
@@ -264,4 +265,71 @@ impl Tracer for LogTracer<'_> {
         self.missing.push(*q);
         Trace { start: q.start, endpos: q.end, fraction: 1.0, ..Default::default() }
     }
+}
+
+/// Every modelled player field that differs between the simulation and the oracle's result.
+pub fn diff_player(ours: &Player, theirs: &Player) -> Vec<String> {
+    let mut out = Vec::new();
+    macro_rules! field {
+        ($f:ident) => {
+            let (a, b) = (format!("{:?}", ours.$f), format!("{:?}", theirs.$f));
+            if a != b {
+                out.push(format!("{} {} want {}", stringify!($f), a, b));
+            }
+        };
+    }
+    field!(flags);
+    field!(movetype);
+    field!(up);
+    field!(surface_friction);
+    field!(sprinting);
+    field!(sprint_intent);
+    field!(sprint_until);
+    field!(sprint_started_fresh);
+    field!(traversal_state);
+    field!(duck_timer);
+    field!(ducked_in_air);
+    field!(jump_suppressed);
+    field!(duck_held);
+    field!(duck_state);
+    field!(left_ground_time);
+    field!(left_ground_up);
+    field!(jumped_since_ground);
+    field!(jumped_recently);
+    field!(last_jump_time);
+    field!(slide_boost_pending);
+    field!(slide_start);
+    field!(slide_boost);
+    field!(stamina);
+    field!(sliding);
+    field!(push);
+    field!(last_plane);
+    field!(last_ground_time);
+    field!(land_time);
+    field!(land_height);
+    field!(ground_normal);
+    field!(ground_plane);
+    field!(ledge_origin);
+    field!(step_height);
+    if ours.ground.is_some() != theirs.ground.is_some() {
+        out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
+    }
+    out
+}
+
+pub fn diff_move(ours: &MoveData, theirs: &MoveData) -> Vec<String> {
+    let mut out = Vec::new();
+    macro_rules! field {
+        ($f:ident) => {
+            let (a, b) = (format!("{:?}", ours.$f), format!("{:?}", theirs.$f));
+            if a != b {
+                out.push(format!("mv.{} {} want {}", stringify!($f), a, b));
+            }
+        };
+    }
+    field!(origin);
+    field!(velocity);
+    field!(oldbuttons);
+    field!(maxspeed);
+    out
 }

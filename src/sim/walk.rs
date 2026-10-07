@@ -12,7 +12,8 @@ const BACKUP_DECEL: f32 = 0.6;
 
 impl Move<'_> {
     pub fn max_speed(&self) -> f32 {
-        let st = self.stance();
+        let i = if self.p.stance_gate < 1 { 2 } else { ((self.p.flags >> 1) & 1) as usize };
+        let st = &self.s.stances[i];
         let speed = if self.p.sprinting { st.sprint_speed } else { st.speed };
         self.p.speed_scale * speed * 1.0
     }
@@ -237,9 +238,10 @@ impl Move<'_> {
         self.p.last_plane = ZERO;
         let t = self.trace(origin, dest);
         self.p.move_trace = super::MoveTraceInfo { endpos: t.endpos, normal: t.normal, kind: 1 };
+        let t = if t.fraction == 1.0 { t } else { pin_shallow(t, plane) };
         if t.fraction == 1.0 {
             self.mv.origin = t.endpos;
-        } else if !self.along_slope(pin_shallow(t, plane), true, Some(dest), false) {
+        } else if !self.along_slope(t, true, Some(dest), false) {
             let o = self.mv.origin;
             if -0.03125 < dot(sub(o, t.endpos), t.normal) {
                 self.p.last_plane = t.normal;
