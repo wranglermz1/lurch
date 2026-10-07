@@ -145,6 +145,8 @@ pub fn player(p: &[u8]) -> Player {
         stamina: f32_at(p, 0x1a5c),
         prev_velocity: vec3_at(p, 0x41c),
         eye_angles: vec3_at(p, 0x1ebc),
+        view_angles: vec3_at(p, 0x2188),
+        precise_view: byte(p, 0x3a92) != 0 && byte(p, 0x3a93) != 0,
         sliding: byte(p, 0x2815) != 0,
         no_accel: byte(p, 0x2184) != 0 || byte(p, 0x2a7c) != 0,
         air_speed: f32_at(p, 0x3108),

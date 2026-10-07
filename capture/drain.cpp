@@ -4,16 +4,17 @@
 //
 // File: header, then one record per ProcessMovement call. Snapshots are stored as runs of
 // bytes that differ from a reference, so a record costs what actually changed:
-//   header  "lurchtr3" u32 player mv settings globals trace_ray trace_result, char map[32]
+//   header  "lurchtr4" u32 player mv settings globals trace_ray trace_result, char map[32]
 //   record  u32 seq ntraces traces_lost
 //           globals    vs previous record's globals
 //           settings   vs previous record's settings
-//           mv_in      vs previous record's mv_in
+//           mv_in      vs previous record's mv_out (one call starts where the last ended)
 //           mv_out     vs this record's mv_in
-//           player_in  vs previous record's player_in
+//           player_in  vs previous record's player_out
 //           player_out vs this record's player_in
-//           ntraces x { u32 slot, u32 mask, ray, result } raw (ring.h lurch_trace)
-//   runs    { u32 offset, u32 length, bytes } ... terminated by length 0
+//           ntraces x { u32 slot, u32 mask, ray runs, result runs } each vs the previous trace
+//   runs    { u16 offset, u16 length, bytes } ... terminated by length 0; differing bytes
+//           closer than 7 apart share a run (src/ltr.rs reads this, and writes it too)
 //
 // By default only the first execution of each seq is kept: prediction re-runs a command it
 // has already run, from corrected state.
@@ -63,20 +64,28 @@ uint64_t find_ring(const Process& game) {
 void put32(FILE* f, uint32_t v) { fwrite(&v, 4, 1, f); }
 
 void runs(FILE* f, const uint8_t* now, const uint8_t* ref, uint32_t n) {
+    const uint32_t merge_gap = 6;
+    static const uint8_t zeros[SNAP_PLAYER] = {};
+    if (!ref) ref = zeros;
     for (uint32_t i = 0; i < n;) {
-        if (ref && now[i] == ref[i]) {
+        if (now[i] == ref[i]) {
             i++;
             continue;
         }
-        uint32_t j = i;
-        while (j < n && !(ref && now[j] == ref[j])) j++;
-        put32(f, i);
-        put32(f, j - i);
-        fwrite(now + i, 1, j - i, f);
-        i = j;
+        uint32_t j = i + 1, same = 0;
+        while (j < n && j - i < 0xffff) {
+            same = now[j] == ref[j] ? same + 1 : 0;
+            j++;
+            if (same > merge_gap) break;
+        }
+        const uint32_t end = j - same;
+        const uint16_t hdr[2] = {(uint16_t)i, (uint16_t)(end - i)};
+        fwrite(hdr, 2, 2, f);
+        fwrite(now + i, 1, end - i, f);
+        i = end;
     }
-    put32(f, 0);
-    put32(f, 0);
+    const uint16_t done[2] = {0, 0};
+    fwrite(done, 2, 2, f);
 }
 
 }  // namespace
@@ -112,7 +121,7 @@ int main(int argc, char** argv) {
 
         FILE* f = fopen(out, "wb");
         if (!f) throw std::runtime_error(std::string("cannot write ") + out);
-        fwrite("lurchtr3", 1, 8, f);
+        fwrite("lurchtr4", 1, 8, f);
         for (uint32_t v : {SNAP_PLAYER, SNAP_MV, SNAP_SETTINGS, SNAP_GLOBALS, TRACE_RAY, TRACE_RESULT}) put32(f, v);
         char mapname[32] = {};
         strncpy(mapname, map, sizeof mapname - 1);
@@ -121,6 +130,8 @@ int main(int argc, char** argv) {
         auto r = std::make_unique<lurch_rec>();
         auto prev = std::make_unique<lurch_rec>();
         bool have_prev = false;
+        lurch_trace last_trace{};
+        bool have_trace = false;
         std::set<uint32_t> seen;
         size_t calls = 0, kept = 0, gaps = 0, lost = 0;
         uint32_t last_seq = 0;
@@ -155,11 +166,19 @@ int main(int argc, char** argv) {
                 put32(f, r->traces_lost);
                 runs(f, r->globals, p ? p->globals : nullptr, SNAP_GLOBALS);
                 runs(f, r->settings, p ? p->settings : nullptr, SNAP_SETTINGS);
-                runs(f, r->mv_in, p ? p->mv_in : nullptr, SNAP_MV);
+                runs(f, r->mv_in, p ? p->mv_out : nullptr, SNAP_MV);
                 runs(f, r->mv_out, r->mv_in, SNAP_MV);
-                runs(f, r->player_in, p ? p->player_in : nullptr, SNAP_PLAYER);
+                runs(f, r->player_in, p ? p->player_out : nullptr, SNAP_PLAYER);
                 runs(f, r->player_out, r->player_in, SNAP_PLAYER);
-                fwrite(r->traces, sizeof(lurch_trace), r->ntraces, f);
+                for (uint32_t k = 0; k < r->ntraces; k++) {
+                    const lurch_trace& t = r->traces[k];
+                    fwrite(&t.slot, 4, 1, f);
+                    fwrite(&t.mask, 4, 1, f);
+                    runs(f, t.ray, have_trace ? last_trace.ray : nullptr, TRACE_RAY);
+                    runs(f, t.result, have_trace ? last_trace.result : nullptr, TRACE_RESULT);
+                    last_trace = t;
+                    have_trace = true;
+                }
                 std::swap(r, prev);
                 have_prev = true;
                 kept++;

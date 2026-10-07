@@ -144,6 +144,9 @@ pub struct Player {
     pub stamina: f32,
     pub prev_velocity: V3,
     pub eye_angles: V3,
+    /// The command's own view angles, which some checks prefer over the networked eye angles.
+    pub view_angles: V3,
+    pub precise_view: bool,
     pub sliding: bool,
     pub no_accel: bool,
     pub air_speed: f32,

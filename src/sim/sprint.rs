@@ -46,7 +46,8 @@ impl Move<'_> {
         if self.landing_slowdown() < self.s.land_slowdown_no_sprint_frac {
             return false;
         }
-        let (fwd, _, _) = angle_vectors(p.eye_angles);
+        let facing = if p.precise_view { p.view_angles } else { p.eye_angles };
+        let (fwd, _, _) = angle_vectors(facing);
         let v = p.prev_velocity;
         v[1] * fwd[1] + v[0] * fwd[0] > 0.0
     }

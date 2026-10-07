@@ -1,10 +1,20 @@
-//! Every committed recording must replay through the simulation inside tolerance.
+//! Every recording must replay through the simulation exactly: the committed ones in traces/
+//! and any local ones (traces/local/, too large to commit, e.g. fuzz runs).
+
+fn recordings() -> Vec<std::path::PathBuf> {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/traces");
+    let mut out = Vec::new();
+    for dir in [root.to_string(), format!("{root}/local")] {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        out.extend(rd.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "ltr")));
+    }
+    out.sort();
+    out
+}
 
 #[test]
 fn recordings_replay_exactly() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/traces");
-    let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "ltr")).collect();
-    paths.sort();
+    let paths = recordings();
     assert!(!paths.is_empty(), "no recordings in traces/");
     let mut bad = Vec::new();
     for p in &paths {
@@ -19,13 +29,8 @@ fn recordings_replay_exactly() {
 
 #[test]
 fn recordings_hold_when_the_simulation_carries_its_own_state() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/traces");
     let mut bad = Vec::new();
-    for e in std::fs::read_dir(dir).unwrap() {
-        let p = e.unwrap().path();
-        if p.extension().is_none_or(|e| e != "ltr") {
-            continue;
-        }
+    for p in recordings() {
         let c = lurch::replay::chain(p.to_str().unwrap()).unwrap();
         if let Some((seq, why)) = c.resyncs.first() {
             bad.push(format!("{}: {} resyncs, first at seq {seq:x}: {why}", p.display(), c.resyncs.len()));
