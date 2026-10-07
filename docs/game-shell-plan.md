@@ -663,7 +663,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | M0 | Plan in the repo, pointers, CLAUDE.md non-goals | cloud | done |
 | M1 | Client input path recovered from the oracle | cloud | done: Q1, Q3 settled; Q4 fallback (CL_Move is detoured into the SDK); Q2 not reached; clock rule recovered as a bonus |
 | M2 | lurch API for a shell (section 3) | cloud | done: `cargo test --test frame` 11 tests, finished in 0.02 s; root suite green, `step` unchanged; values from M1, not provisional |
-| M3 | `game/` scaffold, environment, CLAUDE.md rules | cloud (+ workstation smoke) | not started |
+| M3 | `game/` scaffold, environment, CLAUDE.md rules | cloud (+ workstation smoke) | done in the cloud: cold build 11m36s (sharing CPUs), smoke test passes, xvfb `--shot 30` is exactly sky (140,178,217) everywhere, fresh-clone root `cargo test --offline` passes. Left: the workstation smoke (`vulkaninfo`, one `cargo run`) |
 | M4 | Input to commands (`CmdPlugin`) | cloud | not started |
 | M5 | Simulation loop (`SimPlugin`) | cloud | not started |
 | M6 | Scripts and the headless binary | cloud | not started |

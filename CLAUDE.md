@@ -18,8 +18,9 @@ here; the source files carry that.
 No Code Comments: default to zero comments. Only write a comment for a non-obvious "why".
 If a comment is needed to explain what a function does, the naming is wrong.
 
-Nothing is installed yet. Do not add a toolchain, a crate, or a dependency without being
-asked for it.
+The lurch crate has no dependencies and gets none. Bevy 0.19.1, pinned exactly, is approved
+for the game crate in `game/` only, with the features its Cargo.toml lists. Ask before adding
+any other crate, feature or toolchain.
 
 ## Non-goals
 
@@ -85,11 +86,13 @@ pattern. Retail strips it.
     tools/annotate.py name ConVars, settings and constants in dec.sh output
     tools/record.sh   record one scripted scenario (drive + drain) into traces/
     tools/fuzz.py     seeded random drive script, for record.sh
+    tools/bevy-deps.sh   system packages for building game/ in a cloud session
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
     docs/camera.md    the camera's answer to movement, recovered; what is ported and gated
     docs/game-shell-plan.md  the Bevy game shell plan (roadmap item 2) and its status
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
     src/              the lurch crate: trace parser, movement step, replay, test map
+    game/             the Bevy game shell; its own workspace, root cargo test never builds it
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
     traces/local/     recordings kept off git (none now); gated when present
     traces/pending/   recordings of mechanics not ported yet; `cargo test -- --ignored`
@@ -153,6 +156,8 @@ Ghidra 12.x at `/opt/ghidra` (or `GHIDRA=`) and a JDK 21+, or with `tools/decomp
 which builds the decompiler from a Ghidra clone where release downloads are blocked.
 It cannot record or load map meshes (`maps/` is local). Work that needs those goes back to the
 workstation; say so rather than guess at what the game does.
+A cloud session can build `game/` after `tools/bevy-deps.sh`, run its headless tests and
+take xvfb screenshots on lavapipe. How the shell plays is judged on the workstation.
 
 `cargo test` must stay green on a fresh clone. A new recording that fails goes in
 `traces/pending/` until the mechanic is ported, then moves up to `traces/`.
@@ -173,8 +178,8 @@ fixed movement tick (see `docs/oracle.md`). Deterministic, f32 to match the game
 per-command button edges, not polled held state: a scroll-wheel tap strafe is a press and
 release inside one command, which is what caps the tap rate.
 
-Phase 1 is headless. No renderer, no engine, no window. The first deliverable is a
-simulation that eats a usercmd stream and emits a per-tick trajectory to diff.
+The lurch crate stays headless: no renderer, no engine, no window. The game shell in `game/`
+drives it, one command per rendered frame, and makes no fidelity claim of its own.
 
 ## Legal
 
