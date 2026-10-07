@@ -228,3 +228,42 @@ fn pose_before_the_first_command() {
     assert_eq!(app.world().resource::<Pose>().0.fov, 70.0);
     assert_eq!(sim(&app).view_now, Clock::START as f32);
 }
+
+#[test]
+fn a_respawn_resets_the_look_to_its_yaw() {
+    let mut app = sim_app(Config::default());
+    motion(&mut app, 300.0, 200.0);
+    app.update();
+    app.update();
+    app.world_mut().write_message(Respawn::At { origin: [0.0, 0.0, 0.0], yaw: 90.0 });
+    app.update();
+    let c = app.world().resource::<CmdLog>().0.last().unwrap().1;
+    assert_eq!(c.angles, [0.0, 90.0, 0.0]);
+    assert_eq!(sim(&app).pilot.player.view_angles, [0.0, 90.0, 0.0]);
+}
+
+#[test]
+fn named_respawns_select_a_spot_and_unknown_names_are_ignored() {
+    let mut app = sim_app(Config::default());
+    app.update();
+    app.world_mut().write_message(Respawn::Named("ramp 45".into()));
+    app.update();
+    assert_eq!(app.world().resource::<Spots>().spot().name, "ramp 45");
+    let before = format!("{:?}", sim(&app).pilot.origin);
+    app.world_mut().write_message(Respawn::Named("nowhere".into()));
+    app.update();
+    assert_eq!(app.world().resource::<Spots>().spot().name, "ramp 45");
+    assert_eq!(format!("{:?}", sim(&app).pilot.origin), before);
+}
+
+#[test]
+fn without_view_drops_only_the_view_fields() {
+    let a = Pilot::new([0.0; 3]);
+    let mut b = a.clone();
+    b.player.slide_tilt = [0.3, -0.2, 0.0];
+    (b.player.fov_start, b.player.fov_duration, b.player.fov_from, b.player.fov_to) = (101.0, 0.25, 1.0, 1.1);
+    assert_ne!(format!("{a:?}"), format!("{b:?}"));
+    assert_eq!(format!("{:?}", without_view(&a)), format!("{:?}", without_view(&b)));
+    b.player.sprint_tilt = 0.5;
+    assert_ne!(format!("{:?}", without_view(&a)), format!("{:?}", without_view(&b)));
+}

@@ -341,3 +341,14 @@ fn frametime_clamp_is_never_zero_or_nan() {
     assert_eq!(clamp_frametime(5.0), MAX);
     assert_eq!(clamp_frametime(0.004), 0.004);
 }
+
+#[test]
+fn a_wheel_bound_to_none_does_nothing() {
+    let mut a = app(Config { wheel_down: None, ..Default::default() });
+    step(&mut a);
+    wheel(&mut a, MouseScrollUnit::Line, -1.0);
+    let c = step(&mut a).unwrap();
+    assert_eq!((c.buttons, c.forward), (0, 0.0));
+    wheel(&mut a, MouseScrollUnit::Line, 1.0);
+    assert_ne!(step(&mut a).unwrap().buttons & IN_JUMP, 0);
+}

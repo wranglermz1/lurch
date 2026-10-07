@@ -197,3 +197,9 @@ fn clock_starts_at_100_and_round_trips() {
     }
     assert_eq!(Clock::from_secs(clock.secs()), clock);
 }
+
+#[test]
+fn key_state_is_the_recovered_table() {
+    let table: Vec<f32> = (0..8).map(key_state).collect();
+    assert_eq!(table, [0.0, 1.0, 0.0, 0.5, 0.0, 0.0, 0.25, 0.75]);
+}

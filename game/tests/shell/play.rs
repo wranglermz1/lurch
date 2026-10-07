@@ -162,3 +162,22 @@ fn hud_text_reports_speed_state_and_pause() {
     assert!(!playing.contains("click to play"));
     assert!(text(true).ends_with("\nclick to play"));
 }
+
+#[test]
+fn the_binary_runs_a_script_headless_and_refuses_bad_input() {
+    use std::process::Command;
+    let exe = env!("CARGO_BIN_EXE_lurch-game");
+    let script = format!("{}/scripts/tour.txt", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(exe).args(["--headless", "--script", &script]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let finals: Vec<&str> = stdout.lines().filter(|l| l.starts_with("final ")).collect();
+    let parsed = lurch_game::script::parse(&std::fs::read_to_string(&script).unwrap()).unwrap();
+    let app = super::script::run(&parsed, SCRIPT_FRAMETIME, |_, _| {});
+    let inside = lurch_game::script::final_line(app.world().resource::<lurch_game::sim::Sim>(), app.world().resource::<lurch_game::cmd::CmdBuilder>());
+    assert_eq!(finals, [inside.as_str()]);
+    for bad in [&["--bogus"][..], &["--spot", "nowhere"], &["--headless"], &["--fps-max", "1000"]] {
+        let out = Command::new(exe).args(bad).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{bad:?}");
+    }
+}
