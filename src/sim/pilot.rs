@@ -181,6 +181,7 @@ pub fn settings() -> Settings {
         sprint_start_delay: 0.2,
         sprint_end_duration: 0.15,
         sprint_view_offset: -6.0,
+        fov: 70.0,
         wall_start_kick: view::Kick { base: [-1.5, 0.0, 5.0], random: [0.5, 0.5, 0.5] },
     }
 }

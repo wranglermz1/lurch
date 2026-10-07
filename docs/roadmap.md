@@ -43,8 +43,7 @@ punch, FOV, view matrix), and a replay gate compares ours to it as the movement 
 Done: the state the movement call keeps (sprint tilt, view punch springs and the jump,
 landing and wall kicks) and the view setup's frame update (slide tilt, slide FOV ease) are
 ported and exact on the recordings, and so are the sprint transition times behind the
-sprint eye drop; roll and eye drop are composed from them. Next: the script-driven FOV
-fractions and sprint shake; on the workstation, record the command's random seed so kicks
+sprint eye drop; roll, FOV and eye drop are composed from them. Next: sprint shake; on the workstation, record the command's random seed so kicks
 can be drawn in replay, and hook the view setup's output to check what is composed.
 
 ## 4. Viewmodel

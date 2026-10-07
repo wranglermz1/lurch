@@ -366,6 +366,34 @@ impl Player {
         tilt_toward(&mut self.slide_tilt, on, velocity, speeds, (v.slide_tilt_increase, v.slide_tilt_decrease), frametime);
     }
 
+    /// The view's FOV in degrees for the player's `cl_fovScale` option: the class `fov`
+    /// scaled and rounded, capped at 115, then eased by the FOV scale (a slide's 1.1).
+    /// Ability effects that widen it (stim, phase, hunt mode) are left out.
+    pub fn view_fov(&self, s: &Settings, cl_fov_scale: f32, curtime: f32) -> f32 {
+        let mut k = cl_fov_scale;
+        if k <= 1.0 {
+            k = 1.0;
+        }
+        if 1.7 <= k {
+            k = 1.7;
+        }
+        let mut base = (k * s.fov + 0.5).floor() as i32 as f32;
+        if 115.0 <= base {
+            base = 115.0;
+        }
+        if base <= 0.0 {
+            base = 70.0;
+        }
+        let mut f = self.fov_scale(curtime) * base;
+        if f <= 1.0 {
+            f = 1.0;
+        }
+        if 179.0 <= f {
+            f = 179.0;
+        }
+        f
+    }
+
     /// The roll the view adds, in degrees: sprint tilt, and the slide's tilt when looking off
     /// the slide's line.
     pub fn view_roll(&self, s: &Settings, angles: V3) -> f32 {

@@ -55,12 +55,14 @@ Roll (`0x85ffc0`) adds, for plain movement:
   second (`0x85fb70`). No tilt looking along the slide, full tilt looking 90° off it;
 - `sv_rollangle` is 0, so no strafe roll. Dodge, wall-run and zipline rolls do not apply.
 
-FOV (`0x8610c0`, `0x860f40`, not ported): `cl_fovScale` clamped to [1, 1.7] times the `fov` setting (70),
-rounded, plus headroom (up to +35, capped at 115) times script-driven fractions read through
-runtime handles (`0x285a5058`, `0x2859d658`, `0x285a0094`) that are not resolved yet. Sliding
-(`+0x2815` with `+0x2816`) eases the FOV scale to `slideFOVScale` (1.1) over
-`slideFOVLerpInTime` (0.25 s), and back to 1 over `slideFOVLerpOutTime` (0.25 s), linearly
-in game time (`SetFOVScale`, `0x683e20` / `0x683d90`).
+FOV (`0x8610c0`, `0x860f40`, ported as `Player::view_fov`): `cl_fovScale` clamped to
+[1, 1.7] times the `fov` setting (70), rounded, capped at 115, then times the FOV scale and
+clamped to [1, 179] (`0x67eff0`). The FOV scale is what sliding sets: while sliding
+(`+0x2815` with `+0x2816`) it eases to `slideFOVScale` (1.1) over `slideFOVLerpInTime`
+(0.25 s), and back to 1 over `slideFOVLerpOutTime` (0.25 s), linearly in game time
+(`SetFOVScale`, `0x683e20` / `0x683d90`). Abilities widen the base through status effects
+(`stim_visual_effect`, `timeshift_visual_effect`, `hunt_mode`; handles `0x285a5058`,
+`0x2859d658`, `0x285a0094`), which are out of scope. Weapon zoom passes through `0x857900`.
 
 Sprint eye drop (`0x8585d0`, `0x865240`, ported as `Player::sprint_eye_drop`): the eye
 drops by `sprintViewOffset` (−6) × sin(f · π/2), f the sprint fraction. It ramps in over

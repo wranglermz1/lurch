@@ -194,6 +194,7 @@ pub fn settings(blob: &[u8]) -> Settings {
         sprint_start_delay: f32_at(blob, 0xd70),
         sprint_end_duration: f32_at(blob, 0xd7c),
         sprint_view_offset: f32_at(blob, 0xd6c),
+        fov: f32_at(blob, 0x7ac),
         wall_start_kick: Kick { base: [f32_at(blob, 0x9ec), f32_at(blob, 0x9f4), f32_at(blob, 0x9fc)], random: [f32_at(blob, 0x9f0), f32_at(blob, 0x9f8), f32_at(blob, 0xa00)] },
     }
 }

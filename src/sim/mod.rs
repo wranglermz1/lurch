@@ -97,6 +97,7 @@ pub struct Settings {
     pub sprint_start_delay: f32,
     pub sprint_end_duration: f32,
     pub sprint_view_offset: f32,
+    pub fov: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
