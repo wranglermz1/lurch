@@ -1,8 +1,11 @@
 use bevy::input::InputPlugin;
 use bevy::prelude::*;
+use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::render::RenderPlugin;
+use bevy::window::PresentMode;
+use bevy::winit::WinitSettings;
 use lurch_game::script::ScriptPlugin;
-use lurch_game::{args, CmdPlugin, HudPlugin, LimiterPlugin, SimPlugin, ViewPlugin};
+use lurch_game::{args, CmdPlugin, HudPlugin, LimiterPlugin, Paused, SimPlugin, ViewPlugin};
 
 fn main() {
     let cfg = args::parse(std::env::args().skip(1)).unwrap_or_else(|e| {
@@ -20,16 +23,29 @@ fn main() {
         if cfg.shot.is_some() {
             eprintln!("--shot is ignored with --headless");
         }
-        app.add_plugins((MinimalPlugins, InputPlugin, CmdPlugin, SimPlugin));
+        app.add_plugins((MinimalPlugins, InputPlugin, CmdPlugin, SimPlugin, LimiterPlugin));
     } else {
-        let window = Window { title: "lurch".into(), ..default() };
+        let window = Window {
+            title: "lurch".into(),
+            resolution: cfg.size.into(),
+            present_mode: if cfg.vsync { PresentMode::Fifo } else { PresentMode::AutoNoVsync },
+            desired_maximum_frame_latency: cfg.frame_latency,
+            ..default()
+        };
         let sync = cfg.shot.is_some() || cfg.scripted;
-        app.add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin { primary_window: Some(window), ..default() })
-                .set(RenderPlugin { synchronous_pipeline_compilation: sync, ..default() }),
-        )
-        .add_plugins((CmdPlugin, SimPlugin, ViewPlugin::default(), HudPlugin, LimiterPlugin));
+        let mut plugins = DefaultPlugins
+            .build()
+            .set(WindowPlugin { primary_window: Some(window), ..default() })
+            .set(RenderPlugin { synchronous_pipeline_compilation: sync, ..default() });
+        if !cfg.pipelined {
+            plugins = plugins.disable::<PipelinedRenderingPlugin>();
+        }
+        if !cfg.scripted {
+            app.insert_resource(Paused(true));
+        }
+        app.insert_resource(WinitSettings::continuous())
+            .add_plugins(plugins)
+            .add_plugins((CmdPlugin, SimPlugin, ViewPlugin::default(), HudPlugin, LimiterPlugin));
     }
     if let Some(script) = cfg.script.clone() {
         app.add_plugins(ScriptPlugin(script));

@@ -645,7 +645,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
   - `LimiterPlugin` puts it in the render sub-app when one exists and pipelined rendering is off: `app.sub_app_mut(RenderApp).insert_resource(..).add_systems(Render, limit.in_set(RenderSystems::Cleanup))`, with types from `bevy::render::{Render, RenderApp, RenderSystems}`. That runs after present and before `send_time`, so `Time<Real>` includes the sleep and no sleep sits between input and present.
   - The probe measured a 100 ms cap as dt 100.0 ± 0.3 ms under xvfb (verified).
   - Otherwise (headless, or `--pipelined`) it runs in `Last`. It is off in script mode.
-- **Startup log.** Log the requested present mode and the adapter name (`RenderAdapterInfo`; likely available in the main world, check in M8), and show both on the HUD.
+- **Startup log.** Log the requested present mode and the adapter name (`RenderAdapterInfo`, which RenderPlugin inserts into the main world too: verified, `bevy_render-0.19.1/src/settings.rs:197`), and show both on the HUD.
   - On Wayland, `Immediate` does not exist, so `AutoNoVsync` falls back to Mailbox or Fifo. Under Fifo the fps locks to the refresh rate and `--fps-max` has no effect.
   - Whether the resolved mode can be read is unverified. M10's check is behavioural.
 - **Cursor.** `apply_cursor` mirrors `Paused` into `Single<&mut CursorOptions, With<PrimaryWindow>>` when `Paused` changes:
@@ -668,7 +668,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | M5 | Simulation loop (`SimPlugin`) | cloud | done: `sim::` 7 tests pass, shell equals a bare Pilot loop bit for bit over 599 frames with a slide and jumps; a mutation (view frame on the pre-step clock) fails it; grep rule prints nothing |
 | M6 | Scripts and the headless binary | cloud | done: `script::` 5 tests pass; both scripts print one identical `final` line on two headless runs. `tour.txt` sprints, slides 3.3 s down the hill and slide-jumps; `tapstrafe.txt` bends a jump about 73° with wheel taps on alternate frames (taps on consecutive frames edge once, by design) |
 | M7 | Map, camera and body rendering | cloud | done: `convert::` 3 tests pass; ignored `render::` passes on lavapipe (top-left (140,178,217), centre (209,178,151), bottom-centre (192,192,192)). xvfb shots at wall 128, ramp 30 and hill: level horizon, every face drawn, sun-facing-away faces shaded not black, checker visible, sky above |
-| M8 | Playable core: flags, window, timing, cursor | cloud (+ workstation first play) | not started |
+| M8 | Playable core: flags, window, timing, cursor | cloud (+ workstation first play) | done in the cloud: `play::` 4 tests pass (every flag, both limiter timings); xvfb `--shot 30` exits 0 at 1600x900 and logs the llvmpipe adapter and `present mode AutoNoVsync (requested)`. Left: first real play on the workstation |
 | M9 | HUD, spots, script run under xvfb | cloud | not started |
 | M10 | Workstation verification and docs | workstation | not started |
 

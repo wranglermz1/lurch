@@ -4,14 +4,16 @@ use bevy::camera::RenderTarget;
 use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
+use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use lurch::sim::math::V3;
 use lurch::testmap;
 use lurch::world::Tri;
 
 use crate::convert::{dir, pos, rot, vfov, INCH};
 use crate::sim::{Pose, Sim};
-use crate::{advance_frame, common, Config, Frame, FrameIndex, PendingShots};
+use crate::{advance_frame, common, Config, Frame, FrameIndex, Paused, PendingShots};
 
 pub const SKY: Color = Color::srgb(0.55, 0.70, 0.85);
 pub const BODY_LAYER: usize = 2;
@@ -47,14 +49,23 @@ pub struct ViewImage(pub Handle<Image>);
 #[derive(Resource, Clone, Copy)]
 struct ViewTarget(Target);
 
+/// The present mode asked for and the adapter in use, for the log and the HUD. Whether the
+/// driver honoured the mode is not readable here.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct DisplayInfo {
+    pub present: String,
+    pub adapter: String,
+}
+
 impl Plugin for ViewPlugin {
     fn build(&self, app: &mut App) {
         common(app);
         app.insert_resource(ViewTarget(self.target))
             .insert_resource(ClearColor(SKY))
             .insert_resource(GlobalAmbientLight { brightness: 2000.0, ..default() })
-            .add_systems(Startup, setup)
-            .add_systems(Update, (sync_camera, sync_body).in_set(Frame::View))
+            .init_resource::<DisplayInfo>()
+            .add_systems(Startup, (setup, log_display))
+            .add_systems(Update, (sync_camera, sync_body, apply_cursor).in_set(Frame::View))
             .add_systems(Last, take_shots.before(advance_frame));
     }
 }
@@ -155,6 +166,23 @@ fn sync_body(sim: Res<Sim>, mut bodies: Query<&mut Transform, With<Body>>) {
     let size = dir([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]).abs() * INCH;
     for mut t in &mut bodies {
         *t = Transform::from_translation(pos(centre)).with_scale(size);
+    }
+}
+
+fn log_display(windows: Query<&Window, With<PrimaryWindow>>, adapter: Option<Res<RenderAdapterInfo>>, mut info: ResMut<DisplayInfo>) {
+    info.present = windows.iter().next().map_or("none".into(), |w| format!("{:?}", w.present_mode));
+    info.adapter = adapter.map_or("none".into(), |a| a.name.clone());
+    info!("present mode {} (requested), adapter {}", info.present, info.adapter);
+}
+
+/// Paused shows the cursor and frees it; playing hides and locks it (X11 falls back to
+/// confined). A focus change drops the grab, so resuming re-grabs.
+fn apply_cursor(paused: Res<Paused>, mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>) {
+    if !paused.is_changed() {
+        return;
+    }
+    for mut c in &mut cursors {
+        (c.visible, c.grab_mode) = if paused.0 { (true, CursorGrabMode::None) } else { (false, CursorGrabMode::Locked) };
     }
 }
 

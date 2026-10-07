@@ -9,6 +9,7 @@ pub mod script;
 pub mod sim;
 pub mod view;
 
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 use bevy::input::InputSystems;
@@ -42,6 +43,12 @@ pub struct Config {
     pub wheel_mode: WheelMode,
     /// The player's `cl_fovScale` option.
     pub fov_scale: f32,
+    /// 0 turns the cap off.
+    pub fps_max: u32,
+    pub vsync: bool,
+    pub size: (u32, u32),
+    pub frame_latency: Option<NonZeroU32>,
+    pub pipelined: bool,
 }
 
 impl Default for Config {
@@ -59,6 +66,11 @@ impl Default for Config {
             wheel_up: Some(IN_JUMP),
             wheel_mode: WheelMode::Event,
             fov_scale: 1.27216,
+            fps_max: 240,
+            vsync: false,
+            size: (1600, 900),
+            frame_latency: None,
+            pipelined: false,
         }
     }
 }
