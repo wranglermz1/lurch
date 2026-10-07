@@ -72,7 +72,7 @@ pattern. Retail strips it.
     tools/dump.sh     dump the running game into dumps/current.bin
     tools/sect.py     is a dump complete and in the clear?
     tools/rtti.py     resolve a class name to its vtable and vfunc RVAs
-    dumps/            images, git-ignored, hardlinked from HAVM so they cost nothing
+    dumps/            images, committed, hardlinked from HAVM on disk
     ref/              HAVM's extracted convar values and datamap offsets, retail build
 
 Run the tools from the repo root.
@@ -109,4 +109,5 @@ simulation that eats a usercmd stream and emits a per-tick trajectory to diff.
 ## Legal
 
 Decompiler output is derivative. Recovered constants and a clean reimplementation written
-from a behavioural spec are the defensible shape. No lifted bytes in this repo.
+from a behavioural spec are the defensible shape. No lifted bytes in the source. Exception: `dumps/` holds the oracle image so the repo
+is self-contained; it stays local and is never pushed.
