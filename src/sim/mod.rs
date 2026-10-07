@@ -235,6 +235,8 @@ pub struct Move<'a> {
     /// Friction of a collision surface by its index; world data, like the collision itself.
     pub surface: &'a dyn Fn(u32) -> f32,
     pub scratch: Scratch,
+    /// The stance block PlayerMove picked on entry; it holds for the whole call.
+    pub stance_index: Option<usize>,
 }
 
 const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
@@ -250,6 +252,7 @@ impl Move<'_> {
     }
 
     pub fn player_move(&mut self, optimized: bool) {
+        self.stance_index = Some(if self.p.stance_gate < 1 { 2 } else { ((self.p.flags >> 1) & 1) as usize });
         if 0 < self.p.duck_timer {
             self.p.duck_timer = (self.p.duck_timer - (self.g.frametime * 1000.0) as i32).max(0);
         }
@@ -271,7 +274,7 @@ impl Move<'_> {
     }
 
     pub fn stance(&self) -> &Stance {
-        let i = if self.p.stance_gate < 1 { 2 } else { ((self.p.flags >> 1) & 1) as usize };
+        let i = self.stance_index.unwrap_or(if self.p.stance_gate < 1 { 2 } else { ((self.p.flags >> 1) & 1) as usize });
         &self.s.stances[i]
     }
 
