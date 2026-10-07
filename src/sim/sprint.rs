@@ -6,7 +6,7 @@
 use super::math::*;
 use super::Move;
 
-const IN_SPEED: u32 = 0x8000;
+pub const IN_SPEED: u32 = 0x8000;
 const IN_WALK: u32 = 0x800;
 const HOLD_WINDOW: f32 = 0.1;
 const PRESS_WINDOW: f32 = 3.0;

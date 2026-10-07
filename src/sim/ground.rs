@@ -3,7 +3,7 @@
 use super::math::*;
 use super::{Move, MoveTraceInfo, Trace};
 
-const WALKABLE: f32 = 0.7;
+pub const WALKABLE: f32 = 0.7;
 const LEAVE_SPEED: f32 = 140.0;
 const AIRBORNE_FRICTION: f32 = 0.25;
 const MOVETYPE_WALK: u8 = 2;

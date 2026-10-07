@@ -213,6 +213,8 @@ pub struct Pilot {
 }
 
 impl Pilot {
+    /// The spawned player's event times are all zero, so a clock starting at zero would
+    /// read the first seconds as just after a jump, a landing and a slide: start it later.
     pub fn new(origin: V3) -> Self {
         Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0 }
     }

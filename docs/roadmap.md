@@ -12,26 +12,25 @@ top. Each item names how it is checked.
   player by its bone transform, so the sequences' keyframes have to come from the game's
   model files (or a capture hook that logs the root offset per call). The rest is portable
   from the image and is mapped in `docs/oracle.md`. Recordings: `traces/pending/mantle_*.ltr`.
+  On the test map, walls between jump height and the climb's peak (96 to 192) are where it
+  shows: the climb slows under the ledge and, with no mantle, drops back.
 - **Superglide.** Mantle plus a timed jump. Record once mantle replays.
 - **Superjump.** On the tech list, not yet recorded.
+- **Climbing slopes.** Every climb recording is on a vertical wall. The ported rules climb
+  any surface too steep to stand on (the test map's 46° and 50° ramps), but not 60°.
+  Record a run at a steep slope to confirm.
 
 Any session can decompile these (`tools/dec.sh`, once Ghidra is installed). Write what
 is recovered into `docs/oracle.md` as behaviour, not decompiler output.
 
-## 2. Test map
-
-A plain map built in code (`World::from_tris`): a large floor, walls of several heights
-(too tall to climb, climbable to the top, chest-high for a mantle), boxes, ramps and slopes
-at known angles, a long hill to slide down. Real map props are deferred.
-
-## 3. Game shell
+## 2. Game shell
 
 Window, mouse and keyboard into usercmds (per-command button edges, so a scroll-wheel tap
-strafe works), first-person camera, the map drawn flat-shaded. The simulation side is ready:
-`pilot::Pilot` is the loop a frame runs, one `step` per command. Needs a windowing and
-rendering crate; ask before adding one.
+strafe works), first-person camera, the test map (`src/testmap.rs`) drawn flat-shaded. The
+simulation side is ready: `pilot::Pilot` is the loop a frame runs, one `step` per command.
+Needs a windowing and rendering crate; ask before adding one.
 
-## 4. Camera feel
+## 3. Camera feel
 
 How the game's camera answers movement: FOV scale when sprinting and sliding
 (`cl_fovScale`, ability FOV scaling), view bob when walking, the landing dip, strafe roll,
@@ -41,12 +40,12 @@ climb and a mantle. This is client code in the same image (`C_BasePlayer` view s
 capture hook records the engine's view setup each frame (eye origin, view angles with
 punch, FOV, view matrix), and a replay gate compares ours to it as the movement gate does.
 
-## 5. Viewmodel
+## 4. Viewmodel
 
 First a stand-in model driven by the recovered sway and bob. The real arms and weapon need
 the game's models and animations, which are art and stay out of scope until asked for.
 
-## 6. Collision polish
+## 5. Collision polish
 
 - About 1 ms per trace against a full map mesh; keep the area around the player in memory.
 - The engine leaves a hull about 0.014 units closer to triangle leaves than the 1/32 skin

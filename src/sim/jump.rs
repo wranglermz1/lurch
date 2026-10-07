@@ -7,7 +7,7 @@ use super::math::*;
 use super::Move;
 
 pub const IN_JUMP: u32 = 0x2;
-const IN_FORWARD: u32 = 0x8;
+pub const IN_FORWARD: u32 = 0x8;
 const IN_BACK: u32 = 0x10;
 const IN_MOVELEFT: u32 = 0x200;
 const IN_MOVERIGHT: u32 = 0x400;

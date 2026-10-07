@@ -7,4 +7,5 @@ pub mod ltr;
 pub mod oracle;
 pub mod replay;
 pub mod sim;
+pub mod testmap;
 pub mod world;

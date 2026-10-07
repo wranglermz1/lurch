@@ -95,7 +95,10 @@ impl World {
     /// Every triangle that might meet the box `lo`–`hi`; a triangle may come more than once.
     fn candidates(&self, lo: V3, hi: V3, mut each: impl FnMut(&Tri)) {
         match &self.src {
-            Source::Mem(tris) => tris.iter().for_each(each),
+            Source::Mem(tris) => tris
+                .iter()
+                .filter(|t| (0..3).all(|i| t.iter().any(|v| v[i] >= lo[i]) && t.iter().any(|v| v[i] <= hi[i])))
+                .for_each(each),
             Source::File(f, g, tags) => {
                 let mut visit = |t: u32| {
                     if tags.as_ref().is_some_and(|tags| tags[t as usize] & TAG_WALK == 0) {

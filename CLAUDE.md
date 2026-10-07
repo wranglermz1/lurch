@@ -86,7 +86,7 @@ pattern. Retail strips it.
     tools/fuzz.py     seeded random drive script, for record.sh
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
-    src/              the lurch crate: trace parser, movement step, replay
+    src/              the lurch crate: trace parser, movement step, replay, test map
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
     traces/local/     recordings kept off git (none now); gated when present
     traces/pending/   recordings of mechanics not ported yet; `cargo test -- --ignored`
@@ -131,7 +131,8 @@ crouch jump, air duck, slide, slide hop, slide jump; and seeded random input
 Collision: `src/world.rs` sweeps the hull against triangles (in memory, or a HAVM `.mesh`).
 Every mp_rr_arena_empty recording also replays chained with our own collision against its
 floor, exact to `TOL`. No mesh exists for any R5Reloaded map, so collision beyond a flat
-floor is unverified.
+floor is unverified. `tests/testmap.rs` drives a pilot over the test map's steps, ramps,
+walls and hill and holds it to the limits its settings set (no fidelity claim).
 
 ## Where a session runs
 
