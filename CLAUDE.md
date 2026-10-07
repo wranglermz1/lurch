@@ -1,0 +1,112 @@
+# lurch
+
+Apex Legends movement, reimplemented in Rust, in our own engine. The goal is behavioural
+equivalence with the real game on the full movement tech list: strafe accel, air control,
+lurch and tap strafe, slide and slide hop, superjump, mantle, wall climb, superglide,
+jump grace and multi-jump penalty. Everything else a game needs is out of scope.
+
+Educational purpose: recovering a movement model from a shipped binary and proving the
+recovery with a differential test.
+
+## Meta-Rules for Claude
+
+Maintain this file under 200 lines. Keep it high-level. Do not explain code mechanics
+here; the source files carry that.
+
+No Code Comments: default to zero comments. Only write a comment for a non-obvious "why".
+If a comment is needed to explain what a function does, the naming is wrong.
+
+Nothing is installed yet. Do not add a toolchain, a crate, or a dependency without being
+asked for it.
+
+## Non-goals
+
+Rendering beyond what a test needs. Netcode, prediction, rollback. Weapons, abilities,
+legends, anims as art. Map loading beyond collision. Multiplayer. A game.
+
+## Definition of done
+
+"1:1" is a number, not a feel. A recorded input stream replayed through our simulation
+produces the same per-tick origin and velocity as the real engine, inside a stated
+tolerance. Until that harness exists, no fidelity claim is made.
+
+The oracle is the game's own code, not gameplay footage. R5Reloaded ships without
+anti-cheat, so the movement function can be hooked in-process and called with synthetic
+state, then diffed against ours.
+
+## Ground truth
+
+Lives in the HAVM repo at /home/fz/HAVM/HAVM, already extracted. Do not re-derive it.
+
+- `ref/_convars_values.ini` — 3769 convars with flags, defaults and live values, read from a
+  retail image (base 7ff7dc990000), not the oracle; confirm against 5dba2a2f.
+  `sv_gravity 750`, `sv_friction 4`, `sv_stopspeed 100`, `sv_maxspeed 320`,
+  `sv_airaccelerate 10`, `player_extraairaccelleration 2.0`,
+  `wallclimb_vertical_gain_reduction 128`, `automantle_forwarddist 26`,
+  `slide_max_angle_dot 0.6`, `wallrun_slipduration 1.0`, `cl_phys_maxticks 3`.
+- `ref/_offsets.ini` — retail build 6abfe359-04164401. Datamap field names and offsets,
+  795 of them on the player. Names carry over; offsets do not fit the oracle build. The
+  traversal state machine (`m_traversalState`, `m_traversalType`, `m_traversalProgress`,
+  `m_traversalBegin/Mid/End`) and the wallrun and slide fields come from here.
+- `maps/*.mesh` — extracted collision geometry, retail maps. Only canyonlands exists
+  in the oracle build.
+- `dumps/current.bin` (HAVM `dumps/5dba2a2f-02ae8471/dump.bin`) — full plaintext image of `r5apex.exe` under
+  R5Reloaded main. `.text` and `.rdata` 100% held, no encrypted pages.
+- `dump.bin` — retail `r5apex_dx12.exe`, probably build 6abfe359 (same capture
+  as `_offsets.ini`; the earlier 6ab42c93 label is unverified). Newer mechanics live here
+  (`m_jumpGraceTapCount`, `tapstrafe_repeated_tapping_*`) that the S3 build lacks.
+
+### Entry points, build 5dba2a2f-02ae8471, base 0x7ff7b6a90000
+
+The R5Reloaded build retains RTTI, so these were resolved by name rather than by
+pattern. Retail strips it.
+
+    C_GameMovement   vtable rva 0x144a2d8   17 virtuals   client, predicted
+    CGameMovement    vtable rva 0x14db2f0   17 virtuals   server
+    IGameMovement    vtable rva 0x14da9c0   17 virtuals
+    CPlayerMove      vtable rva 0x1564958    5 virtuals
+    CWallrunCurve    vtable rva 0x15a8650
+
+## Layout
+
+    tools/dump.sh     dump the running game into dumps/current.bin
+    tools/sect.py     is a dump complete and in the clear?
+    tools/rtti.py     resolve a class name to its vtable and vfunc RVAs
+    dumps/            images, git-ignored, hardlinked from HAVM so they cost nothing
+    ref/              HAVM's extracted convar values and datamap offsets, retail build
+
+Run the tools from the repo root.
+
+`dump.sh` wraps HAVM's `bin/redump` rather than reimplementing it: pages already
+held are never re-read, and a build change archives the old image instead of
+overwriting it. It needs the guest up and `bin/redump` built in HAVM. Overrides:
+`HAVM`, `PROC`, `HAVM_DOMAIN`, `HOST_CPUS`. Guest vCPUs own host cores 0-11, so
+host-side work stays pinned to 12-17.
+
+`rtti.py` with no class names lists the movement-related RTTI names in the image.
+With names, it prints each vtable and its function RVAs. It recovers the image
+base from the locator pointers, so no base has to be passed in. A vfunc count
+that reports "hit cap, unterminated" ran past the end of the vtable: the walk
+stops at the first slot outside .text and has no other terminator.
+
+## Approach
+
+The engine is Source-derived, so the base layer is known ground: trace-and-clip player
+move, friction before acceleration, a bump loop with velocity clipping, step-up, the
+2-unit ground snap. Write that from the published Source behaviour. The Respawn
+additions — lurch, slide, traversal, wall climb — are recovered from the binary.
+
+Collision is a swept hull against level geometry, not a rigid-body solver. A constraint
+solver smears exactly the artefacts that make the movement feel the way it does.
+
+Fixed tick, deterministic, f32 to match the game. Input arrives as a usercmd with
+per-tick button edges, not polled held state: a scroll-wheel tap strafe is a press and
+release inside one tick, which is what caps the tap rate.
+
+Phase 1 is headless. No renderer, no engine, no window. The first deliverable is a
+simulation that eats a usercmd stream and emits a per-tick trajectory to diff.
+
+## Legal
+
+Decompiler output is derivative. Recovered constants and a clean reimplementation written
+from a behavioural spec are the defensible shape. No lifted bytes in this repo.
