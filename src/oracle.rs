@@ -4,6 +4,7 @@
 
 use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
+use crate::sim::jump::{Lurch, Skip};
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
 const STANCE_BLOCK: usize = 0x78;
@@ -15,6 +16,7 @@ const SV_GRAVITY: f32 = 750.0;
 const SV_MAXVELOCITY: f32 = 34000.0;
 const EXTRA_AIR_ACCEL: f32 = 2.0;
 const SKIP_TIME: f32 = 1.0;
+const JUMP_GRACEPERIOD: f32 = 0.2;
 pub const SV_OPTIMIZEDMOVEMENT: bool = true;
 
 fn byte(b: &[u8], off: usize) -> u8 {
@@ -53,11 +55,21 @@ pub fn settings(blob: &[u8]) -> Settings {
         land_slowdown_height_max: f32_at(blob, 0x874),
         land_slowdown_no_sprint_frac: f32_at(blob, 0x878),
         sprint: byte(blob, SPRINT_SETTING) != 0,
+        jump_enabled: byte(blob, 0xdf2) != 0,
+        jump_height: f32_at(blob, 0x844),
+        slide_jump_height: f32_at(blob, 0xa78),
+        slide_max_jump_speed: f32_at(blob, 0xa6c),
+        can_jump_crouched: byte(blob, 0xde8) != 0,
+        anti_multi_jump_time_min: f32_at(blob, 0x84c),
+        anti_multi_jump_time_max: f32_at(blob, 0x850),
+        anti_multi_jump_height_frac: f32_at(blob, 0x848),
+        jump_grace_period: JUMP_GRACEPERIOD,
+        lurch: Lurch { period_min: 0.2, period_max: 0.5, strength: 0.7, max: 0.7 },
+        skip: Skip { time: SKIP_TIME, height_speed: 450.0, height_fraction: 1.0, speed_retain: -1.0, speed_reduce: 100.0 },
         wallrun: byte(blob, 0xe0b) != 0,
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
         extra_air_accel: EXTRA_AIR_ACCEL,
-        skip_time: SKIP_TIME,
     }
 }
 
@@ -93,7 +105,20 @@ pub fn player(p: &[u8]) -> Player {
         sprint_toggle_lock: byte(p, 0x1881) != 0,
         sprint_blocked: byte(p, 0x2605) != 0 || u32_at(p, 0x1764) != 0 || byte(p, 0x2c7c) != 0,
         sprint_suppressed: false,
-        sprint_lock: u32_at(p, 0x262c),
+        traversal_state: u32_at(p, 0x262c),
+        frozen: byte(p, 0x2184) != 0,
+        has_parent: u32_at(p, 0x118) != u32::MAX,
+        jump_suppressed: byte(p, 0x1a4c) != 0,
+        duck_held: byte(p, 0x1a80) != 0,
+        duck_state: u32_at(p, 0x1a7c) as i32,
+        left_ground_time: f32_at(p, 0x30bc),
+        left_ground_up: vec3_at(p, 0x30d4),
+        jumped_since_ground: byte(p, 0x30ec) != 0,
+        jumped_recently: byte(p, 0x30ed) != 0,
+        last_jump_time: f32_at(p, 0x30c0),
+        slide_boost_pending: byte(p, 0x2816) != 0,
+        slide_start: f32_at(p, 0x2818),
+        slide_boost: f32_at(p, 0x281c),
         stamina: f32_at(p, 0x1a5c),
         prev_velocity: vec3_at(p, 0x41c),
         eye_angles: vec3_at(p, 0x1ebc),
@@ -117,6 +142,7 @@ pub fn player(p: &[u8]) -> Player {
 pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
     MoveData {
         origin_changed: byte(mv, 0) & 2 != 0,
+        flags: byte(mv, 0),
         command_number,
         angles: vec3_at(mv, 0xc),
         buttons: u32_at(mv, 0x24),
@@ -124,8 +150,10 @@ pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
         forward: f32_at(mv, 0x30),
         side: f32_at(mv, 0x34),
         up: f32_at(mv, 0x38),
+        flat_forward: vec3_at(mv, 0x60),
+        flat_right: vec3_at(mv, 0x6c),
         flat_wish: vec3_at(mv, 0x78),
-        ground_plane: vec3_at(mv, 0xa8),
+        jump_dir: vec3_at(mv, 0xa8),
         maxspeed: f32_at(mv, 0xd4),
         origin: vec3_at(mv, 0x118),
         velocity: vec3_at(mv, 0x124),

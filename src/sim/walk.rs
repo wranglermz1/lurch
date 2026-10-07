@@ -49,6 +49,7 @@ impl Move<'_> {
         let dt = self.g.frametime;
         self.half_gravity(dt);
         self.check_velocity();
+        self.check_jump();
         self.check_velocity();
         if self.on_ground() {
             self.ground_move(dt);
@@ -254,6 +255,7 @@ impl Move<'_> {
         if !self.p.no_accel {
             self.air_accelerate(wishdir, wishspeed, accel * self.p.accel_scale, dt);
         }
+        self.keyboard_redirect();
 
         let v = add(self.mv.velocity, scale(self.p.push, dt));
         self.mv.velocity = v;

@@ -43,6 +43,7 @@ pub fn step(rec: &Record) -> Step {
     let surface = move |_: u32| out_friction / 1.25;
     {
         let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr: &mut tr, surface: &surface, scratch: Scratch::default() };
+        m.pre_think();
         m.player_move(oracle::SV_OPTIMIZEDMOVEMENT);
     }
     let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };

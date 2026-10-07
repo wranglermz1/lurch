@@ -22,7 +22,7 @@ impl Move<'_> {
     fn can_keep_sprinting(&self) -> bool {
         let (f, s) = self.input();
         let m2 = f * f + s * s;
-        m2 >= MIN_INPUT2 && (m2 == 0.0 || -0.707 <= f / m2.sqrt()) && (!self.on_ground() || self.p.sliding || 1 < self.p.sprint_lock.wrapping_sub(1))
+        m2 >= MIN_INPUT2 && (m2 == 0.0 || -0.707 <= f / m2.sqrt()) && (!self.on_ground() || self.p.sliding || 1 < self.p.traversal_state.wrapping_sub(1))
     }
 
     fn sprint_allowed(&self) -> bool {
@@ -40,7 +40,7 @@ impl Move<'_> {
         if !(MIN_INPUT2 <= m2 && m2 != 0.0 && 0.707 <= f / m2.sqrt()) {
             return false;
         }
-        if p.sprint_blocked || 1 >= p.sprint_lock.wrapping_sub(1) || p.sprint_suppressed {
+        if p.sprint_blocked || 1 >= p.traversal_state.wrapping_sub(1) || p.sprint_suppressed {
             return false;
         }
         if self.landing_slowdown() < self.s.land_slowdown_no_sprint_frac {

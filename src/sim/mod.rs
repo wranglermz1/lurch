@@ -3,6 +3,7 @@
 
 pub mod collide;
 pub mod ground;
+pub mod jump;
 pub mod math;
 pub mod sprint;
 pub mod walk;
@@ -24,7 +25,7 @@ pub struct Stance {
     pub sprint_deceleration: f32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub struct Settings {
     pub stances: [Stance; 3],
     pub speed_scale_side: f32,
@@ -41,11 +42,21 @@ pub struct Settings {
     pub land_slowdown_height_max: f32,
     pub land_slowdown_no_sprint_frac: f32,
     pub sprint: bool,
+    pub jump_enabled: bool,
+    pub jump_height: f32,
+    pub slide_jump_height: f32,
+    pub slide_max_jump_speed: f32,
+    pub can_jump_crouched: bool,
+    pub anti_multi_jump_time_min: f32,
+    pub anti_multi_jump_time_max: f32,
+    pub anti_multi_jump_height_frac: f32,
+    pub jump_grace_period: f32,
+    pub lurch: jump::Lurch,
+    pub skip: jump::Skip,
     pub wallrun: bool,
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
-    pub skip_time: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -86,13 +97,26 @@ pub struct Player {
     pub lagged: f32,
     pub gravity: f32,
     pub sprinting: bool,
+    pub frozen: bool,
+    pub has_parent: bool,
+    pub jump_suppressed: bool,
+    pub duck_held: bool,
+    pub duck_state: i32,
+    pub traversal_state: u32,
+    pub left_ground_time: f32,
+    pub left_ground_up: V3,
+    pub jumped_since_ground: bool,
+    pub jumped_recently: bool,
+    pub last_jump_time: f32,
+    pub slide_boost_pending: bool,
+    pub slide_start: f32,
+    pub slide_boost: f32,
     pub sprint_intent: bool,
     pub sprint_until: f32,
     pub sprint_started_fresh: bool,
     pub sprint_toggle_lock: bool,
     pub sprint_blocked: bool,
     pub sprint_suppressed: bool,
-    pub sprint_lock: u32,
     pub stamina: f32,
     pub prev_velocity: V3,
     pub eye_angles: V3,
@@ -117,6 +141,8 @@ pub struct Player {
 pub struct MoveData {
     /// The player's origin was moved since the last movement call by something else.
     pub origin_changed: bool,
+    /// CMoveData's leading flag byte; bit 2 forbids jumping this command.
+    pub flags: u8,
     pub command_number: u32,
     pub angles: V3,
     pub buttons: u32,
@@ -124,8 +150,10 @@ pub struct MoveData {
     pub forward: f32,
     pub side: f32,
     pub up: f32,
+    pub flat_forward: V3,
+    pub flat_right: V3,
     pub flat_wish: V3,
-    pub ground_plane: V3,
+    pub jump_dir: V3,
     pub maxspeed: f32,
     pub origin: V3,
     pub velocity: V3,
@@ -187,6 +215,15 @@ pub struct Move<'a> {
 const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
 
 impl Move<'_> {
+    /// Runs before each movement call: while standing, remember when and with which up
+    /// vector, for the jump grace period.
+    pub fn pre_think(&mut self) {
+        if self.on_ground() {
+            self.p.left_ground_time = self.g.curtime;
+            self.p.left_ground_up = self.p.up;
+        }
+    }
+
     pub fn player_move(&mut self, optimized: bool) {
         if self.p.movetype != 12 {
             if self.p.movetype == 2 && !self.mv.origin_changed && optimized {
