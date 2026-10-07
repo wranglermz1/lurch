@@ -9,6 +9,15 @@ const MAX_BUMPS: usize = 8;
 const WALKABLE: f32 = 0.7;
 const STEP_SLACK: f64 = 1.0 / 32.0;
 
+/// The horizontal direction along both `n` and the floor `g`: a shallow wall hit while
+/// walking is treated as a vertical wall.
+pub fn pin_vertical(n: V3, g: V3) -> V3 {
+    let x = -(n[2] * g[0] - g[2] * n[0]);
+    let y = g[2] * n[1] - n[2] * g[1];
+    let k = 1.0 / (x * x + y * y + 0.0).sqrt().max(TINY);
+    [x * k, y * k, k * 0.0]
+}
+
 impl Move<'_> {
     pub fn hull(&self) -> (V3, V3) {
         if self.ducked() { (self.p.hull_duck_min, self.p.hull_duck_max) } else { (self.p.hull_min, self.p.hull_max) }
@@ -19,7 +28,7 @@ impl Move<'_> {
         self.tr.hull(&HullQuery { start, end, mins, maxs, mask: self.p.mask })
     }
 
-    fn half_width(&self) -> f32 {
+    pub fn half_width(&self) -> f32 {
         let (mins, maxs) = self.hull();
         (maxs[0] - mins[0]) * 0.5
     }
@@ -42,9 +51,9 @@ impl Move<'_> {
                         Trace { start: *pos, endpos: *pos, normal: neg(c), fraction: 0.0, ..Default::default() }
                     }
                     _ => {
-                        let delta = scale(*vel, left);
-                        let mut dest = add(delta, *pos);
-                        if len2(sub(dest, *pos)) < 1e-4 {
+                        let mut dest = mad(*pos, *vel, left);
+                        let delta = sub(dest, *pos);
+                        if len2(delta) < 1e-4 {
                             break;
                         }
                         for p in &planes {
@@ -57,13 +66,9 @@ impl Move<'_> {
                         if let Some(g) = ground {
                             if t.normal[2] < 0.5 && t.normal[2] > 0.0 {
                                 let steep = planes.iter().fold(g, |a, p| if a[2] < p[2] { *p } else { a });
-                                let n = t.normal;
-                                let x = n[1] * steep[2] - n[2] * steep[1];
-                                let y = -(n[2] * steep[0] - n[0] * steep[2]);
-                                let k = 1.0 / (y * y + x * x).sqrt().max(TINY);
-                                let (x, y) = (k * x, k * y);
-                                if !planes.iter().any(|p| p[2] == 0.0 && x * p[0] + y * p[1] > 0.99) {
-                                    t.normal = [x, y, k * 0.0];
+                                let pinned = pin_vertical(t.normal, steep);
+                                if !planes.iter().any(|p| p[2] == 0.0 && pinned[0] * p[0] + pinned[1] * p[1] > 0.99) {
+                                    t.normal = pinned;
                                 }
                             }
                         }
@@ -130,9 +135,9 @@ impl Move<'_> {
             let cur = if bump == 0 {
                 *t
             } else {
-                let delta = scale(*vel, left);
-                let mut dest = add(delta, *pos);
-                if len2(sub(dest, *pos)) < 1e-4 {
+                let mut dest = mad(*pos, *vel, left);
+                let delta = sub(dest, *pos);
+                if len2(delta) < 1e-4 {
                     return;
                 }
                 for p in &planes {

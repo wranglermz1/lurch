@@ -2,10 +2,18 @@ use lurch::ltr::{f32_at, open, u32_at, vec3_at};
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage: inspect FILE.ltr");
+    let fields: Vec<usize> = std::env::var("FIELDS").ok().map(|f| f.split(',').map(|x| usize::from_str_radix(x.trim_start_matches("0x"), 16).unwrap()).collect()).unwrap_or_default();
     let r = open(&path).expect("open");
     println!("map {}", r.map);
     for rec in r {
         let rec = rec.expect("record");
+        if !fields.is_empty() {
+            let mvf = std::env::var("MV").is_ok();
+            let (a, b) = if mvf { (&rec.mv_in, &rec.mv_out) } else { (&rec.player_in, &rec.player_out) };
+            let v: Vec<String> = fields.iter().map(|&o| format!("{o:x}={}/{} ({:x}/{:x})", f32_at(a, o), f32_at(b, o), u32_at(a, o), u32_at(b, o))).collect();
+            println!("seq {:x} {}", rec.seq, v.join(" "));
+            continue;
+        }
         println!(
             "seq {:x} btn {:x} fwd {} dt {:.5} traces {} origin {:?} -> {:?} vel {:?} -> {:?} ground {:x} -> {:x}",
             rec.seq,

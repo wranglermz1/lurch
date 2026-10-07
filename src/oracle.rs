@@ -8,6 +8,7 @@ use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, 
 
 const STANCE_BLOCK: usize = 0x78;
 const STANCE_STRIDE: usize = 0x68;
+const SPRINT_SETTING: usize = 0xe21;
 
 /// ConVar values read from the dump; the capture does not snapshot ConVars.
 const SV_GRAVITY: f32 = 750.0;
@@ -50,6 +51,8 @@ pub fn settings(blob: &[u8]) -> Settings {
         land_slowdown_time_power: f32_at(blob, 0x86c),
         land_slowdown_height_min: f32_at(blob, 0x870),
         land_slowdown_height_max: f32_at(blob, 0x874),
+        land_slowdown_no_sprint_frac: f32_at(blob, 0x878),
+        sprint: byte(blob, SPRINT_SETTING) != 0,
         wallrun: byte(blob, 0xe0b) != 0,
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
@@ -84,6 +87,16 @@ pub fn player(p: &[u8]) -> Player {
         lagged: f32_at(p, 0x358c),
         gravity: f32_at(p, 0x3c8),
         sprinting: byte(p, 0x2604) != 0,
+        sprint_intent: byte(p, 0x2824) != 0,
+        sprint_until: f32_at(p, 0x25f8),
+        sprint_started_fresh: byte(p, 0x25fc) != 0,
+        sprint_toggle_lock: byte(p, 0x1881) != 0,
+        sprint_blocked: byte(p, 0x2605) != 0 || u32_at(p, 0x1764) != 0 || byte(p, 0x2c7c) != 0,
+        sprint_suppressed: false,
+        sprint_lock: u32_at(p, 0x262c),
+        stamina: f32_at(p, 0x1a5c),
+        prev_velocity: vec3_at(p, 0x41c),
+        eye_angles: vec3_at(p, 0x1ebc),
         sliding: byte(p, 0x2815) != 0,
         no_accel: byte(p, 0x2184) != 0 || byte(p, 0x2a7c) != 0,
         air_speed: f32_at(p, 0x3108),
@@ -101,9 +114,10 @@ pub fn player(p: &[u8]) -> Player {
     }
 }
 
-pub fn move_data(mv: &[u8]) -> MoveData {
+pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
     MoveData {
         origin_changed: byte(mv, 0) & 2 != 0,
+        command_number,
         angles: vec3_at(mv, 0xc),
         buttons: u32_at(mv, 0x24),
         oldbuttons: u32_at(mv, 0x28),

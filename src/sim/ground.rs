@@ -12,7 +12,7 @@ const MOVETYPE_TRAVERSE: u8 = 12;
 
 impl Move<'_> {
     /// How much of a landing's speed survives, recovering over landSlowdownDuration.
-    fn landing_slowdown(&self) -> f32 {
+    pub fn landing_slowdown(&self) -> f32 {
         let s = self.s;
         let since = self.g.curtime - self.p.land_time;
         if s.land_slowdown_duration <= since || self.p.land_height <= s.land_slowdown_height_min {
@@ -65,6 +65,35 @@ impl Move<'_> {
         self.p.move_trace = MoveTraceInfo { endpos: t.endpos, normal: t.normal, kind };
     }
 
+    /// Standing on the lip of a steep face: probe again from just past the lip, and take that
+    /// floor's normal if there is one. Odd and even commands probe from different sides.
+    fn edge_probe(&mut self, t: &Trace, nz: f32, reach: f32) -> Option<V3> {
+        let up = self.p.up;
+        let halfw = self.half_width();
+        let h = sub(t.normal, scale(up, nz));
+        let sin = (1.0 - nz * nz).sqrt();
+        let lip = (sin - 0.71414) * halfw;
+        let (start, end) = if self.mv.command_number & 1 == 0 {
+            let mut drop = halfw * nz + 0.03125;
+            let left = (1.0 - t.fraction) * reach;
+            let mut out = (((1.0 - sin) * halfw) as f64 + 0.03125) as f32;
+            if drop < left {
+                out = ((left - drop) * 0.5 + out).min((8.0 - lip) - 0.03125);
+                drop = left;
+            }
+            let drop = drop + 12.0;
+            let out = out / sin;
+            let start = add(add(scale(h, out), t.endpos), scale(up, 12.0));
+            (start, sub(start, scale(up, drop)))
+        } else {
+            let back = (lip + 4.0 + 0.03125) / sin;
+            let start = add(sub(t.endpos, scale(h, back)), scale(up, reach));
+            (start, sub(start, scale(up, reach + reach)))
+        };
+        let r = self.trace(start, end);
+        (!r.startsolid && r.fraction < 1.0).then_some(r.normal)
+    }
+
     /// Probe below the player and stand on what is there, or go airborne.
     pub fn categorize(&mut self, leaving_hint: bool) {
         self.p.surface_friction = 1.0;
@@ -88,7 +117,7 @@ impl Move<'_> {
         let mut probe = None;
         if !leaving {
             let cached = self.scratch.probe.filter(|_| len2(sub(end, self.scratch.probe_end)) < 4.0);
-            let t = match cached {
+            let mut t = match cached {
                 Some(t) => t,
                 None => {
                     let mut t = self.trace(origin, end);
@@ -98,7 +127,13 @@ impl Move<'_> {
                     t
                 }
             };
-            let nz = dot(up, t.normal);
+            let mut nz = dot(up, t.normal);
+            if t.entity != 0 && nz < WALKABLE && world_up && 0.0 < nz && self.on_ground() {
+                if let Some(n) = self.edge_probe(&t, nz, reach) {
+                    t.normal = n;
+                    nz = dot(up, n);
+                }
+            }
             let stands = t.entity != 0 && !(nz < WALKABLE && world_up);
             if stands {
                 self.stand_on(&t);

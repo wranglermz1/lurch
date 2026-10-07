@@ -178,8 +178,11 @@ impl Move<'_> {
         let wishdir = scale(wish, 1.0 / l.max(TINY));
         let wishspeed = l.min(1.0) * self.mv.maxspeed;
         let accel = self.ground_accel();
+        let v0 = self.mv.velocity;
         self.ground_friction(wishdir, wishspeed);
+        let v1 = self.mv.velocity;
         self.ground_accelerate(wishdir, wishspeed, accel);
+        if std::env::var("DBG").is_ok() { eprintln!("ground dt {} v0 {:?} wish {:?} wishspeed {} accel {} lp {:?} sf {} after friction {:?} after accel {:?} max {}", self.g.frametime, v0, wish, wishspeed, accel, self.p.last_plane, self.p.surface_friction, v1, self.mv.velocity, self.mv.maxspeed); }
 
         if len(self.mv.velocity) < MIN_GROUND_SPEED {
             self.mv.velocity = ZERO;
@@ -208,7 +211,7 @@ impl Move<'_> {
         self.p.move_trace = super::MoveTraceInfo { endpos: t.endpos, normal: t.normal, kind: 1 };
         if t.fraction == 1.0 {
             self.mv.origin = t.endpos;
-        } else if !self.along_slope(t, true, Some(dest), false) {
+        } else if !self.along_slope(pin_shallow(t, plane), true, Some(dest), false) {
             let o = self.mv.origin;
             if -0.03125 < dot(sub(o, t.endpos), t.normal) {
                 self.p.last_plane = t.normal;
@@ -311,6 +314,15 @@ impl Move<'_> {
         }
         self.p.last_plane = t.normal;
     }
+}
+
+fn pin_shallow(mut t: Trace, plane: Option<V3>) -> Trace {
+    if let Some(g) = plane {
+        if t.normal[2] < 0.5 && 0.0 < t.normal[2] {
+            t.normal = super::collide::pin_vertical(t.normal, g);
+        }
+    }
+    t
 }
 
 const OVERCLIP_FLOOR: f32 = 0.0078125;

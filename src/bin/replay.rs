@@ -27,10 +27,15 @@ fn main() -> ExitCode {
         let mut first: Option<String> = None;
         for rec in reader {
             let rec = rec.expect("record");
+            if let Ok(only) = std::env::var("SEQ") {
+                if format!("{:x}", rec.seq) != only {
+                    continue;
+                }
+            }
             n += 1;
             let want = outcome(&rec);
             let mut p = oracle::player(&rec.player_in);
-            let mut mv = oracle::move_data(&rec.mv_in);
+            let mut mv = oracle::move_data(&rec.mv_in, rec.seq);
             let s = oracle::settings(&rec.settings);
             let g = oracle::globals(&rec.globals, p.lagged);
             let mut tr = LogTracer::new(&rec.traces);
@@ -54,8 +59,8 @@ fn main() -> ExitCode {
                 let msg = format!(
                     "seq {:x}: origin err {o:.5} vel err {v:.5}\n    in  {:?} {:?} ground {}\n    want {want:?}\n    got  {got:?}\n    traces logged {} missing {:?}",
                     rec.seq,
-                    oracle::move_data(&rec.mv_in).origin,
-                    oracle::move_data(&rec.mv_in).velocity,
+                    oracle::move_data(&rec.mv_in, rec.seq).origin,
+                    oracle::move_data(&rec.mv_in, rec.seq).velocity,
                     oracle::ground_of(&rec.player_in).is_some(),
                     rec.traces.len(),
                     tr.missing

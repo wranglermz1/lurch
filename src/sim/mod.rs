@@ -4,6 +4,7 @@
 pub mod collide;
 pub mod ground;
 pub mod math;
+pub mod sprint;
 pub mod walk;
 
 use math::V3;
@@ -38,6 +39,8 @@ pub struct Settings {
     pub land_slowdown_time_power: f32,
     pub land_slowdown_height_min: f32,
     pub land_slowdown_height_max: f32,
+    pub land_slowdown_no_sprint_frac: f32,
+    pub sprint: bool,
     pub wallrun: bool,
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
@@ -83,6 +86,16 @@ pub struct Player {
     pub lagged: f32,
     pub gravity: f32,
     pub sprinting: bool,
+    pub sprint_intent: bool,
+    pub sprint_until: f32,
+    pub sprint_started_fresh: bool,
+    pub sprint_toggle_lock: bool,
+    pub sprint_blocked: bool,
+    pub sprint_suppressed: bool,
+    pub sprint_lock: u32,
+    pub stamina: f32,
+    pub prev_velocity: V3,
+    pub eye_angles: V3,
     pub sliding: bool,
     pub no_accel: bool,
     pub air_speed: f32,
@@ -104,6 +117,7 @@ pub struct Player {
 pub struct MoveData {
     /// The player's origin was moved since the last movement call by something else.
     pub origin_changed: bool,
+    pub command_number: u32,
     pub angles: V3,
     pub buttons: u32,
     pub oldbuttons: u32,
@@ -183,6 +197,7 @@ impl Move<'_> {
                 self.categorize(false);
             }
         }
+        self.update_sprint();
         self.mv.maxspeed = self.max_speed();
         if matches!(self.p.movetype, 2 | 7) {
             self.full_walk_move();
