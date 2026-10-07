@@ -23,7 +23,7 @@ impl Move<'_> {
         } else {
             1.0
         };
-        let t = (since / s.land_slowdown_duration).max(0.0).powf(s.land_slowdown_time_power);
+        let t = pow((since / s.land_slowdown_duration).max(0.0), s.land_slowdown_time_power);
         1.0 - (1.0 - t) * height * (1.0 - s.land_slowdown_frac)
     }
 

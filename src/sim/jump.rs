@@ -134,7 +134,6 @@ impl Move<'_> {
         self.set_ground(None);
         self.p.jumped_since_ground = true;
         let speed = ((self.s.sv_gravity + self.s.sv_gravity) * height).sqrt();
-        self.p.slide_boost_pending = false;
         let surface = 1.0;
         self.mv.velocity = mad(self.mv.velocity, self.mv.jump_dir, surface * speed);
         let lp = self.p.last_plane;

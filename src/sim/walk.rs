@@ -68,7 +68,8 @@ impl Move<'_> {
     fn ground_wish(&self) -> V3 {
         let up = self.p.up;
         let (f, _, _) = angle_vectors(self.mv.angles);
-        let r = normalize(cross(f, up));
+        let c = cross(f, up);
+        let r = scale(c, 1.0 / (c[1] * c[1] + c[0] * c[0] + c[2] * c[2]).sqrt().max(TINY));
         let fwd_dir = cross(up, r);
         let k = if self.p.sprinting { SPRINT_INPUT } else { 1.0 };
         let (mut fwd, mut side) = (self.mv.forward * k, self.mv.side * k);
@@ -126,7 +127,7 @@ impl Move<'_> {
         let mut vt = sub(v, keep);
         let along = dot(vt, wishdir);
         if along > 0.0 {
-            let f = (along * wishspeed / len2(vt)).min(1.0);
+            let f = (along * wishspeed / (vt[1] * vt[1] + vt[0] * vt[0] + vt[2] * vt[2])).min(1.0);
             let lp = self.p.last_plane;
             let protect = if dot(lp, wishdir) < 0.0 {
                 let w = mad(wishdir, lp, OVERCLIP_FLOOR - dot(lp, wishdir));
@@ -167,7 +168,7 @@ impl Move<'_> {
         let drop = self.ramp() * decel * self.p.accel_scale * self.p.surface_friction * self.p.friction_scale * self.g.frametime;
         let mut newspeed = (speed - drop).max(0.0);
         if self.p.sliding {
-            newspeed *= self.s.slide_velocity_decay.powf(1.0 * self.g.frametime);
+            newspeed *= pow(self.s.slide_velocity_decay, 1.0 * self.g.frametime);
         }
         if newspeed < speed {
             self.mv.velocity = add(keep, scale(vt, newspeed / speed));
