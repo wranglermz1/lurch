@@ -2,6 +2,7 @@
 //! divergence can be pinned to one function (docs/oracle.md maps each to its RVA).
 
 pub mod collide;
+pub mod duck;
 pub mod ground;
 pub mod jump;
 pub mod math;
@@ -43,6 +44,24 @@ pub struct Settings {
     pub land_slowdown_no_sprint_frac: f32,
     pub sprint: bool,
     pub jump_enabled: bool,
+    pub crouch: bool,
+    pub slide: bool,
+    pub slide_while_in_air: bool,
+    pub slide_auto_stand: bool,
+    pub slide_max_angle_dot: f32,
+    pub slide_required_start_speed: f32,
+    pub slide_required_start_speed_air: f32,
+    pub slide_boost_enabled: bool,
+    pub slide_boost_cooldown: f32,
+    pub slide_speed_boost: f32,
+    pub slide_speed_boost_cap: f32,
+    pub slide_max_stop_speed: f32,
+    pub slide_stop_speed: f32,
+    pub slide_accel: f32,
+    pub slide_decel: f32,
+    pub slide_want_to_stop_decel: f32,
+    pub slide_velocity_decay: f32,
+    pub slide_step_velocity_reduction: f32,
     pub jump_height: f32,
     pub slide_jump_height: f32,
     pub slide_max_jump_speed: f32,
@@ -98,6 +117,10 @@ pub struct Player {
     pub gravity: f32,
     pub sprinting: bool,
     pub frozen: bool,
+    pub dead: bool,
+    pub jetpack_active: bool,
+    pub duck_timer: i32,
+    pub ducked_in_air: bool,
     pub has_parent: bool,
     pub jump_suppressed: bool,
     pub duck_held: bool,
@@ -153,6 +176,8 @@ pub struct MoveData {
     pub flat_forward: V3,
     pub flat_right: V3,
     pub flat_wish: V3,
+    /// The wish direction laid along the ground plane, before scaling.
+    pub ground_wish: V3,
     pub jump_dir: V3,
     pub maxspeed: f32,
     pub origin: V3,
@@ -225,6 +250,9 @@ impl Move<'_> {
     }
 
     pub fn player_move(&mut self, optimized: bool) {
+        if 0 < self.p.duck_timer {
+            self.p.duck_timer = (self.p.duck_timer - (self.g.frametime * 1000.0) as i32).max(0);
+        }
         if self.p.movetype != 12 {
             if self.p.movetype == 2 && !self.mv.origin_changed && optimized {
                 if OPTIMIZED_LEAVE_SPEED < math::dot(self.p.up, self.mv.velocity) {
@@ -234,6 +262,7 @@ impl Move<'_> {
                 self.categorize(false);
             }
         }
+        self.duck();
         self.update_sprint();
         self.mv.maxspeed = self.max_speed();
         if matches!(self.p.movetype, 2 | 7) {

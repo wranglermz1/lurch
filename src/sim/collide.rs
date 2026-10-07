@@ -195,9 +195,10 @@ impl Move<'_> {
 
     /// Slide, then try the same move raised by the step height and dropped back down; keep
     /// the stepped result only when it got further along the horizontal direction.
-    pub fn step_slide(&mut self, pos: &mut V3, vel: &mut V3, dt: f32, step: f32, first: Trace, ground: Option<V3>) {
+    /// Returns how far the step moved the player, zero when it did not step.
+    pub fn step_slide(&mut self, pos: &mut V3, vel: &mut V3, dt: f32, step: f32, first: Trace, ground: Option<V3>) -> V3 {
         if len2(*vel) == 0.0 {
-            return;
+            return ZERO;
         }
         let up = self.p.up;
         let start = *pos;
@@ -214,7 +215,7 @@ impl Move<'_> {
         let flat = sub(start_vel, scale(up, d));
         let flat_len = len(flat);
         if flat_len == 0.0 {
-            return;
+            return ZERO;
         }
         let mut p2 = raised;
         let mut v2 = flat;
@@ -224,7 +225,7 @@ impl Move<'_> {
         let unstepped = len2(horiz(slid)) * flat_len * flat_len;
         let gained = dot(flat, horiz(p2));
         if !(gained > 0.0 && unstepped < ((gained as f64 * 0.999) as f32).powi(2)) {
-            return;
+            return ZERO;
         }
         let grounded = self.on_ground();
         let mut down = (climbed as f64 + STEP_SLACK) as f32;
@@ -240,16 +241,16 @@ impl Move<'_> {
         let first_land = land;
         let nz = dot(up, land.normal);
         if !(land.flag3b || (1.0 - nz) * self.half_width() <= down * land.fraction) {
-            return;
+            return ZERO;
         }
         let along = dot(horiz(land.endpos), flat);
         if !(along > 0.0 && unstepped < ((along as f64 * 0.999) as f32).powi(2)) {
-            return;
+            return ZERO;
         }
         if nz <= WALKABLE {
             let dl = reject(sub(land.endpos, slid), up);
             if len2(dl) <= 0.0 {
-                return;
+                return ZERO;
             }
             let mut walkable = false;
             let reach = ((flat_len * dt + step * 1.0202) as f64 + STEP_SLACK) as f32;
@@ -285,17 +286,24 @@ impl Move<'_> {
             let rise_latest = ((dot(latest.endpos, up) - base) as f64).abs() as f32 * 2.0;
             let rise_first = ((dot(first_land.endpos, up) - base) as f64).abs() as f32;
             if !(rise_first <= rise_latest.max(step * 0.25) && walkable) {
-                return;
+                return ZERO;
             }
             if lnz < WALKABLE
                 && 0.9 < dot(latest.normal, first_land.normal)
                 && (dot(sub(latest.endpos, first_land.endpos), first_land.normal) as f64).abs() < 5.0
             {
-                return;
+                return ZERO;
             }
         }
+        let delta = sub(first_land.endpos, start);
         *pos = first_land.endpos;
         *vel = start_vel;
+        if up[2] == 1.0 {
+            return delta;
+        }
+        let n = first_land.normal;
+        let d = dot(n, delta);
+        if d <= 0.0 { ZERO } else { scale(n, d) }
     }
 
     /// Step over what blocked the move if this player can step, else plain slide.
@@ -308,7 +316,14 @@ impl Move<'_> {
         } else {
             let ground = if self.on_ground() && is_world_up(self.p.up) { Some(self.p.ground_plane) } else { None };
             let step = self.p.step_height;
-            self.step_slide(&mut pos, &mut vel, dt, step, t, ground);
+            let stepped = self.step_slide(&mut pos, &mut vel, dt, step, t, ground);
+            if self.p.sliding && 0.0 < stepped[2] {
+                let speed = (vel[0] * vel[0] + vel[1] * vel[1]).sqrt();
+                if 0.0 < speed {
+                    let k = (speed - stepped[2] * self.s.slide_step_velocity_reduction).max(0.0) / speed;
+                    vel = [vel[0] * k, vel[1] * k, vel[2]];
+                }
+            }
         }
         self.mv.origin = pos;
         self.mv.velocity = vel;

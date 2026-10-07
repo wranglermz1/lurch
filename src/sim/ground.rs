@@ -42,6 +42,12 @@ impl Move<'_> {
                 let k = self.landing_slowdown();
                 self.mv.velocity = add(scale(sub(v, vu), k), vu);
             }
+            if let Some(t) = t.filter(|_| new.is_some()) {
+                if self.p.traversal_state.wrapping_sub(1) < 2 {
+                    let landing = self.p.ground.is_none();
+                    self.start_slide(t.normal, landing);
+                }
+            }
             if new.is_none() && self.p.movetype == MOVETYPE_TRAVERSE {
                 self.p.movetype = MOVETYPE_WALK;
             }

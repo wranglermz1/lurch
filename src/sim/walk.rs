@@ -87,10 +87,23 @@ impl Move<'_> {
             fwd_dir[1] * fwd + r[1] * side,
             fwd_dir[2] * fwd + r[2] * side,
         ];
-        reject(w, up)
+        let w = reject(w, up);
+        if !self.p.sliding {
+            return w;
+        }
+        let v = self.mv.velocity;
+        let d = dot(v, w);
+        if 0.0 < d || (d < 0.0 && self.p.duck_state == 3) {
+            sub(w, scale(v, d / len2(v)))
+        } else {
+            w
+        }
     }
 
     fn ground_accel(&self) -> f32 {
+        if self.p.sliding {
+            return self.s.slide_accel * self.p.accel_scale * self.p.speed_scale;
+        }
         let v = self.mv.velocity;
         let speed2 = v[0] * v[0] + v[1] * v[1];
         let st = self.stance();
@@ -134,6 +147,15 @@ impl Move<'_> {
                 decel = st.sprint_acceleration;
             }
         }
+        if self.p.sliding {
+            decel = if self.p.duck_state == 3 {
+                0.0
+            } else if (!self.p.duck_held && self.mv.buttons & super::duck::IN_DUCK == 0) || dot(v, self.mv.ground_wish) < 0.0 {
+                self.s.slide_want_to_stop_decel
+            } else {
+                self.s.slide_decel
+            };
+        }
         if decel < 0.0 {
             decel = st.deceleration;
             if decel < 0.0 {
@@ -141,7 +163,10 @@ impl Move<'_> {
             }
         }
         let drop = self.ramp() * decel * self.p.accel_scale * self.p.surface_friction * self.p.friction_scale * self.g.frametime;
-        let newspeed = (speed - drop).max(0.0);
+        let mut newspeed = (speed - drop).max(0.0);
+        if self.p.sliding {
+            newspeed *= self.s.slide_velocity_decay.powf(1.0 * self.g.frametime);
+        }
         if newspeed < speed {
             self.mv.velocity = add(keep, scale(vt, newspeed / speed));
         }
@@ -182,7 +207,11 @@ impl Move<'_> {
         self.ground_friction(wishdir, wishspeed);
         self.ground_accelerate(wishdir, wishspeed, accel);
 
-        if len(self.mv.velocity) < MIN_GROUND_SPEED {
+        let speed = len(self.mv.velocity);
+        if self.p.sliding && speed < self.s.slide_stop_speed && self.p.duck_state != 3 {
+            self.end_slide();
+        }
+        if speed < MIN_GROUND_SPEED {
             self.mv.velocity = ZERO;
             return;
         }
