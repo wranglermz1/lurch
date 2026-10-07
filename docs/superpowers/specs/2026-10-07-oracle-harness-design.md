@@ -35,7 +35,7 @@ Each one is checked in the oracle build (`5dba2a2f-02ae8471`) and recorded in
 
 ```
 guest                                     host
-r5apex.exe                                tools/drain.py (HAVM reads)
+r5apex.exe                                capture/drain (HAVM reads)  
   ProcessMovement <- detour                 finds ring by magic, follows write index,
   lurchcap.dll -> ring in guest RAM ------>  writes traces/*.trace
 inject.exe (run once)                     lurch crate: trace, movement, bin/replay
@@ -49,7 +49,8 @@ inject.exe (run once)                     lurch crate: trace, movement, bin/repl
   one fixed-size record into a static ring. The ring header holds the magic, the record
   size, the capacity, the write index and a dropped-record counter. No allocation, no I/O.
 - **`capture/inject.c`.** Takes a DLL path and injects it into `r5apex.exe`.
-- **`tools/drain.py`.** Locates the ring through HAVM, follows the write index, and
+- **`capture/drain`.** C++ against HAVM's `Vmm`/`Process` reader, because MemProcFS has no
+  Python binding built here. It locates the ring through HAVM, follows the write index, and
   writes the text trace. By default it keeps the first execution of each `seq`; `--all`
   keeps prediction re-runs too. It reports dropped records.
 - **`lurch` crate.** Rust, std only, f32 throughout.
@@ -58,7 +59,7 @@ inject.exe (run once)                     lurch crate: trace, movement, bin/repl
   - `bin/replay`: runs both diffs over the given trace files.
 
 The text trace is the only contract between the capture side and the Rust side. The
-binary ring layout is private to `lurchcap.c` and `drain.py`.
+binary ring layout is private to `lurchcap.c` and `drain.cpp` (`capture/ring.h`).
 
 ## Trace format
 
@@ -68,13 +69,17 @@ pattern, and integers are written as hex.
 ```
 # lurch-trace 1 build=5dba2a2f-02ae8471 map=<name>
 settings <key>=<hex> ...
-cmd <seq> <frametime> <pitch> <yaw> <roll> <fwd> <side> <up> <buttons> <oldbuttons>
+cmd <seq> <frametime> <curtime> <pitch> <yaw> <roll> <fwd> <side> <up> <buttons> <oldbuttons>
 in  <ox> <oy> <oz> <vx> <vy> <vz> <flags> <onground>
-out <ox> <oy> <oz> <vx> <vy> <vz> <flags> <onground>
+out <ox> <oy> <oz> <vx> <vy> <vz> <flags> <onground> <maxspeed>
 ```
 
 - `seq` is the usercmd `command_number`. A gap in `seq` means lost records.
-- The settings keys are fixed by recon.
+- The settings keys are the `LURCH_AUX` list in `capture/ring.h`, fixed by recon
+  (`docs/oracle.md`). The drain refuses a recording in which any of them moves.
+- The `cmd` angles, moves and buttons are the `CMoveData` values after SetupMove.
+- `flags` is lurch's own bitfield: 1 sprinting, 2 ducked, 4 sliding.
+- `maxspeed` is the oracle's `mv` max speed for that call. It is a diagnostic and is not diffed.
 - `cmd`, `in` and `out` always appear as a triple.
 - Fields change only by bumping the version. The parser rejects an unknown version.
 

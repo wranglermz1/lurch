@@ -72,6 +72,12 @@ pattern. Retail strips it.
     tools/dump.sh     dump the running game into dumps/current.bin
     tools/sect.py     is a dump complete and in the clear?
     tools/rtti.py     resolve a class name to its vtable and vfunc RVAs
+    tools/dec.sh      decompile oracle functions by RVA (Ghidra headless, /opt/ghidra)
+    tools/settings.py name the player-settings offset globals
+    docs/oracle.md    recovered entry points, layouts and settings for the oracle build
+    capture/          lurchcap.dll + inject.exe (guest, mingw) and drain (host); `make`
+    src/              the lurch crate: trace parser, movement step, replay
+    traces/           recorded oracle traces; `cargo test` gates on them
     dumps/            images, committed, hardlinked from HAVM on disk
     ref/              HAVM's extracted convar values and datamap offsets, retail build
 
@@ -92,16 +98,18 @@ stops at the first slot outside .text and has no other terminator.
 ## Approach
 
 The engine is Source-derived, so the base layer is known ground: trace-and-clip player
-move, friction before acceleration, a bump loop with velocity clipping, step-up, the
-2-unit ground snap. Write that from the published Source behaviour. The Respawn
-additions — lurch, slide, traversal, wall climb — are recovered from the binary.
+move, a bump loop with velocity clipping, step-up, the 2-unit ground snap. Write that
+from the published Source behaviour. Ground and air acceleration are not Source's, and
+neither are the Respawn additions (lurch, slide, traversal, wall climb). Those are
+recovered from the binary.
 
 Collision is a swept hull against level geometry, not a rigid-body solver. A constraint
 solver smears exactly the artefacts that make the movement feel the way it does.
 
-Fixed tick, deterministic, f32 to match the game. Input arrives as a usercmd with
-per-tick button edges, not polled held state: a scroll-wheel tap strafe is a press and
-release inside one tick, which is what caps the tap rate.
+One movement step per usercmd, with dt taken from that usercmd's frametime: there is no
+fixed movement tick (see `docs/oracle.md`). Deterministic, f32 to match the game. Input arrives as a usercmd with
+per-command button edges, not polled held state: a scroll-wheel tap strafe is a press and
+release inside one command, which is what caps the tap rate.
 
 Phase 1 is headless. No renderer, no engine, no window. The first deliverable is a
 simulation that eats a usercmd stream and emits a per-tick trajectory to diff.
