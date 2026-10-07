@@ -1,9 +1,11 @@
 # lurch
 
-Apex Legends movement, reimplemented in Rust, in our own engine. The goal is behavioural
-equivalence with the real game on the full movement tech list: strafe accel, air control,
-lurch and tap strafe, slide and slide hop, superjump, mantle, wall climb, superglide,
-jump grace and multi-jump penalty. Everything else a game needs is out of scope.
+Apex Legends movement, reimplemented in Rust, in our own engine: an offline game for
+practising movement. The goal is behavioural equivalence with the real game on the full
+movement tech list (strafe accel, air control, lurch and tap strafe, slide and slide hop,
+superjump, mantle, wall climb, superglide, jump grace and multi-jump penalty) and on the
+camera's answer to movement (FOV scaling, bob, punch, shake). `docs/roadmap.md` is the
+order of work.
 
 Educational purpose: recovering a movement model from a shipped binary and proving the
 recovery with a differential test.
@@ -21,8 +23,9 @@ asked for it.
 
 ## Non-goals
 
-Rendering beyond what a test needs. Netcode, prediction, rollback. Weapons, abilities,
-legends, anims as art. Map loading beyond collision. Multiplayer. A game.
+Rendering beyond a flat-shaded map and a stand-in viewmodel. Netcode, prediction,
+rollback. Weapons, abilities, legends, anims as art. Map loading beyond collision.
+Multiplayer. Game modes, menus, anything that is not practising movement.
 
 ## Definition of done
 
@@ -88,6 +91,7 @@ pattern. Retail strips it.
     traces/pending/   recordings of mechanics not ported yet; `cargo test -- --ignored`
     docs/maps.md      getting R5Reloaded map collision into a mesh
     docs/capture.md   recording on the guest
+    docs/roadmap.md   order of work
     dumps/            images, gitignored, hardlinked from HAVM on disk
     ref/              HAVM's extracted convar values and datamap offsets, retail build
 
