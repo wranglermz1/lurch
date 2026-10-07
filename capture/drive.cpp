@@ -24,6 +24,7 @@ namespace {
 const std::map<std::string, uint64_t> KBUTTONS = {
     {"forward", 0xd4151a8}, {"backward", 0xd4151d0}, {"moveleft", 0xd415198}, {"moveright", 0xd4151c0},
     {"jump", 0xd415120},    {"duck", 0x281a0f20},    {"speed", 0xd415048},    {"walk", 0x281a0fd0},
+    {"left", 0x281a1258},   {"right", 0x281a1220},
 };
 // HELD alone: KeyState reads a set LETGO bit as a key on its way up and returns 0, so the
 // 0x5 HAVM stamps for attack would set the button bit with no forwardmove behind it.
@@ -35,7 +36,7 @@ volatile sig_atomic_t stop = 0;
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: drive KEYS:SECONDS ...  keys: forward backward moveleft moveright jump duck speed walk, - for none\n");
+        fprintf(stderr, "usage: drive KEYS:SECONDS ...  keys: forward backward moveleft moveright jump duck speed walk left right, - for none\n");
         return 2;
     }
     signal(SIGINT, [](int) { stop = 1; });

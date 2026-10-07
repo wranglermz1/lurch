@@ -7,6 +7,12 @@ fn main() {
     println!("map {}", r.map);
     for rec in r {
         let rec = rec.expect("record");
+        if std::env::var("FINDANG").is_ok() {
+            let a = vec3_at(&rec.mv_in, 0xc);
+            let hits: Vec<String> = (0..rec.player_in.len() - 8).step_by(4).filter(|&o| f32_at(&rec.player_in, o) == a[0] && f32_at(&rec.player_in, o + 4) == a[1]).map(|o| format!("{o:x}")).collect();
+            println!("seq {:x} angles {:?} at {}", rec.seq, a, hits.join(" "));
+            continue;
+        }
         if !fields.is_empty() {
             let mvf = std::env::var("MV").is_ok();
             let (a, b) = if mvf { (&rec.mv_in, &rec.mv_out) } else { (&rec.player_in, &rec.player_out) };

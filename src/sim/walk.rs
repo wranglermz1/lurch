@@ -178,11 +178,8 @@ impl Move<'_> {
         let wishdir = scale(wish, 1.0 / l.max(TINY));
         let wishspeed = l.min(1.0) * self.mv.maxspeed;
         let accel = self.ground_accel();
-        let v0 = self.mv.velocity;
         self.ground_friction(wishdir, wishspeed);
-        let v1 = self.mv.velocity;
         self.ground_accelerate(wishdir, wishspeed, accel);
-        if std::env::var("DBG").is_ok() { eprintln!("ground dt {} v0 {:?} wish {:?} wishspeed {} accel {} lp {:?} sf {} after friction {:?} after accel {:?} max {}", self.g.frametime, v0, wish, wishspeed, accel, self.p.last_plane, self.p.surface_friction, v1, self.mv.velocity, self.mv.maxspeed); }
 
         if len(self.mv.velocity) < MIN_GROUND_SPEED {
             self.mv.velocity = ZERO;
