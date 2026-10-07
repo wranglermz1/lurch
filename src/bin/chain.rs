@@ -13,7 +13,7 @@ fn main() {
                 e.0 += 1;
             }
         }
-        println!("{p}: {} calls, {} resyncs, {} not recorded", c.calls, c.resyncs.len(), c.unrecorded);
+        println!("{p}: {} calls, {} resyncs, {} not recorded, {} changed outside movement", c.calls, c.resyncs.len(), c.unrecorded, c.external);
         for (k, (n, seq, ex)) in why {
             println!("    {k:22} {n:5}  first seq {seq:x}: {ex}");
         }

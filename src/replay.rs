@@ -121,6 +121,9 @@ pub struct Chain {
     pub resyncs: Vec<(u32, String)>,
     /// Calls whose input was not recorded; the chain restarts after each.
     pub unrecorded: usize,
+    /// Calls where something outside movement changed the player between calls, as when the
+    /// game restores networked state; the chain restarts from the oracle without a resync.
+    pub external: usize,
 }
 
 /// Replay a recording carrying the simulation's state from call to call. Before each call
@@ -136,8 +139,9 @@ pub fn chain_with(path: &str, s: &Settings) -> std::io::Result<Chain> {
 }
 
 fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
-    let mut c = Chain { calls: 0, resyncs: Vec::new(), unrecorded: 0 };
+    let mut c = Chain { calls: 0, resyncs: Vec::new(), unrecorded: 0, external: 0 };
     let mut carried: Option<(Player, MoveData)> = None;
+    let mut last_out: Option<Player> = None;
     for rec in open(path)? {
         let rec = rec?;
         c.calls += 1;
@@ -146,6 +150,7 @@ fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
             carried = None;
             continue;
         }
+        let out = oracle::player(&rec.player_out);
         if let Some((cp, cmv)) = &mut carried {
             let g = oracle::globals(&rec.globals, cp.lagged);
             cp.prev_velocity = cmv.velocity;
@@ -162,16 +167,22 @@ fn chain_as(path: &str, s: Option<&Settings>) -> std::io::Result<Chain> {
                 d.push(format!("velocity {:?} want {:?}", cmv.velocity, mvin.velocity));
             }
             if !d.is_empty() {
-                // Only signs of zero changed, as when the game restores networked state: not
-                // the simulation's doing, so take the oracle's state without a resync.
-                if moved || !oracle::diff_player_values(cp, &theirs).is_empty() {
+                let external = last_out.as_mut().map_or(Vec::new(), |lo| {
+                    lo.pre_think(g.curtime);
+                    oracle::diff_player_values(lo, &theirs).iter().map(|e| e.split(' ').next().unwrap().to_string()).collect()
+                });
+                let ours = oracle::diff_player_values(cp, &theirs);
+                if moved || ours.iter().any(|e| !external.iter().any(|f| e.split(' ').next() == Some(f.as_str()))) {
                     c.resyncs.push((rec.seq, d.join("; ")));
+                } else {
+                    c.external += 1;
                 }
                 carried = None;
             }
         }
         let (st, p, mv) = run_as(&rec, carried.as_ref(), s);
         carried = if st.missing == 0 { Some((p, mv)) } else { None };
+        last_out = Some(out);
     }
     Ok(c)
 }

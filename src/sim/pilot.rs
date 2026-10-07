@@ -159,6 +159,7 @@ pub fn settings() -> Settings {
         sv_gravity: 750.0,
         sv_maxvelocity: 34000.0,
         extra_air_accel: 2.0,
+        view: view::ViewTuning { sprint_tilt_accel: 35.0, sprint_tilt_max_vel: 2.0, sprint_tilt_turn_range: 120.0 },
     }
 }
 

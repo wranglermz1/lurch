@@ -10,6 +10,7 @@ pub mod math;
 pub mod pilot;
 pub mod setup;
 pub mod sprint;
+pub mod view;
 pub mod walk;
 
 use math::V3;
@@ -81,6 +82,7 @@ pub struct Settings {
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
+    pub view: view::ViewTuning,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -192,6 +194,10 @@ pub struct Player {
     pub dodge_lock: bool,
     pub dodged: bool,
     pub wall_decel_scale: f32,
+    /// Sprint tilt, -1 to 1, its rate, and the yaw it was last measured from.
+    pub sprint_tilt: f32,
+    pub sprint_tilt_vel: f32,
+    pub sprint_tilt_yaw: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -326,6 +332,7 @@ impl Move<'_> {
         self.duck();
         self.update_sprint();
         self.mv.maxspeed = self.max_speed();
+        self.sprint_tilt();
         if matches!(self.p.movetype, 2 | 7) {
             self.full_walk_move();
         }

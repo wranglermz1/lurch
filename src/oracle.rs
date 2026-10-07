@@ -6,6 +6,7 @@ use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
 use crate::sim::climb::Climb;
 use crate::sim::jump::{Lurch, Skip};
+use crate::sim::view::ViewTuning;
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
 const STANCE_BLOCK: usize = 0x78;
@@ -18,6 +19,7 @@ const SV_MAXVELOCITY: f32 = 34000.0;
 const EXTRA_AIR_ACCEL: f32 = 2.0;
 const SKIP_TIME: f32 = 1.0;
 const JUMP_GRACEPERIOD: f32 = 0.2;
+const VIEW_CONVARS: ViewTuning = ViewTuning { sprint_tilt_accel: 35.0, sprint_tilt_max_vel: 2.0, sprint_tilt_turn_range: 120.0 };
 
 /// The wallrun_*, wallclimb_* and automantle_* ConVars the climb reads.
 const WALL_CONVARS: Climb = Climb {
@@ -170,6 +172,7 @@ pub fn settings(blob: &[u8]) -> Settings {
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
         extra_air_accel: EXTRA_AIR_ACCEL,
+        view: VIEW_CONVARS,
     }
 }
 
@@ -263,6 +266,9 @@ pub fn player(p: &[u8]) -> Player {
         dodge_lock: byte(p, 0x30ee) != 0,
         dodged: byte(p, 0x3094) != 0,
         wall_decel_scale: f32_at(p, 0x26a8),
+        sprint_tilt: f32_at(p, 0x1eb8),
+        sprint_tilt_vel: f32_at(p, 0x282c),
+        sprint_tilt_yaw: f32_at(p, 0x2828),
     }
 }
 
@@ -479,6 +485,9 @@ fn diff_player_as(ours: &Player, theirs: &Player, norm: fn(String) -> String) ->
     field!(hanging);
     field!(dodge_lock);
     field!(dodged);
+    field!(sprint_tilt);
+    field!(sprint_tilt_vel);
+    field!(sprint_tilt_yaw);
     if ours.ground.is_some() != theirs.ground.is_some() {
         out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
     }
@@ -556,6 +565,9 @@ pub fn with_state(mut base: Player, state: &Player) -> Player {
     base.hanging = state.hanging;
     base.dodge_lock = state.dodge_lock;
     base.dodged = state.dodged;
+    base.sprint_tilt = state.sprint_tilt;
+    base.sprint_tilt_vel = state.sprint_tilt_vel;
+    base.sprint_tilt_yaw = state.sprint_tilt_yaw;
     base.ground = state.ground;
     base
 }

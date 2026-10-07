@@ -113,7 +113,7 @@ stops at the first slot outside .text and has no other terminator.
 ## Fidelity reached
 
 `cargo test` replays every recording two ways, and both must be bit-exact on origin,
-velocity and all 52 modelled player fields:
+velocity and all 55 modelled player fields:
 - call by call, each call starting from the oracle's state;
 - chained, the simulation carrying its own state from call to call for whole recordings.
 
