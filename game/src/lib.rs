@@ -1,6 +1,7 @@
 pub mod args;
 pub mod binds;
 pub mod cmd;
+pub mod convert;
 pub mod hud;
 pub mod limiter;
 pub mod look;

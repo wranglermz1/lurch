@@ -667,7 +667,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | M4 | Input to commands (`CmdPlugin`) | cloud | done: `input::` 21 tests pass headless (every case listed, plus the clamp); values asserted through `key_state` |
 | M5 | Simulation loop (`SimPlugin`) | cloud | done: `sim::` 7 tests pass, shell equals a bare Pilot loop bit for bit over 599 frames with a slide and jumps; a mutation (view frame on the pre-step clock) fails it; grep rule prints nothing |
 | M6 | Scripts and the headless binary | cloud | done: `script::` 5 tests pass; both scripts print one identical `final` line on two headless runs. `tour.txt` sprints, slides 3.3 s down the hill and slide-jumps; `tapstrafe.txt` bends a jump about 73° with wheel taps on alternate frames (taps on consecutive frames edge once, by design) |
-| M7 | Map, camera and body rendering | cloud | not started |
+| M7 | Map, camera and body rendering | cloud | done: `convert::` 3 tests pass; ignored `render::` passes on lavapipe (top-left (140,178,217), centre (209,178,151), bottom-centre (192,192,192)). xvfb shots at wall 128, ramp 30 and hill: level horizon, every face drawn, sun-facing-away faces shaded not black, checker visible, sky above |
 | M8 | Playable core: flags, window, timing, cursor | cloud (+ workstation first play) | not started |
 | M9 | HUD, spots, script run under xvfb | cloud | not started |
 | M10 | Workstation verification and docs | workstation | not started |
