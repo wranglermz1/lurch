@@ -27,8 +27,9 @@ is recovered into `docs/oracle.md` as behaviour, not decompiler output.
 
 Window, mouse and keyboard into usercmds (per-command button edges, so a scroll-wheel tap
 strafe works), first-person camera, the test map (`src/testmap.rs`) drawn flat-shaded. The
-simulation side is ready: `pilot::Pilot` is the loop a frame runs, one `step` per command.
-Needs a windowing and rendering crate; ask before adding one.
+simulation side is ready: `pilot::Pilot` is the loop a frame runs, one `step` per command,
+then `Player::view_frame`, and the camera comes from `eye_position`, `camera_angles` and
+`view_fov`. Needs a windowing and rendering crate; ask before adding one.
 
 ## 3. Camera feel
 
@@ -41,10 +42,12 @@ capture hook records the engine's view setup each frame (eye origin, view angles
 punch, FOV, view matrix), and a replay gate compares ours to it as the movement gate does.
 
 Done: the state the movement call keeps (sprint tilt, view punch springs and the jump,
-landing and wall kicks) and the view setup's frame update (slide tilt, slide FOV ease) are
-ported and exact on the recordings, and so are the sprint transition times behind the
-sprint eye drop; roll, FOV and eye drop are composed from them. Next: sprint shake; on the workstation, record the command's random seed so kicks
-can be drawn in replay, and hook the view setup's output to check what is composed.
+landing and wall kicks, sprint transition times, eye height through a duck) and the view
+setup's frame update (slide tilt, slide FOV ease) are ported and exact on the recordings.
+The camera is composed from them: `Player::eye_position`, `camera_angles` (punch and
+roll) and `view_fov`. Next: sprint shake; on the workstation, record the command's random
+seed so kicks can be drawn in replay, and hook the view setup's output to check what is
+composed.
 
 ## 4. Viewmodel
 

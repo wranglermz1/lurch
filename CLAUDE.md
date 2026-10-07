@@ -130,8 +130,9 @@ crouch jump, air duck, slide, slide hop, slide jump; and seeded random input
 (`tools/fuzz.py`). Mantle is not ported.
 
 Camera: what the movement call keeps for the view (sprint tilt, view punch springs, fall
-speed, sprint transition times, eye height through a duck) is among those fields, and so is what the view setup updates once a frame between
-calls (slide tilt, FOV ease), checked from each call's output to the next call's input.
+speed, sprint transition times, eye height through a duck) is among those fields, and so
+is what the view setup updates once a frame between calls (slide tilt, FOV ease), checked
+from each call's output to the next call's input.
 View kicks draw from the command's random seed, which the recordings lack; the replay
 checks the kick lands on the same call and takes the oracle's punch. `docs/camera.md`.
 
