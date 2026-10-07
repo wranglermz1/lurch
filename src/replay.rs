@@ -4,15 +4,11 @@ use std::borrow::Cow;
 
 use crate::ltr::{open, Record};
 use crate::oracle::{self, outcome, LogTracer, Outcome};
-use crate::sim::math::V3;
-use crate::sim::setup::{setup_move, UserCmd};
-use crate::sim::{pilot, Move, MoveData, Player, Scratch, Settings, Tracer};
+use crate::sim::pilot::{self, Pilot};
+use crate::sim::setup::UserCmd;
+use crate::sim::{Move, MoveData, Player, Scratch, Settings, Tracer};
 
 pub const TOL: f32 = 1e-3;
-
-/// Every surface stood on in the recordings (indices 20, 22, 87) gives the cap, 1.0, so one
-/// default stands in for the game's surface property table until that is extracted.
-const DEFAULT_SURFACE_FRICTION: f32 = 0.8;
 
 pub struct Step {
     pub seq: u32,
@@ -85,11 +81,11 @@ pub fn simulate_with(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mu
         mv.velocity = cmv.velocity;
     }
     let g = oracle::globals(&rec.globals, p.lagged);
-    let surface = |_: u32| DEFAULT_SURFACE_FRICTION;
+    let surface = |_: u32| pilot::SURFACE_FRICTION;
     {
         let mut m = Move { p: &mut p, mv: &mut mv, s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
         m.pre_think();
-        m.process_movement(oracle::SV_OPTIMIZEDMOVEMENT);
+        m.process_movement(pilot::SV_OPTIMIZEDMOVEMENT);
     }
     let mut diffs = oracle::diff_player(&p, &oracle::player(&rec.player_out));
     diffs.extend(oracle::diff_move(&mv, &oracle::move_data(&rec.mv_out, rec.seq)));
@@ -209,41 +205,25 @@ pub fn chain_world(path: &str, world: &mut dyn Tracer, s: Option<&Settings>) -> 
 /// command was not recorded.
 pub fn from_commands(path: &str, mut world: Option<&mut dyn Tracer>) -> std::io::Result<Vec<Step>> {
     let s = pilot::settings();
-    let surface = |_: u32| DEFAULT_SURFACE_FRICTION;
     let mut steps = Vec::new();
-    let mut carried: Option<(Player, V3, V3, u32)> = None;
+    let mut pilot: Option<Pilot> = None;
     for rec in open(path)? {
         let rec = rec?;
         if !oracle::input_recorded(&rec) {
             break;
         }
+        let pl = pilot.get_or_insert_with(|| Pilot::new(oracle::move_in(&rec).origin));
         let input = oracle::move_data(&rec.mv_in, rec.seq);
-        let (mut p, origin, velocity, oldbuttons) = match carried.take() {
-            Some(c) => c,
-            None => {
-                let origin = oracle::move_in(&rec).origin;
-                (pilot::spawn(origin), origin, [0.0; 3], input.oldbuttons)
-            }
-        };
-        let cmd = UserCmd { command_number: rec.seq, angles: input.angles, forward: input.forward, side: input.side, up: input.up, buttons: input.buttons, frametime: 0.0 };
-        let mut mv = setup_move(&s, &cmd, oldbuttons, origin, velocity);
-        p.prev_velocity = velocity;
-        p.abs_origin = origin;
-        p.view_angles = mv.angles;
-        let g = oracle::globals(&rec.globals, p.lagged);
+        let clock = oracle::globals(&rec.globals, 1.0);
+        let cmd = UserCmd { command_number: rec.seq, angles: input.angles, forward: input.forward, side: input.side, up: input.up, buttons: input.buttons, frametime: clock.frametime };
         let mut log = LogTracer::new(&rec.traces);
         let tr: &mut dyn Tracer = match world.as_deref_mut() {
             Some(w) => w,
             None => &mut log,
         };
-        {
-            let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
-            m.pre_think();
-            m.process_movement(oracle::SV_OPTIMIZEDMOVEMENT);
-        }
-        let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };
+        pl.step(&s, &cmd, clock.curtime, tr);
+        let got = Outcome { origin: pl.origin, velocity: pl.velocity, on_ground: pl.player.ground.is_some(), surface_friction: pl.player.surface_friction };
         steps.push(Step { seq: rec.seq, want: outcome(&rec), got, missing: log.missing.len(), unused: log.unused(), diffs: Vec::new() });
-        carried = Some((p, mv.origin, mv.velocity, mv.buttons));
     }
     Ok(steps)
 }

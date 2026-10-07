@@ -18,7 +18,6 @@ const SV_MAXVELOCITY: f32 = 34000.0;
 const EXTRA_AIR_ACCEL: f32 = 2.0;
 const SKIP_TIME: f32 = 1.0;
 const JUMP_GRACEPERIOD: f32 = 0.2;
-pub const SV_OPTIMIZEDMOVEMENT: bool = true;
 
 /// The wallrun_*, wallclimb_* and automantle_* ConVars the climb reads.
 const WALL_CONVARS: Climb = Climb {

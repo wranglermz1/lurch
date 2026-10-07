@@ -1,8 +1,15 @@
-//! The pilot class as the oracle plays it: player settings and ConVars, and a player as it
-//! spawns. Every recording agrees on these, except `land_slowdown_height_min` in the four
-//! earliest walking takes, which never land.
+//! The pilot class as the oracle plays it: player settings and ConVars, a player as it
+//! spawns, and the loop that runs it one command at a time. Every recording agrees on these,
+//! except `land_slowdown_height_min` in the four earliest walking takes, which never land.
 
+use super::setup::{setup_move, UserCmd};
 use super::*;
+
+pub const SV_OPTIMIZEDMOVEMENT: bool = true;
+
+/// Every surface stood on in the recordings (indices 20, 22, 87) gives the cap, 1.0, so one
+/// default stands in for the game's surface property table until that is extracted.
+pub const SURFACE_FRICTION: f32 = 0.8;
 
 pub fn settings() -> Settings {
     Settings {
@@ -194,5 +201,36 @@ pub fn spawn(origin: V3) -> Player {
         wall_decel_scale: 1.0,
         precise_view: true,
         ..Default::default()
+    }
+}
+
+/// A pilot driven by commands, one movement call each, as RunCommand drives the player.
+pub struct Pilot {
+    pub player: Player,
+    pub origin: V3,
+    pub velocity: V3,
+    oldbuttons: u32,
+}
+
+impl Pilot {
+    pub fn new(origin: V3) -> Self {
+        Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0 }
+    }
+
+    /// Runs `cmd` at game time `curtime`, with collision answered by `world`.
+    pub fn step(&mut self, s: &Settings, cmd: &UserCmd, curtime: f32, world: &mut dyn Tracer) {
+        let mut mv = setup_move(s, cmd, self.oldbuttons, self.origin, self.velocity);
+        let p = &mut self.player;
+        p.prev_velocity = self.velocity;
+        p.abs_origin = self.origin;
+        p.view_angles = mv.angles;
+        let g = Globals { curtime, frametime: cmd.frametime * p.lagged };
+        let surface = |_: u32| SURFACE_FRICTION;
+        let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None };
+        m.pre_think();
+        m.process_movement(SV_OPTIMIZEDMOVEMENT);
+        self.origin = mv.origin;
+        self.velocity = mv.velocity;
+        self.oldbuttons = mv.buttons;
     }
 }

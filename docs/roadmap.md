@@ -28,7 +28,7 @@ at known angles, a long hill to slide down. Real map props are deferred.
 
 Window, mouse and keyboard into usercmds (per-command button edges, so a scroll-wheel tap
 strafe works), first-person camera, the map drawn flat-shaded. The simulation side is ready:
-`pilot::spawn`, `setup::setup_move` and `replay::from_commands` show the loop a frame runs. Needs a windowing and
+`pilot::Pilot` is the loop a frame runs, one `step` per command. Needs a windowing and
 rendering crate; ask before adding one.
 
 ## 4. Camera feel
