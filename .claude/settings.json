@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { test -f dumps/current.bin || zstd -dq --long=27 dumps/current.bin.zst -o dumps/current.bin || echo 'lurch: could not unpack dumps/current.bin.zst (is zstd installed?)'; }"
+          }
+        ]
+      }
+    ]
+  }
+}

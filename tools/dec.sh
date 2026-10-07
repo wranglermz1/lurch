@@ -9,6 +9,7 @@
 set -e
 GHIDRA=${GHIDRA:-/opt/ghidra}
 HOST_CPUS=${HOST_CPUS:-12-17}
+taskset -c "$HOST_CPUS" true 2>/dev/null || HOST_CPUS=0-$(($(nproc) - 1))
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 CACHE=${CACHE:-$ROOT/ghidra-cache}
 OUT=$(realpath -m "$1"); shift

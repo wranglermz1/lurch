@@ -92,7 +92,7 @@ pattern. Retail strips it.
     docs/maps.md      getting R5Reloaded map collision into a mesh
     docs/capture.md   recording on the guest
     docs/roadmap.md   order of work
-    dumps/            images, gitignored, hardlinked from HAVM on disk
+    dumps/            the oracle image, committed zstd-compressed; a SessionStart hook unpacks it
     ref/              HAVM's extracted convar values and datamap offsets, retail build
 
 Run the tools from the repo root.
@@ -128,12 +128,12 @@ floor is unverified.
 
 ## Where a session runs
 
-The workstation has everything: the oracle image in `dumps/`, HAVM, Ghidra, the guest
-with the game. A cloud session has only this repo. It can build, run `cargo test`, read
-the recordings in `traces/` and the recovered behaviour in `docs/oracle.md`, and change
-`src/`. It cannot decompile (`dumps/` is never pushed), record, or load map meshes
-(`maps/` is local). Work that needs those goes back to the workstation; say so rather
-than guess at what the binary does.
+The workstation has everything: HAVM, Ghidra, the guest with the game. A cloud session
+has this repo, and with it the oracle image (unpacked to `dumps/current.bin` at session
+start; needs `zstd`). It can build, test, read the recordings and decompile once Ghidra
+is installed: Ghidra 12.x at `/opt/ghidra` (or `GHIDRA=`) with a JDK 21+. It cannot
+record or load map meshes (`maps/` is local). Work that needs those goes back to the
+workstation; say so rather than guess at what the game does.
 
 `cargo test` must stay green on a fresh clone. A new recording that fails goes in
 `traces/pending/` until the mechanic is ported, then moves up to `traces/`.
@@ -160,5 +160,5 @@ simulation that eats a usercmd stream and emits a per-tick trajectory to diff.
 ## Legal
 
 Decompiler output is derivative. Recovered constants and a clean reimplementation written
-from a behavioural spec are the defensible shape. No lifted bytes in the source. `dumps/` holds the oracle image on disk only; it is
-gitignored and was removed from history, so it is never pushed.
+from a behavioural spec are the defensible shape. No lifted bytes in the source. Exception: `dumps/current.bin.zst` holds the oracle image so
+any session can decompile. The repository is private for that reason and must stay so.

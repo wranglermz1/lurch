@@ -2,5 +2,5 @@ ghidra-cache/
 /target
 traces/local/
 maps/
-dumps/
+dumps/current.bin
 __pycache__/
