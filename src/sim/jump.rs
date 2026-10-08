@@ -3,6 +3,7 @@
 //! Titanfall leftovers in the same code (dodge, double jump, super jump, boost, wall jump)
 //! are treated as off, and the jump-through-window hint is not modelled.
 
+use super::cue::Cue;
 use super::math::*;
 use super::Move;
 
@@ -131,6 +132,7 @@ impl Move<'_> {
             height *= 1.0 - (1.0 - self.s.anti_multi_jump_height_frac) * f;
         }
 
+        self.cues.push(Cue::Jump { wall: !world, skip: since_land < self.s.skip.time && world, surface: self.p.surface });
         self.set_ground(None);
         self.p.jumped_since_ground = true;
         let speed = ((self.s.sv_gravity + self.s.sv_gravity) * height).sqrt();

@@ -13,7 +13,7 @@ fn main() {
                 e.0 += 1;
             }
         }
-        println!("{p}: {} calls, {} resyncs", c.calls, c.resyncs.len());
+        println!("{p}: {} calls, {} resyncs, {} network updates", c.calls, c.resyncs.len(), c.network_updates);
         for (k, (n, seq, ex)) in why {
             println!("    {k:22} {n:5}  first seq {seq:x}: {ex}");
         }

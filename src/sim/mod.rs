@@ -2,13 +2,16 @@
 //! divergence can be pinned to one function (docs/oracle.md maps each to its RVA).
 
 pub mod collide;
+pub mod cue;
 pub mod duck;
 pub mod ground;
 pub mod jump;
 pub mod math;
 pub mod sprint;
+pub mod step;
 pub mod walk;
 
+use cue::{Cue, Probe};
 use math::V3;
 
 /// Per-stance block of the player settings.
@@ -24,6 +27,10 @@ pub struct Stance {
     pub low_acceleration: f32,
     pub sprint_acceleration: f32,
     pub sprint_deceleration: f32,
+    /// Milliseconds between footsteps.
+    pub footstep_interval: i32,
+    pub footstep_interval_sprint: i32,
+    pub footstep_min_speed: f32,
 }
 
 #[derive(Default)]
@@ -77,6 +84,17 @@ pub struct Settings {
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
+    /// Horizontal speed lost against a wall that counts as an impact.
+    pub impact_speed: f32,
+    /// Fall heights in feet: a hard landing, and the land animation's low/medium/high.
+    pub hard_fall_dist: f32,
+    pub land_dist_low: f32,
+    pub land_dist_medium: f32,
+    pub land_dist_high: f32,
+    pub sprint_start_delay: f32,
+    pub sprint_start_duration: f32,
+    pub sprint_start_fast_duration: f32,
+    pub sprint_end_duration: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -162,6 +180,26 @@ pub struct Player {
     pub ground_plane: V3,
     pub ledge_origin: V3,
     pub move_trace: MoveTraceInfo,
+    /// The last surface stood on.
+    pub surface: Option<u32>,
+    /// Milliseconds until the next footstep may sound.
+    pub step_time: f32,
+    pub step_side: bool,
+    pub step_probe: Option<Probe>,
+    /// Downward speed while airborne, the landing's measure.
+    pub fall_velocity: f32,
+    /// The last landing's speed, which picks the land animation.
+    pub land_speed: f32,
+    pub land_probe: Option<Probe>,
+    /// The last landing's speed if it was hard, else 0.
+    pub heavy_land_speed: f32,
+    /// Sprint bookkeeping for the sprint blend (`sprint_fraction`): when the intent to
+    /// sprint began, when sprint started and stopped, and the blend at those moments.
+    pub sprint_intent_time: f32,
+    pub sprint_start_time: f32,
+    pub sprint_start_fraction: f32,
+    pub sprint_end_time: f32,
+    pub sprint_end_fraction: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -228,6 +266,10 @@ pub trait Tracer {
 pub struct Scratch {
     pub probe: Option<Trace>,
     pub probe_end: V3,
+    /// Where the player stood and how it moved when the call began: the entity's own origin
+    /// and velocity until FinishMove.
+    pub start_origin: V3,
+    pub start_velocity: V3,
 }
 
 pub struct Move<'a> {
@@ -241,22 +283,28 @@ pub struct Move<'a> {
     pub scratch: Scratch,
     /// The stance block PlayerMove picked on entry; it holds for the whole call.
     pub stance_index: Option<usize>,
+    pub cues: Vec<Cue>,
 }
 
 const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
 
 impl Move<'_> {
     /// Runs before each movement call: while standing, remember when and with which up
-    /// vector, for the jump grace period.
+    /// vector, for the jump grace period; airborne, how fast the player is falling.
     pub fn pre_think(&mut self) {
         if self.on_ground() {
             self.p.left_ground_time = self.g.curtime;
             self.p.left_ground_up = self.p.up;
+        } else if !self.p.has_parent {
+            let v = self.mv.velocity;
+            self.p.fall_velocity = (v[1] * 0.0 + v[0] * 0.0) - v[2] * 1.0;
         }
     }
 
     /// C_GameMovement::ProcessMovement: the whole movement call for one command.
     pub fn process_movement(&mut self, optimized: bool) {
+        self.scratch.start_origin = self.mv.origin;
+        self.scratch.start_velocity = self.mv.velocity;
         self.mv.maxspeed = self.max_speed();
         self.player_move(optimized);
         self.mv.oldbuttons = self.mv.buttons;
@@ -281,6 +329,12 @@ impl Move<'_> {
                 self.categorize(false);
             }
         }
+        if !self.on_ground() {
+            let v = self.mv.velocity;
+            let g = math::GRAVITY_DIR;
+            self.p.fall_velocity = g[1] * v[1] + g[0] * v[0] + g[2] * v[2];
+        }
+        self.update_step_sound();
         self.duck();
         self.update_sprint();
         self.mv.maxspeed = self.max_speed();

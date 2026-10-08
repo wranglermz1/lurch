@@ -5,6 +5,7 @@
 use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
 use crate::sim::jump::{Lurch, Skip};
+use crate::sim::cue::Probe;
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
 const STANCE_BLOCK: usize = 0x78;
@@ -37,6 +38,9 @@ pub fn settings(blob: &[u8]) -> Settings {
             low_acceleration: f32_at(blob, o + 0x58),
             sprint_acceleration: f32_at(blob, o + 0x5c),
             sprint_deceleration: f32_at(blob, o + 0x60),
+            footstep_interval: u32_at(blob, o + 0x30) as i32,
+            footstep_interval_sprint: u32_at(blob, o + 0x34) as i32,
+            footstep_min_speed: f32_at(blob, o + 0x40),
         }
     };
     Settings {
@@ -89,6 +93,15 @@ pub fn settings(blob: &[u8]) -> Settings {
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
         extra_air_accel: EXTRA_AIR_ACCEL,
+        impact_speed: f32_at(blob, 0x7ec),
+        hard_fall_dist: f32_at(blob, 0xdb8),
+        land_dist_low: f32_at(blob, 0xdbc),
+        land_dist_medium: f32_at(blob, 0xdc0),
+        land_dist_high: f32_at(blob, 0xdc4),
+        sprint_start_delay: f32_at(blob, 0xd70),
+        sprint_start_duration: f32_at(blob, 0xd74),
+        sprint_start_fast_duration: f32_at(blob, 0xd78),
+        sprint_end_duration: f32_at(blob, 0xd7c),
     }
 }
 
@@ -161,7 +174,33 @@ pub fn player(p: &[u8]) -> Player {
         ground_plane: vec3_at(p, 0x3e60),
         ledge_origin: vec3_at(p, 0x30e0),
         move_trace: Default::default(),
+        surface: (u64_at(p, 0x3a58) != 0).then_some(UNKNOWN_SURFACE),
+        step_time: f32_at(p, 0x25f0),
+        step_side: u32_at(p, 0x1a38) != 0,
+        step_probe: pending(p, 0x1a24),
+        fall_velocity: f32_at(p, 0x1a68),
+        land_speed: f32_at(p, 0x25c0),
+        land_probe: pending(p, 0x19c8),
+        heavy_land_speed: f32_at(p, 0x19cc),
+        sprint_intent_time: f32_at(p, 0x2618),
+        sprint_start_time: f32_at(p, 0x2608),
+        sprint_start_fraction: f32_at(p, 0x260c),
+        sprint_end_time: f32_at(p, 0x2610),
+        sprint_end_fraction: f32_at(p, 0x2614),
     }
+}
+
+/// The oracle keeps a pointer to the surface's data, not its index.
+pub const UNKNOWN_SURFACE: u32 = u32::MAX;
+
+fn u64_at(b: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes(b[off..off + 8].try_into().unwrap())
+}
+
+/// A queued ground probe, by its job handle. Where it was aimed is not kept on the player, so
+/// it is aimed again from where the player is now, with its collision bounds' height.
+fn pending(p: &[u8], off: usize) -> Option<Probe> {
+    (u32_at(p, off) != u32::MAX).then(|| Probe::below(vec3_at(p, 0x14c), vec3_at(p, 0x266c), f32_at(p, 0x47c) - f32_at(p, 0x470)))
 }
 
 pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
@@ -314,9 +353,27 @@ pub fn diff_player(ours: &Player, theirs: &Player) -> Vec<String> {
     field!(ledge_origin);
     field!(step_height);
     field!(prev_velocity);
-    if ours.ground.is_some() != theirs.ground.is_some() {
-        out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
+    field!(step_time);
+    field!(step_side);
+    field!(fall_velocity);
+    field!(land_speed);
+    field!(heavy_land_speed);
+    field!(sprint_intent_time);
+    field!(sprint_start_time);
+    field!(sprint_start_fraction);
+    field!(sprint_end_time);
+    field!(sprint_end_fraction);
+    macro_rules! present {
+        ($f:ident) => {
+            if ours.$f.is_some() != theirs.$f.is_some() {
+                out.push(format!("{} {} want {}", stringify!($f), ours.$f.is_some(), theirs.$f.is_some()));
+            }
+        };
     }
+    present!(ground);
+    present!(surface);
+    present!(step_probe);
+    present!(land_probe);
     out
 }
 
@@ -375,5 +432,18 @@ pub fn with_state(mut base: Player, state: &Player) -> Player {
     base.step_height = state.step_height;
     base.prev_velocity = state.prev_velocity;
     base.ground = state.ground;
+    base.surface = state.surface;
+    base.step_time = state.step_time;
+    base.step_side = state.step_side;
+    base.step_probe = state.step_probe;
+    base.fall_velocity = state.fall_velocity;
+    base.land_speed = state.land_speed;
+    base.land_probe = state.land_probe;
+    base.heavy_land_speed = state.heavy_land_speed;
+    base.sprint_intent_time = state.sprint_intent_time;
+    base.sprint_start_time = state.sprint_start_time;
+    base.sprint_start_fraction = state.sprint_start_fraction;
+    base.sprint_end_time = state.sprint_end_time;
+    base.sprint_end_fraction = state.sprint_end_fraction;
     base
 }

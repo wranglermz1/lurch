@@ -2,6 +2,7 @@
 
 use crate::ltr::{open, Record};
 use crate::oracle::{self, outcome, LogTracer, Outcome};
+use crate::sim::cue::Cue;
 use crate::sim::{Move, MoveData, Player, Scratch, Tracer};
 
 pub const TOL: f32 = 1e-3;
@@ -18,6 +19,7 @@ pub struct Step {
     pub unused: usize,
     /// Modelled fields beyond the outcome that disagree with the oracle.
     pub diffs: Vec<String>,
+    pub cues: Vec<Cue>,
 }
 
 impl Step {
@@ -69,15 +71,16 @@ pub fn simulate(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mut dyn
     let s = oracle::settings(&rec.settings);
     let g = oracle::globals(&rec.globals, p.lagged);
     let surface = |_: u32| DEFAULT_SURFACE_FRICTION;
-    {
-        let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
+    let cues = {
+        let mut m = Move { p: &mut p, mv: &mut mv, s: &s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None, cues: Vec::new() };
         m.pre_think();
         m.process_movement(oracle::SV_OPTIMIZEDMOVEMENT);
-    }
+        m.cues
+    };
     let mut diffs = oracle::diff_player(&p, &oracle::player(&rec.player_out));
     diffs.extend(oracle::diff_move(&mv, &oracle::move_data(&rec.mv_out, rec.seq)));
     let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };
-    (Step { seq: rec.seq, want, got, missing: 0, unused: 0, diffs }, p, mv)
+    (Step { seq: rec.seq, want, got, missing: 0, unused: 0, diffs, cues }, p, mv)
 }
 
 pub fn file(path: &str) -> std::io::Result<Vec<Step>> {
@@ -88,25 +91,60 @@ pub struct Chain {
     pub calls: usize,
     /// Calls where the carried state had to be thrown away for the oracle's, and why.
     pub resyncs: Vec<(u32, String)>,
+    /// Calls where a server update replaced a networked timestamp (`network_update`).
+    pub network_updates: usize,
+}
+
+/// What happens to the carried player between two movement calls: FinishMove, and the part
+/// of RunCommand before ProcessMovement. Standing, the fall velocity comes back from outside
+/// movement (a networked copy, e.g. 0.03125), so it is taken from the oracle.
+fn between_calls(cp: &mut Player, cmv: &MoveData, rec: &Record, theirs: &Player) {
+    let g = oracle::globals(&rec.globals, cp.lagged);
+    cp.prev_velocity = cmv.velocity;
+    if cp.ground.is_some() {
+        cp.left_ground_time = g.curtime;
+        cp.left_ground_up = cp.up;
+        cp.fall_velocity = theirs.fall_velocity;
+    } else if !cp.has_parent {
+        let v = cmv.velocity;
+        cp.fall_velocity = (v[1] * 0.0 + v[0] * 0.0) - v[2] * 1.0;
+    }
+}
+
+/// The sprint timestamps are sent to the local player (`DT_LocalPlayerExclusive`), so a
+/// server update replaces the predicted ones with the server's, stamped on its 0.05 s tick.
+/// Movement writes them once per change, so the server's stay until the next change.
+fn network_update(cp: &mut Player, theirs: &Player) -> bool {
+    let fields = [
+        (&mut cp.sprint_intent_time, theirs.sprint_intent_time),
+        (&mut cp.sprint_start_time, theirs.sprint_start_time),
+        (&mut cp.sprint_start_fraction, theirs.sprint_start_fraction),
+        (&mut cp.sprint_end_time, theirs.sprint_end_time),
+        (&mut cp.sprint_end_fraction, theirs.sprint_end_fraction),
+    ];
+    let mut any = false;
+    for (ours, theirs) in fields {
+        if ours.to_bits() != theirs.to_bits() {
+            *ours = theirs;
+            any = true;
+        }
+    }
+    any
 }
 
 /// Replay a recording carrying the simulation's state from call to call. Before each call
 /// the carried state is checked against the oracle's input; a mismatch (drift, or something
 /// outside movement changing the player) is recorded and the chain restarts from the oracle.
 pub fn chain(path: &str) -> std::io::Result<Chain> {
-    let mut c = Chain { calls: 0, resyncs: Vec::new() };
+    let mut c = Chain { calls: 0, resyncs: Vec::new(), network_updates: 0 };
     let mut carried: Option<(Player, MoveData)> = None;
     for rec in open(path)? {
         let rec = rec?;
         c.calls += 1;
         if let Some((cp, cmv)) = &mut carried {
-            let g = oracle::globals(&rec.globals, cp.lagged);
-            cp.prev_velocity = cmv.velocity;
-            if cp.ground.is_some() {
-                cp.left_ground_time = g.curtime;
-                cp.left_ground_up = cp.up;
-            }
             let theirs = oracle::player(&rec.player_in);
+            between_calls(cp, cmv, &rec, &theirs);
+            c.network_updates += network_update(cp, &theirs) as usize;
             let mut d = oracle::diff_player(cp, &theirs);
             let mvin = oracle::move_data(&rec.mv_in, rec.seq);
             if cmv.origin != mvin.origin {
@@ -135,12 +173,7 @@ pub fn chain_world(path: &str, world: &mut dyn Tracer) -> std::io::Result<(f32, 
     for rec in open(path)? {
         let rec = rec?;
         if let Some((cp, cmv)) = &mut carried {
-            let g = oracle::globals(&rec.globals, cp.lagged);
-            cp.prev_velocity = cmv.velocity;
-            if cp.ground.is_some() {
-                cp.left_ground_time = g.curtime;
-                cp.left_ground_up = cp.up;
-            }
+            between_calls(cp, cmv, &rec, &oracle::player(&rec.player_in));
         }
         let (s, p, mv) = simulate(&rec, carried.as_ref(), world);
         worst_origin = worst_origin.max(s.origin_err());

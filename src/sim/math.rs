@@ -2,6 +2,7 @@ pub type V3 = [f32; 3];
 
 pub const ZERO: V3 = [0.0; 3];
 pub const TINY: f32 = 1.084_202_2e-19;
+pub const GRAVITY_DIR: V3 = [0.0, 0.0, -1.0];
 
 pub fn dot(a: V3, b: V3) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
