@@ -167,6 +167,16 @@ pub fn settings() -> Settings {
             jump_outward_speed: 188.0,
             ..crate::oracle::MANTLE_CONVARS
         },
+        zipline: zipline::Tuning {
+            mount_time: 0.5,
+            use_cooldown: 0.4,
+            speed: 600.0,
+            acceleration: 400.0,
+            jump_off_speed: 400.0,
+            jump_off_damp: 1.0,
+            view_offset: [-16.0, -6.0, 0.0],
+            context_action_can_use: true,
+        },
         sv_gravity: 750.0,
         sv_maxvelocity: 34000.0,
         extra_air_accel: 2.0,
@@ -237,6 +247,7 @@ pub fn spawn(origin: V3) -> Player {
         same_wall: true,
         wall_decel_scale: 1.0,
         precise_view: true,
+        zipline_allowed: true,
         fov_from: 1.0,
         fov_to: 1.0,
         ..Default::default()
@@ -294,6 +305,7 @@ impl Pilot {
         let g = Globals { curtime, frametime: cmd.frametime * p.lagged };
         let surface = |_: u32| SURFACE_FRICTION;
         let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None, root };
+        m.player_use();
         m.pre_think();
         m.process_movement(SV_OPTIMIZEDMOVEMENT);
         self.origin = mv.origin;

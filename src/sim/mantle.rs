@@ -47,10 +47,16 @@ pub struct Mantle {
     pub grapple_auto_mantle: f32,
 }
 
-/// The traversal animation's root, placed at the ledge, for a traversal type at a cycle.
-/// `None` follows the procedural path, as `traversal_anim 0` would.
+/// What the movement takes from animations, which live in model files: the traversal
+/// animation's root, placed at the ledge, for a traversal type at a cycle (`None` follows the
+/// procedural path, as `traversal_anim 0` would); and the zipline mount's length when the
+/// viewmodel has a mount sequence (`None`: `mountZiplineTime`).
 pub trait RootMotion {
     fn place(&self, kind: i32, cycle: f32, ledge: V3, forward: V3) -> Option<V3>;
+
+    fn zipline_mount_time(&self) -> Option<f32> {
+        None
+    }
 }
 
 pub struct Procedural;

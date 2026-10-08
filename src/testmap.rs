@@ -1,9 +1,11 @@
 //! A plain map built in code: a large floor and, in lanes off it, walls, steps and ramps in
-//! sizes either side of the limits the settings set, crates, and a long hill to slide down.
-//! Each lane has a spot to start from, facing its features.
+//! sizes either side of the limits the settings set, crates, a long hill to slide down, and
+//! ziplines (down, up onto a ledge, up a tower, a chain of two, a sagging one). Each lane has
+//! a spot to start from, facing its features.
 
 use crate::sim::math::V3;
-use crate::world::Tri;
+use crate::sim::zipline::{Zipline, VERTICAL};
+use crate::world::{Tri, World};
 
 pub struct Spot {
     pub name: String,
@@ -14,12 +16,49 @@ pub struct Spot {
 pub struct TestMap {
     pub tris: Vec<Tri>,
     pub spots: Vec<Spot>,
+    pub ziplines: Vec<Zipline>,
 }
 
 impl TestMap {
     pub fn spot(&self, name: &str) -> &Spot {
         self.spots.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("no spot {name}"))
     }
+
+    pub fn world(&self) -> World {
+        let mut w = World::from_tris(self.tris.clone());
+        w.ziplines = self.ziplines.clone();
+        w
+    }
+}
+
+/// Ropes run straight between their ends unless a lane shapes them. The auto-detach distance
+/// is the map's to set; these ride to the end.
+const AUTO_DETACH: f32 = 0.0;
+const SAG: f32 = 48.0;
+const SAG_POINTS: usize = 9;
+
+/// Ziplines from `points[0]` through each later point, one rope per span, the last ending
+/// in a zipline_end. Ids follow on from those already in `out`.
+fn chain(out: &mut Vec<Zipline>, ropes: &[Vec<V3>]) -> u32 {
+    let first = out.len() as u32 + 1;
+    for (i, pts) in ropes.iter().enumerate() {
+        let id = first + i as u32;
+        let mut z = Zipline::line(id, pts.clone(), id + 1, AUTO_DETACH);
+        z.prev = (i > 0).then_some(id - 1);
+        out.push(z);
+    }
+    let last = first + ropes.len() as u32 - 1;
+    out.push(Zipline::end(last + 1, *ropes.last().unwrap().last().unwrap(), last, AUTO_DETACH));
+    first
+}
+
+fn sagging(a: V3, b: V3) -> Vec<V3> {
+    (0..SAG_POINTS)
+        .map(|i| {
+            let t = i as f32 / (SAG_POINTS - 1) as f32;
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t - SAG * 4.0 * t * (1.0 - t)]
+        })
+        .collect()
 }
 
 const LANE: f32 = 512.0;
@@ -103,5 +142,26 @@ pub fn build() -> TestMap {
             cuboid(&mut tris, [x, y, 0.0], [x + CRATE, y + CRATE, CRATE]);
         }
     }
-    TestMap { tris, spots }
+    let mut ziplines = Vec::new();
+    let (y0, _) = next("zipline down".into(), 0.0, &mut spots);
+    let y = y0 + HALF_WIDTH;
+    chain(&mut ziplines, &[vec![[FEATURE_X, y, 160.0], [FEATURE_X + 3072.0, y, 96.0]]]);
+    let (y0, y1) = next("zipline up".into(), 0.0, &mut spots);
+    let y = y0 + HALF_WIDTH;
+    let top = FEATURE_X + 2048.0;
+    cuboid(&mut tris, [top, y0, 0.0], [top + 4.0 * PLATFORM, y1, 380.0]);
+    chain(&mut ziplines, &[vec![[FEATURE_X, y, 128.0], [top + 64.0, y, 480.0]]]);
+    let (y0, y1) = next("zipline vertical".into(), 0.0, &mut spots);
+    let y = y0 + HALF_WIDTH;
+    cuboid(&mut tris, [FEATURE_X + 24.0, y0, 0.0], [FEATURE_X + 24.0 + PLATFORM, y1, 600.0]);
+    let v = chain(&mut ziplines, &[vec![[FEATURE_X, y, 16.0], [FEATURE_X, y, 680.0]]]);
+    ziplines[v as usize - 1].kind = VERTICAL;
+    let (y0, _) = next("zipline chain".into(), 0.0, &mut spots);
+    let y = y0 + HALF_WIDTH;
+    let bend = [FEATURE_X + 1024.0, y + 192.0, 140.0];
+    chain(&mut ziplines, &[vec![[FEATURE_X, y, 160.0], bend], vec![bend, [FEATURE_X + 2048.0, y, 120.0]]]);
+    let (y0, _) = next("zipline sag".into(), 0.0, &mut spots);
+    let y = y0 + HALF_WIDTH;
+    chain(&mut ziplines, &[sagging([FEATURE_X, y, 176.0], [FEATURE_X + 2048.0, y, 176.0])]);
+    TestMap { tris, spots, ziplines }
 }

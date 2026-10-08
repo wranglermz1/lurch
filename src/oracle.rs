@@ -7,6 +7,7 @@ use crate::sim::math::{len2, sub, V3};
 use crate::sim::climb::Climb;
 use crate::sim::jump::{Lurch, Skip};
 use crate::sim::mantle::Mantle;
+use crate::sim::zipline;
 use crate::sim::view::{Kick, Spring, ViewTuning};
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
@@ -213,6 +214,16 @@ pub fn settings(blob: &[u8]) -> Settings {
             jump_outward_speed: f32_at(blob, 0x9e4),
             ..MANTLE_CONVARS
         },
+        zipline: zipline::Tuning {
+            mount_time: f32_at(blob, 0xc38),
+            use_cooldown: f32_at(blob, 0xc3c),
+            speed: f32_at(blob, 0xc40),
+            acceleration: f32_at(blob, 0xc44),
+            jump_off_speed: f32_at(blob, 0xc4c),
+            jump_off_damp: f32_at(blob, 0xc50),
+            view_offset: vec3_at(blob, 0xc64),
+            context_action_can_use: byte(blob, 0xe1c) != 0,
+        },
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
         extra_air_accel: EXTRA_AIR_ACCEL,
@@ -265,7 +276,7 @@ pub fn player(p: &[u8]) -> Player {
         sprint_until: f32_at(p, 0x25f8),
         sprint_started_fresh: byte(p, 0x25fc) != 0,
         sprint_toggle_lock: byte(p, 0x1881) != 0,
-        sprint_blocked: byte(p, 0x2605) != 0 || u32_at(p, 0x1764) != 0 || byte(p, 0x2c7c) != 0,
+        sprint_blocked: byte(p, 0x2605) != 0 || byte(p, 0x2c7c) != 0,
         sprint_suppressed: false,
         traversal_blocked: byte(p, 0x2c7c) != 0,
         traversal_state: u32_at(p, 0x262c),
@@ -369,7 +380,32 @@ pub fn player(p: &[u8]) -> Player {
         traversal_push: byte(p, 0x2762) != 0,
         traversal_rest: f32_at(p, 0x2768),
         traversal_cycle: f32_at(p, 0x1eb4),
+        context_action: u32_at(p, 0x1764) as i32,
+        grappling: byte(p, 0x2800) != 0,
+        use_time: f32_at(p, 0x30d0),
+        use_retry: byte(p, 0x2ca8) != 0,
+        zipline_allowed: byte(p, 0x2994) != 0,
+        zipline: handle(p, 0x2998),
+        last_zipline: handle(p, 0x299c),
+        zipline_detach_time: f32_at(p, 0x29a0),
+        zipline_state: u32_at(p, 0x29a8) as i32,
+        zipline_mount_time: f32_at(p, 0x29bc),
+        zipline_mount_alpha: f32_at(p, 0x29c0),
+        zipline_start_time: f32_at(p, 0x29c4),
+        zipline_end_time: f32_at(p, 0x29c8),
+        zipline_from: vec3_at(p, 0x29cc),
+        zipline_from_velocity: vec3_at(p, 0x29d8),
+        zipline_target: vec3_at(p, 0x29e4),
+        zipline_use_point: vec3_at(p, 0x29fc),
+        zipline_param: f32_at(p, 0x2a08),
+        zipline_reverse: byte(p, 0x2a18) != 0,
+        zipline_view_offset: vec3_at(p, 0x2a20),
+        zipline_view_offset_vel: vec3_at(p, 0x2a2c),
     }
+}
+
+fn handle(p: &[u8], off: usize) -> Option<u32> {
+    Some(u32_at(p, off)).filter(|&h| h != u32::MAX)
 }
 
 pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
@@ -639,6 +675,21 @@ macro_rules! modelled_fields {
         $m!(traversal_push);
         $m!(traversal_rest);
         $m!(traversal_cycle);
+        $m!(context_action);
+        $m!(zipline);
+        $m!(last_zipline);
+        $m!(zipline_detach_time);
+        $m!(zipline_state);
+        $m!(zipline_mount_time);
+        $m!(zipline_mount_alpha);
+        $m!(zipline_start_time);
+        $m!(zipline_end_time);
+        $m!(zipline_from);
+        $m!(zipline_from_velocity);
+        $m!(zipline_target);
+        $m!(zipline_use_point);
+        $m!(zipline_param);
+        $m!(zipline_reverse);
     };
 }
 

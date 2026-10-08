@@ -16,6 +16,7 @@ pub mod setup;
 pub mod sprint;
 pub mod view;
 pub mod walk;
+pub mod zipline;
 
 use math::V3;
 
@@ -86,6 +87,7 @@ pub struct Settings {
     pub wallrun: bool,
     pub climb: climb::Climb,
     pub mantle: mantle::Mantle,
+    pub zipline: zipline::Tuning,
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
@@ -273,6 +275,35 @@ pub struct Player {
     pub traversal_rest: f32,
     /// The first-person animation's cycle, which chases progress past the type's start.
     pub traversal_cycle: f32,
+    /// A context action holds the player (9: a zipline); it blocks sprinting and other uses.
+    pub context_action: i32,
+    pub grappling: bool,
+    /// When use last found something, and whether a press that found nothing retries while
+    /// use stays held.
+    pub use_time: f32,
+    pub use_retry: bool,
+    /// The zipline ridden (an entity id), the last one left and when. State: 1 grabbed, 2
+    /// mounting, 3 riding. The mount runs `mount_alpha` 0 to 1 over `mount_time` from where
+    /// the grab found the player (`from`, `from_velocity`) toward `target`, under the rope's
+    /// `use_point`. `param` is where along the rope, by length, the ride is.
+    pub zipline_allowed: bool,
+    pub zipline: Option<u32>,
+    pub last_zipline: Option<u32>,
+    pub zipline_detach_time: f32,
+    pub zipline_state: i32,
+    pub zipline_mount_time: f32,
+    pub zipline_mount_alpha: f32,
+    pub zipline_start_time: f32,
+    pub zipline_end_time: f32,
+    pub zipline_from: V3,
+    pub zipline_from_velocity: V3,
+    pub zipline_target: V3,
+    pub zipline_use_point: V3,
+    pub zipline_param: f32,
+    pub zipline_reverse: bool,
+    /// The camera's sway while riding, a spring toward a noisy target, and its rate.
+    pub zipline_view_offset: V3,
+    pub zipline_view_offset_vel: V3,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -342,6 +373,10 @@ pub struct HullQuery {
 
 pub trait Tracer {
     fn hull(&mut self, q: &HullQuery) -> Trace;
+
+    fn ziplines(&self) -> &[zipline::Zipline] {
+        &[]
+    }
 }
 
 /// Whatever the movement code knows about where it is in one ProcessMovement call: the
@@ -436,6 +471,7 @@ impl Move<'_> {
         self.mv.maxspeed = self.max_speed();
         self.sprint_tilt();
         match self.p.movetype {
+            2 | 7 if self.on_zipline() => self.zipline_move(),
             2 | 7 => {
                 if self.try_traversal() {
                     self.traversal_move(true);

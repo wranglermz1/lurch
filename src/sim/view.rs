@@ -218,7 +218,7 @@ impl Move<'_> {
 
     /// Adds `shape(draws)` to the base punch's angular velocity and a fifth of it to the
     /// weapon's, whose roll is left alone unless `weapon_roll`.
-    fn kick(&mut self, salt: u32, weapon_roll: bool, shape: impl Fn(V3) -> V3) {
+    pub(super) fn kick(&mut self, salt: u32, weapon_roll: bool, shape: impl Fn(V3) -> V3) {
         let Some(seed) = self.mv.random_seed else {
             self.scratch.unseeded_kick = true;
             return;

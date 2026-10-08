@@ -3,6 +3,7 @@
 //! Triangles come from memory or from a HAVM `.mesh` file (format in HAVM `src/game/mapmesh.hpp`).
 
 use crate::sim::math::{cross, dot, len, mad, scale, sub, V3};
+use crate::sim::zipline::Zipline;
 use crate::sim::{HullQuery, Trace, Tracer};
 use std::fs::File;
 use std::io;
@@ -36,11 +37,12 @@ enum Source {
 
 pub struct World {
     src: Source,
+    pub ziplines: Vec<Zipline>,
 }
 
 impl World {
     pub fn from_tris(tris: Vec<Tri>) -> Self {
-        World { src: Source::Mem(tris) }
+        World { src: Source::Mem(tris), ziplines: Vec::new() }
     }
 
     /// A flat floor at height `z`, wide enough for any arena.
@@ -89,7 +91,7 @@ impl World {
                 }
             }
         }
-        Ok(World { src: Source::File(f, g, tags) })
+        Ok(World { src: Source::File(f, g, tags), ziplines: Vec::new() })
     }
 
     /// Every triangle that might meet the box `lo`–`hi`; a triangle may come more than once.
@@ -223,6 +225,10 @@ fn clip(c: V3, e: V3, d: V3, tri: &Tri) -> Option<Clip> {
 }
 
 impl Tracer for World {
+    fn ziplines(&self) -> &[Zipline] {
+        &self.ziplines
+    }
+
     fn hull(&mut self, q: &HullQuery) -> Trace {
         let e: V3 = std::array::from_fn(|i| (q.maxs[i] - q.mins[i]) * 0.5);
         let c: V3 = std::array::from_fn(|i| q.start[i] + (q.mins[i] + q.maxs[i]) * 0.5);
