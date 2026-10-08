@@ -83,9 +83,11 @@ pattern. Retail strips it.
     tools/annotate.py name ConVars, settings and constants in dec.sh output
     tools/record.sh   record one scripted scenario (drive + drain) into traces/
     tools/fuzz.py     seeded random drive script, for record.sh
+    tools/tables.py   the activity, animation event and activity modifier tables
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
+    docs/feedback.md  how the oracle answers movement with sound and animation
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
-    src/              the lurch crate: trace parser, movement step, replay
+    src/              the lurch crate: trace parser, movement step, replay, sound, animation
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
     traces/local/     recordings kept off git (none now); gated when present
     traces/pending/   recordings of mechanics not ported yet; `cargo test -- --ignored`
@@ -112,9 +114,16 @@ stops at the first slot outside .text and has no other terminator.
 ## Fidelity reached
 
 `cargo test` replays every recording two ways, and both must be bit-exact on origin,
-velocity and all 35 modelled player fields:
+velocity and all 48 modelled player fields:
 - call by call, each call starting from the oracle's state;
 - chained, the simulation carrying its own state from call to call for whole recordings.
+  Server updates of the networked sprint timestamps are taken from the oracle.
+
+The fields include the footstep timer, fall velocity, landing and sprint-blend bookkeeping.
+The cues movement raises for sound and animation (footsteps, jumps, landings, crouch, slide
+boost) must fall on the calls where the oracle acted. The sound and animation layers built on
+them run outside movement and are not checked against the oracle yet; the game's sound events
+and sequences are not loaded (roadmap 6).
 
 Recordings: walking over World's Edge terrain; on mp_rr_arena_empty jumps, sprint jumps,
 bunny hops, lurch, tap strafe, air turning, crouch, crouch jump, air duck, slide, slide hop,
