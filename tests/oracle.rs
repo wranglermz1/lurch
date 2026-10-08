@@ -212,3 +212,49 @@ fn view_frames_between_calls_match() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// A zipline snapshot laid out as `capture/lurchcap.c` writes it decodes to the entities it
+/// describes, and stays out of the trace matching.
+#[test]
+fn zipline_snapshots_decode_and_stay_out_of_trace_matching() {
+    use lurch::ltr::Trace;
+    use lurch::sim::Tracer;
+    let put = |b: &mut Vec<u8>, off: usize, bytes: &[u8]| b[off..off + bytes.len()].copy_from_slice(bytes);
+    let f = |v: f32| v.to_le_bytes();
+    let mut rope = vec![0u8; 32 + 0x600];
+    put(&mut rope, 0, &0x20172u32.to_le_bytes());
+    put(&mut rope, 4, &1u32.to_le_bytes());
+    put(&mut rope, 8, &[f(10.0), f(20.0), f(30.0)].concat());
+    let at = |off: usize| 32 + off - 0xa00;
+    put(&mut rope, at(0xa0c), &2u32.to_le_bytes());
+    put(&mut rope, at(0xd4c), &u32::MAX.to_le_bytes());
+    put(&mut rope, at(0xd50), &0x30173u32.to_le_bytes());
+    put(&mut rope, at(0xd58), &f(64.0));
+    put(&mut rope, at(0xd64), &[1]);
+    put(&mut rope, at(0xe30), &f(1.5));
+    put(&mut rope, at(0xe40), &2u32.to_le_bytes());
+    put(&mut rope, at(0xe44), &[f(10.0), f(20.0), f(30.0), f(10.0), f(20.0), f(530.0)].concat());
+    put(&mut rope, at(0xfc4), &f(500.0));
+    let mut end = vec![0u8; 32 + 0x10];
+    put(&mut end, 0, &0x30173u32.to_le_bytes());
+    put(&mut end, 4, &2u32.to_le_bytes());
+    put(&mut end, 8, &[f(10.0), f(20.0), f(530.0)].concat());
+    put(&mut end, at(0xa00), &f(32.0));
+    put(&mut end, at(0xa04), &[1]);
+    put(&mut end, at(0xa08), &0x20172u32.to_le_bytes());
+    let mut log = Vec::new();
+    for (index, blob) in [rope, end].iter().enumerate() {
+        for (c, chunk) in blob.chunks(0x68 + 0x180).enumerate() {
+            let mut b = chunk.to_vec();
+            b.resize(0x68 + 0x180, 0);
+            log.push(Trace { slot: 0x1000 | (index as u32) << 4 | c as u32, mask: 0, ray: b[..0x68].to_vec(), result: b[0x68..].to_vec() });
+        }
+    }
+    let tr = lurch::oracle::LogTracer::new(&log);
+    assert_eq!(tr.unused(), 0);
+    let z = tr.ziplines();
+    assert_eq!(z.len(), 2);
+    assert_eq!((z[0].id, z[0].kind, z[0].next, z[0].prev, z[0].speed_scale, z[0].auto_detach_distance), (0x20172, 2, Some(0x30173), None, 1.5, 64.0));
+    assert_eq!((z[0].points.clone(), z[0].spans.clone(), z[0].enabled), (vec![[10.0, 20.0, 30.0], [10.0, 20.0, 530.0]], vec![500.0], true));
+    assert_eq!((z[1].id, z[1].rope, z[1].prev, z[1].auto_detach_distance, z[1].push_off, z[1].origin), (0x30173, false, Some(0x20172), 32.0, true, [10.0, 20.0, 530.0]));
+}

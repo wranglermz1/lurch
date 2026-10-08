@@ -16,6 +16,20 @@ else runs from the host.
   reset the position before the next. Calibrate distances from a fixed point: walking
   into a wall first, then backing off, gives a repeatable start.
 
+Ziplines. A zipline is entity data, not player state, so on entry to each call the DLL also
+snapshots the zipline the player rides (`+0x2998`), the entity its rope runs to, that one's
+next and the zipline's previous: handle, kind, abs origin and angles, then the fields from
+`+0xa00` (`docs/oracle.md`, Zipline). They travel as the call's first trace entries, slot
+`0x1000 | index << 4 | chunk`, so drain and the `.ltr` format are unchanged;
+`oracle::ziplines` reads them back and the replay's tracer serves them. The use that grabs a
+zipline runs before the movement call and is not recorded; its outcome arrives in the next
+call's player state. drive presses use as `use`. Takes to record, on a map with ziplines
+(World's Edge has them; Flowstate can place one): walk under a rope and `use:0.05`, then
+ride to the end; the same, jumping (`jump:0.05`) and crouching (`duck:0.05`) off mid-rope;
+grabbing while running and while falling past a rope (hold `use`); a vertical rope to its
+top; a chain. Keep the DLL from before this change out of those takes: it records no
+ziplines, and the replay then has none to ride.
+
 Known capture faults, which the replay tolerates:
 
 - In `climb_walk` about one call in eleven holds another caller's CMoveData (other view

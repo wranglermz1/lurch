@@ -53,7 +53,16 @@ Roll (`0x85ffc0`) adds, for plain movement:
   `slide_viewTiltPlayerSpeed` (400), times the sliding flag; it rises at
   `slide_viewTiltIncreaseSpeed` (5) and falls at `slide_viewTiltDecreaseSpeed` (2.5) per
   second (`0x85fb70`). No tilt looking along the slide, full tilt looking 90° off it;
-- `sv_rollangle` is 0, so no strafe roll. Dodge, wall-run and zipline rolls do not apply.
+- `sv_rollangle` is 0, so no strafe roll. Dodge and wall-run rolls do not apply;
+- zipline lean (`0x685b20`, ported as `Player::zipline_roll_target` and
+  `zipline_roll_frame`, run by `Pilot::view_frame`): on a zipline that is not vertical, with
+  the view more than `ziplineRollViewAngleMin` (30°) off the nearest point of the rope (the
+  rope's end-to-end line, nearest by floor plan), the view rolls to bring the rope overhead:
+  the angle between the rope's direction across the view and the view's up, past 90° fading
+  it out, × a weight running 0 to 1 up to `ziplineRollViewAngleMax` (50°), ×
+  `ziplineRollStrength` (0.7), at most `ziplineRollMax` (25°). The roll eases to it on a
+  critically damped spring at rate 20/3 (`+0x3110`, `+0x3114`). The acos is the platform's,
+  not the CRT's.
 
 FOV (`0x8610c0`, `0x860f40`, ported as `Player::view_fov`): `cl_fovScale` clamped to
 [1, 1.7] times the `fov` setting (70), rounded, capped at 115, then times the FOV scale and
@@ -80,6 +89,14 @@ shifted by half the hull difference, as the hull moves instead. It is gated with
 movement fields. The pitch offset (`0x858170`) moves the eye forward by `pitchOffsetScale`
 (9.2) × sin(pitch), halved looking up, × (0.6 + 0.4 sin((1 − duck)·π/2)) (`0x869500`).
 Lean, jetpack and prediction-error smoothing terms are left out.
+
+Zipline sway (`+0x2a20`, PostThink `0x86ef40`, ported as `Player::zipline_sway`): after
+each command, on a zipline with somewhere to go, the eye's offset springs (rate 4,
+critically damped, `+0x2a2c`) toward `ziplineViewOffset` (−16, −6, 0) on a vertical rope,
+else toward nothing, plus 5 × Ken Perlin's improved noise (`0x430f20`, his reference
+permutation) of the origin / 1000 with time / 50 on z: forward and left by two samples, and
+down by 4 to 13 from a third. The eye adds it in the frame of the view's flat forward, left
+and up (`0x42bc70`) once any part passes 0.01.
 
 Step smoothing (`+0x2098`, ported as `Player::step_smoothing`): the hull steps up, and
 snaps down to the ground, by up to the step height (22) in one call. The camera does not:

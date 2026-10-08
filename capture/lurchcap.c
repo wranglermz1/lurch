@@ -4,7 +4,12 @@
  * ProcessMovement is taken over through vtable slot 2, chaining to whatever the slot held, so
  * this loads beside an earlier lurchcap. Traces are caught one level down, at the IEngineTrace
  * object's vtable, so every movement trace is seen whichever wrapper made it; only calls on
- * the movement thread while a hooked ProcessMovement is running are kept. */
+ * the movement thread while a hooked ProcessMovement is running are kept.
+ *
+ * The zipline the player rides is entity data, not player state: on entry the ridden zipline,
+ * the entity its rope runs to, that one's next and the zipline's previous are snapshotted into
+ * the call's trace list as entries with slot ENTITY_SLOT | index << 4 | chunk, ahead of the
+ * real traces, so drain and the trace format need no change. */
 #include <windows.h>
 #include <string.h>
 #include "ring.h"
@@ -18,6 +23,19 @@
 
 #define P_SETTINGS 0x2240
 #define P_CMD 0x2f50
+#define P_ZIPLINE 0x2998
+
+#define RVA_ENTITY_LIST 0x1f33f58
+#define RVA_ZIPLINE_VTABLE 0x14ab310
+#define RVA_ZIPLINE_END_VTABLE 0x14a99c8
+#define Z_PREV 0xd4c
+#define Z_NEXT 0xd50
+#define ENTITY_AT 0xa00
+#define ENTITY_ZIPLINE 0x600
+#define ENTITY_END 0x10
+#define ENTITY_SLOT 0x1000
+#define ENTITY_CHUNK (TRACE_RAY + TRACE_RESULT)
+#define ENTITY_HEADER 32
 
 typedef void(__fastcall *process_movement_fn)(void *, char *, char *);
 typedef void(__fastcall *trace5_fn)(void *, void *, uint32_t, void *, void *);
@@ -38,6 +56,63 @@ static DWORD movement_thread;
 static void copy(void *dst, const void *src, size_t n) {
     if (src)
         memcpy(dst, src, n);
+}
+
+typedef float *(__fastcall *vec_fn)(void *);
+
+static char *entity(uint32_t h) {
+    if (h == 0xffffffffu)
+        return NULL;
+    char *slot = base + RVA_ENTITY_LIST + (size_t)(h & 0xffff) * 0x20;
+    return AT(slot, 8, uint32_t) == h >> 16 ? AT(slot, 0, char *) : NULL;
+}
+
+/* 1 a zipline, 2 a zipline_end, 0 anything else. */
+static uint32_t rope_kind(char *e) {
+    if (!e)
+        return 0;
+    size_t vt = (size_t)(AT(e, 0, char *) - base);
+    return vt == RVA_ZIPLINE_VTABLE ? 1 : vt == RVA_ZIPLINE_END_VTABLE ? 2 : 0;
+}
+
+/* Handle, kind, abs origin and abs angles (the entity's own getters, vtable 0x40 and 0x48),
+ * then its fields from ENTITY_AT on, split over chunks of one trace entry each. */
+static void snap_entity(lurch_rec *r, uint32_t h, uint32_t index) {
+    char *e = entity(h);
+    uint32_t kind = rope_kind(e);
+    if (!kind)
+        return;
+    static uint8_t buf[ENTITY_HEADER + ENTITY_ZIPLINE];
+    size_t n = kind == 1 ? ENTITY_ZIPLINE : ENTITY_END;
+    void **vt = AT(e, 0, void **);
+    memset(buf, 0, sizeof buf);
+    memcpy(buf, &h, 4);
+    memcpy(buf + 4, &kind, 4);
+    memcpy(buf + 8, ((vec_fn)vt[0x40 / 8])(e), 12);
+    memcpy(buf + 20, ((vec_fn)vt[0x48 / 8])(e), 12);
+    memcpy(buf + ENTITY_HEADER, e + ENTITY_AT, n);
+    size_t total = ENTITY_HEADER + n;
+    for (uint32_t c = 0; c * ENTITY_CHUNK < total && r->ntraces < LURCH_MAX_TRACES; c++) {
+        lurch_trace *t = &r->traces[r->ntraces++];
+        t->slot = ENTITY_SLOT | index << 4 | c;
+        t->mask = 0;
+        memcpy(t->ray, buf + c * ENTITY_CHUNK, TRACE_RAY);
+        memcpy(t->result, buf + c * ENTITY_CHUNK + TRACE_RAY, TRACE_RESULT);
+    }
+}
+
+static void snap_ropes(lurch_rec *r, char *player) {
+    uint32_t z = AT(player, P_ZIPLINE, uint32_t);
+    char *ze = entity(z);
+    if (rope_kind(ze) != 1)
+        return;
+    uint32_t next = AT(ze, Z_NEXT, uint32_t);
+    char *ne = entity(next);
+    snap_entity(r, z, 0);
+    snap_entity(r, next, 1);
+    if (rope_kind(ne) == 1)
+        snap_entity(r, AT(ne, Z_NEXT, uint32_t), 2);
+    snap_entity(r, AT(ze, Z_PREV, uint32_t), 3);
 }
 
 static lurch_trace *slot_for(uint32_t slot, uint32_t mask) {
@@ -126,6 +201,7 @@ static void __fastcall hook_client(void *self, char *player, char *mv) {
         copy(r->settings, AT(player, P_SETTINGS, char *), SNAP_SETTINGS);
         memcpy(r->mv_in, mv, SNAP_MV);
         memcpy(r->player_in, player, SNAP_PLAYER);
+        snap_ropes(r, player);
         current = r;
     } else if (cmd) {
         ring.dropped++;

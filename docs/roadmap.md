@@ -14,6 +14,11 @@ top. Each item names how it is checked.
   then they follow the procedural path, which ends in the same place.
 - **Superglide.** Mantle plus a jump in the frame the mantle ends. Record one; the jump-off
   and end paths it runs through are ported.
+- **Ziplines.** Ported from the image (`docs/oracle.md`, Zipline) and on the test map, but
+  never recorded. Rebuild the capture DLL (it now snapshots the ridden zipline into each
+  call) and record the takes `docs/capture.md` lists; each should replay exact call by call
+  and chained. Then: the server's rope physics if the recorded rope points move while
+  ridden, and the viewmodel's mount sequence length if `+0x29bc` is not `mountZiplineTime`.
 - **Superjump.** On the tech list, not yet recorded.
 - **Climbing slopes.** Every climb recording is on a vertical wall. The ported rules climb
   any surface too steep to stand on (the test map's 46° and 50° ramps, then mantle onto

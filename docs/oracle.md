@@ -347,6 +347,7 @@ assembly.
 - The constant drag term at settings `0x7e4` has no name in the registry.
 - Jump, keyboard redirect (lurch, tap strafe), crouch and slide are ported and verified.
 - Mantle: ported (below), but for the animation's root motion between start and exit.
+- Zipline: ported (below), not yet recorded.
 
 ## Mantle
 
@@ -386,3 +387,55 @@ progress `+0x2730`, start `+0x2734`, hand time `+0x2738`, end time `+0x273c`, bl
 push latch `+0x2762`, gun lowered `+0x2764`, rest `+0x2768`, cycle `+0x1eb4`. Retail's
 `m_traversal*` names fit these with a 0x488 shift. The hand time and the gun-lowered count
 only drive the weapon and hands, and are not modelled.
+
+## Zipline
+
+Ported in `src/sim/zipline.rs` (movement) and `src/sim/view.rs` (camera). No recording
+covers a zipline, so none of it is checked against the game yet; the capture records what a
+replay needs (`docs/capture.md`).
+
+A zipline is a `C_Zipline` entity whose rope runs to the entity at `+0xd50` (`m_nextZipline`):
+another zipline, making a chain, or a `C_ZiplineEnd`. The rope is the polyline the entity
+holds this frame, `m_currentFrameZipline`: up to 16 points at `+0xe44` (count `+0xe40`), each
+span's length at `+0xfc4` (negative: measure it). The map's rest shape (`+0xd68`, count
+`+0xe28`) stands in for the use search while its ends sit on the two entities. Other fields:
+physics type `+0xa0c` (0 a line, 1 a vine whose end hangs loose, 2 vertical, from the
+`ZiplineVertical` key), previous `+0xd4c`, `m_detachEndOnUse` `+0xd54`, `m_dropToBottom`
+`+0xd55`, auto-detach distance `+0xd58`, push off `+0xd5c`, preserve velocity `+0xd5d`,
+enabled `+0xd64`, speed scale `+0xe30`. A zipline_end has its auto-detach distance at
+`+0xa00`, push off `+0xa04` and its zipline at `+0xa08`. Retail's datamap names fit with a
+0x4c8 shift.
+
+| RVA | Ours | Behaviour |
+|---|---|---|
+| `0x85e9f0` | `player_use` | PreThink, before the movement call. Use (`0x8000_2020`, of which `IN_USE` 0x20) newly pressed, or held while a press found nothing (`+0x2ca8`), or held 0.7 s after the last use (`+0x30d0`), looks for a use target; none in traversal. A zipline target with use down grabs it. A press that finds nothing sets the retry; letting go clears it |
+| `0x85e8c0`, `0x85d900` | `use_target` | Not in another context action (`+0x1764`, unless on a vine), not grappling. Generic usables within 210 come first; the zipline the search finds wins unless something scores better, and nothing scores below −1 |
+| `0xa10780` | `find_zipline` | From 72 above the origin: enabled ropes whose floor plan passes within 120 and whose polyline does (`0xa0f850`), not the one ridden, nor the last one within `useZiplineCooldown` (0.4 s) of letting go. Each rope's fixed ends are pulled in to where a standing hull (0.1 skin) hanging from it, swept back from 200 along it, first touches something (`0xa14210`). Of each span, the part within 130 is checked against the view ray from 7 ahead of that point (`0xc42f50`): the span is clipped to the half-space in front, and the point of it nearest the ray wins. The grab needs a clear standing hull from a step above the origin to under that point |
+| `0xa0cc10` | `ride_reverse` | Which way to ride: toward the end the view faces along the rope (a vertical one toward its end unless the view is more than 120° off it when the rope runs up, or 60° off it when it runs down), but never toward an end within its auto-detach distance of the grab |
+| `0xa13ab0` | `try_zipline` | State 1, the grab: from a step above the origin and the velocity then, the use point, the direction; sliding stops |
+| `0x8221b0` | `player_move` | Movetypes 2 and 7 on a zipline with somewhere to go (`0x869d50`) run the zipline branch instead of the walk move: by state, mount start, mounting or riding, then the velocity check (`0x81e770`) and categorize. A no-zipline trigger (`0x80dc70`) lets go; none here |
+| `0xa14aa0` | `mount_start` | Ends a climb, forces standing (`+0x1a7c` 1), context action 9. The mount time is `mountZiplineTime` (0.5 s) unless the viewmodel has a mount sequence (`ACT_VM_ZIPLINE_MOUNT`), whose length then rules: model data, as in the mantle. Target: under the use point by the standing hull's height (72), the rider hanging below the rope |
+| `0xa15360` | `mounting` | Alpha runs to 1 over the mount time. The target rides along the rope as a rider would, starting at the larger of alpha · ½ `ziplineSpeed` and the grab velocity along the rope; a target the hull cannot reach keeps the last. The player closes alpha of the remaining way each call. At 1, state 3, and touching ground's resets (`0x869420`) |
+| `0xa15a80` | `ride` | Speed along the rope: what the velocity carries along the current span (at least 0.01), plus `ziplineAcceleration` (400) · dt, at most `ziplineSpeed` (600) × the zipline's speed scale (`0xa0d980`). The hull hangs its height below the point reached; a blocked sweep lets go. Reaching the end of a chained rope moves onto the next (reverse: the previous) |
+| `0xa0df20` | `jump_off` | Jump, crouch or crouch toggle newly pressed. Crouch: velocity eased toward straight down at `ziplineJumpOffSpeed` (400) by `ziplineJumpOffDampScale` (1, so kept), capped at 400. Jump: the same toward the view's forward at 400, then a jump's √(2 g `jumpHeight`) along up. A vertical rope pushes off along the view, flattened, at 400 |
+| `0xa14eb0` | `end_of_line` | At the last rope's far end, or within the end entity's auto-detach distance of it (from the eye or the origin, the nearer), let go. Off the top of a vertical rope, push off at `ziplineJumpOffSpeed` along the end entity's facing if it pushes off, else the view's, flattened; added to the velocity if the rope preserves it |
+| `0xa16060` | `detach_zipline` | Remembers the zipline and when; a view kick (salt `0x76704a58`: pitch 10 + 3r, yaw and roll 10r) unless still mounting; standing allowed again, movetype 2, context action cleared, the floor height reset to the origin's |
+| `0xa0d5e0` | `rope_param` | Where along the rope, by length, the nearest point lies |
+
+Player fields: allowed `+0x2994`, zipline `+0x2998`, last zipline `+0x299c`, detach time
+`+0x29a0`, state `+0x29a8` (1 grabbed, 2 mounting, 3 riding), mount time `+0x29bc`, alpha
+`+0x29c0`, start time `+0x29c4`, end time `+0x29c8`, grab position `+0x29cc` and velocity
+`+0x29d8`, mount target `+0x29e4`, use point `+0x29fc`, rope parameter `+0x2a08`, reverse
+`+0x2a18`, camera sway `+0x2a20` and its rate `+0x2a2c`; context action `+0x1764`, use time
+`+0x30d0`, use retry `+0x2ca8`. Retail's `m_zipline*` fields fit `+0x29b0` on with a 0x5b8
+shift and 4 more past `+0xc`: the oracle keeps the mount time there. Settings: `mountZiplineTime`
+`0xc38`, `useZiplineCooldown` `0xc3c`, `ziplineSpeed` `0xc40`, `ziplineAcceleration` `0xc44`,
+`ziplineJumpOnAcceleration` `0xc48` (rope physics, server side), `ziplineJumpOffSpeed`
+`0xc4c`, `ziplineJumpOffDampScale` `0xc50`, `ziplineRoll*` `0xc54` to `0xc60`,
+`ziplineViewOffset` `0xc64`, `context_action_can_use` `0xe1c`.
+
+Not ported: vines (type 1: a detached end, which the client simulates as a rope in PreThink,
+`0xa69140`), rope ziplines on keyframe ropes (`C_RopeKeyframe`, with sag), the server's rope
+physics and anything it does to the points a map zipline networks, no-zipline triggers,
+weapons and hands, script callbacks that can veto a use. Ziplines carry a use mask
+(`+0x9e8`) the player's must meet; map ziplines are usable by all.

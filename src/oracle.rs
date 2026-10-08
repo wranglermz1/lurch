@@ -7,7 +7,7 @@ use crate::sim::math::{len2, sub, V3};
 use crate::sim::climb::Climb;
 use crate::sim::jump::{Lurch, Skip};
 use crate::sim::mantle::Mantle;
-use crate::sim::zipline;
+use crate::sim::zipline::{self, Zipline};
 use crate::sim::view::{Kick, Spring, ViewTuning};
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
@@ -513,15 +513,80 @@ pub struct LogTracer<'a> {
     pub skipped: usize,
     pub lost: usize,
     pub missing: Vec<HullQuery>,
+    ziplines: Vec<Zipline>,
 }
 
 impl<'a> LogTracer<'a> {
     pub fn new(log: &'a [crate::ltr::Trace]) -> Self {
-        LogTracer { log, next: 0, skipped: 0, lost: 0, missing: Vec::new() }
+        let entities = log.iter().take_while(|t| t.slot & ENTITY_SLOT != 0).count();
+        LogTracer { log: &log[entities..], next: 0, skipped: 0, lost: 0, missing: Vec::new(), ziplines: ziplines(log) }
     }
 
     pub fn unused(&self) -> usize {
         self.skipped + self.log.len() - self.next
+    }
+}
+
+/// The capture snapshots the zipline ridden, the entity its rope runs to, that one's next and
+/// the zipline's previous ahead of a call's traces, one trace entry per chunk:
+/// slot `ENTITY_SLOT | index << 4 | chunk`.
+const ENTITY_SLOT: u32 = 0x1000;
+const ENTITY_AT: usize = 0xa00;
+const ENTITY_HEADER: usize = 32;
+
+/// The zipline entities a call's log carries (`capture/lurchcap.c`).
+pub fn ziplines(log: &[crate::ltr::Trace]) -> Vec<Zipline> {
+    let mut blobs: Vec<(u32, Vec<u8>)> = Vec::new();
+    for t in log.iter().take_while(|t| t.slot & ENTITY_SLOT != 0) {
+        let index = (t.slot >> 4) & 0xff;
+        if blobs.last().is_none_or(|b| b.0 != index) {
+            blobs.push((index, Vec::new()));
+        }
+        let b = &mut blobs.last_mut().unwrap().1;
+        b.extend_from_slice(&t.ray);
+        b.extend_from_slice(&t.result);
+    }
+    blobs.iter().filter_map(|(_, b)| entity(b)).collect()
+}
+
+fn entity(b: &[u8]) -> Option<Zipline> {
+    let id = u32_at(b, 0);
+    let kind = u32_at(b, 4);
+    let (origin, angles) = (vec3_at(b, 8), vec3_at(b, 20));
+    let at = |off: usize| ENTITY_HEADER + off - ENTITY_AT;
+    match kind {
+        1 => {
+            let points = |count: usize, first: usize| (0..u32_at(b, at(count)).min(16) as usize).map(|i| vec3_at(b, at(first) + i * 12)).collect::<Vec<V3>>();
+            let pts = points(0xe40, 0xe44);
+            let spans = (0..pts.len().saturating_sub(1)).map(|i| f32_at(b, at(0xfc4) + i * 4)).collect();
+            Some(Zipline {
+                id,
+                origin,
+                angles,
+                rope: true,
+                next: handle(b, at(0xd50)),
+                prev: handle(b, at(0xd4c)),
+                points: pts,
+                spans,
+                rest: points(0xe28, 0xd68),
+                kind: u32_at(b, at(0xa0c)) as i32,
+                enabled: byte(b, at(0xd64)) != 0,
+                usable: true,
+                detach_end_on_use: byte(b, at(0xd54)) != 0,
+                drop_to_bottom: byte(b, at(0xd55)) != 0,
+                auto_detach_distance: f32_at(b, at(0xd58)),
+                push_off: byte(b, at(0xd5c)) != 0,
+                preserve_velocity: byte(b, at(0xd5d)) != 0,
+                speed_scale: f32_at(b, at(0xe30)),
+            })
+        }
+        2 => {
+            let mut z = Zipline::end(id, origin, handle(b, at(0xa08))?, f32_at(b, at(0xa00)));
+            z.angles = angles;
+            z.push_off = byte(b, at(0xa04)) != 0;
+            Some(z)
+        }
+        _ => None,
     }
 }
 
@@ -530,6 +595,10 @@ fn close(a: V3, b: V3) -> bool {
 }
 
 impl Tracer for LogTracer<'_> {
+    fn ziplines(&self) -> &[Zipline] {
+        &self.ziplines
+    }
+
     fn hull(&mut self, q: &HullQuery) -> Trace {
         let half = |i: usize| (q.maxs[i] - q.mins[i]) * 0.5;
         let mid = |i: usize| (q.mins[i] + q.maxs[i]) * 0.5;
@@ -559,22 +628,24 @@ impl Tracer for LogTracer<'_> {
     }
 }
 
-/// The traversal animation's root as the oracle placed it on this call: its origin less the
-/// share of the blend-out offset still applied.
-pub struct RecordedRoot(Option<V3>);
+/// What the oracle took from animations on this call: the traversal animation's root as it
+/// placed it (its origin less the share of the blend-out offset still applied), and the
+/// zipline mount's length when this call started one.
+pub struct RecordedRoot(Option<V3>, Option<f32>);
 
 impl RecordedRoot {
     pub fn of(rec: &Record) -> Self {
         let q = &rec.player_out;
+        let mount = (u32_at(&rec.player_in, 0x29a8) as i32 == zipline::REQUESTED).then(|| f32_at(q, 0x29bc));
         if byte(q, 0x452) != crate::sim::mantle::MOVETYPE_TRAVERSE {
-            return RecordedRoot(None);
+            return RecordedRoot(None, mount);
         }
         let o = vec3_at(&rec.mv_out, 0x118);
         let off = vec3_at(q, 0x2744);
         let k = (f32_at(&rec.globals, 0x10) - f32_at(q, 0x2740)) / 0.2;
         let k = if 0.0 >= k { 0.0 } else if 1.0 <= k { 1.0 } else { k };
         let left = 1.0 - k;
-        RecordedRoot(Some([o[0] - left * off[0], o[1] - left * off[1], o[2] - left * off[2]]))
+        RecordedRoot(Some([o[0] - left * off[0], o[1] - left * off[1], o[2] - left * off[2]]), mount)
     }
 
     pub fn at(&self) -> Option<V3> {
@@ -585,6 +656,10 @@ impl RecordedRoot {
 impl crate::sim::mantle::RootMotion for RecordedRoot {
     fn place(&self, _: i32, _: f32, _: V3, _: V3) -> Option<V3> {
         self.0
+    }
+
+    fn zipline_mount_time(&self) -> Option<f32> {
+        self.1
     }
 }
 

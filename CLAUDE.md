@@ -137,6 +137,7 @@ crouch jump, air duck, slide, slide hop, slide jump, mantles (sprinting at a che
 wall, and at the end of a wall climb); and seeded random input (`tools/fuzz.py`). The
 camera's lag behind a step up or ground snap is ported and exact. Out of the mantle
 animation's root motion, only types 3 and 5 are recorded (`src/sim/rootmotion.rs`).
+Ziplines are ported from the image but not recorded, so unverified.
 
 Camera: what the movement call keeps for the view (sprint tilt, view punch springs, fall
 speed, sprint transition times, eye height through a duck) is among those fields, and so

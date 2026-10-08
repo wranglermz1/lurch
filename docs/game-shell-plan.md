@@ -604,6 +604,7 @@ These are the Apex PC defaults as commonly documented. They are unverified again
 | Left Ctrl | IN_DUCK (hold) | Apex default |
 | C | IN_TOGGLE_DUCK (the sim toggles on the press edge) | Apex default |
 | Left Shift | IN_SPEED (a tap is enough; the sim keeps sprint intent) | Apex default |
+| E | IN_USE (grab a zipline) | Apex default |
 | Wheel down | tap IN_FORWARD (tap-strafe bind) | Ours; Apex's default is weapon cycling, which is out of scope |
 | Wheel up | tap IN_JUMP (scroll jump) | Ours |
 | Left click | unpause and grab (in `pause_input`) | Ours |
@@ -971,7 +972,7 @@ The approach is Source-style numbered commands with server authority. It is like
 
 ### Mantle and the rest of the tech list
 
-These land in lurch (roadmap item 1), and the shell gets them with no change. The mantle has landed; the HUD state line shows `mantle` while it runs.
+These land in lurch (roadmap item 1), and the shell gets them with no change. The mantle has landed; the HUD state line shows `mantle` while it runs. Ziplines have landed too: E grabs one, the test map's zipline lanes carry them, `map_mesh` draws the ropes, and the HUD shows `zipline` while riding.
 
 ### Real maps
 
