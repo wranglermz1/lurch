@@ -310,6 +310,7 @@ pub fn player(p: &[u8]) -> Player {
         sprint_end_frac: f32_at(p, 0x2614),
         sprint_intent_time: f32_at(p, 0x2618),
         view_offset: vec3_at(p, 0xb8),
+        step_smoothing: vec3_at(p, 0x2098),
     }
 }
 
@@ -529,6 +530,7 @@ macro_rules! modelled_fields {
         $m!(sprint_end_frac);
         $m!(sprint_intent_time);
         $m!(view_offset);
+        $m!(step_smoothing);
     };
 }
 

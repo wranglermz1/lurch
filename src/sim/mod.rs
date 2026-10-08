@@ -240,6 +240,8 @@ pub struct Player {
     pub sprint_intent_time: f32,
     /// The eye above the origin, eased through a duck.
     pub view_offset: V3,
+    /// Where the eye lags the origin after a step up or a snap down, easing back to zero.
+    pub step_smoothing: V3,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -399,6 +401,7 @@ impl Move<'_> {
         if matches!(self.p.movetype, 2 | 7) {
             self.full_walk_move();
         }
+        self.p.decay_step_smoothing(self.g.frametime);
     }
 
     pub fn stance(&self) -> &Stance {

@@ -162,6 +162,11 @@ impl Move<'_> {
                 }
             }
             if walking && stands && !t.startsolid && 0.0 < t.fraction && t.fraction < 1.0 && self.g.frametime != 0.0 {
+                let o = self.mv.origin;
+                let d = [t.endpos[0] - o[0], t.endpos[1] - o[1], t.endpos[2] - o[2]];
+                if 2.0 < (d[1] * d[1] + d[0] * d[0]) + d[2] * d[2] {
+                    self.lag_eye(d);
+                }
                 self.mv.origin = t.endpos;
             }
             probe = Some(t);

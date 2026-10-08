@@ -315,6 +315,7 @@ impl Move<'_> {
             let ground = if self.on_ground() && is_world_up(self.p.up) { Some(self.p.ground_plane) } else { None };
             let step = self.p.step_height;
             let stepped = self.step_slide(&mut pos, &mut vel, dt, step, t, ground);
+            self.lag_eye(stepped);
             if self.p.sliding && 0.0 < stepped[2] {
                 let speed = (vel[0] * vel[0] + vel[1] * vel[1]).sqrt();
                 if 0.0 < speed {
@@ -397,8 +398,22 @@ impl Move<'_> {
         let origin = self.mv.origin;
         let Some(t) = self.probe_ground(origin, self.p.step_height, up) else { return false };
         if is_world_up(up) {
+            let o = self.mv.origin;
+            let d = sub(t.endpos, o);
+            if 2.0 < (d[1] * d[1] + d[0] * d[0]) + d[2] * d[2] {
+                self.lag_eye(d);
+            }
             self.mv.origin = t.endpos;
         }
         true
+    }
+
+    /// The origin just jumped by `moved` (a step, a snap to the ground): the eye stays behind
+    /// by the part along up, at most a step's height, and catches up over the next calls.
+    pub(super) fn lag_eye(&mut self, moved: V3) {
+        let u = self.p.up;
+        let d = ((u[1] * moved[1] + u[0] * moved[0]) + u[2] * moved[2]).min(self.p.step_height);
+        let o = self.p.step_smoothing;
+        self.p.step_smoothing = [o[0] - u[0] * d, o[1] - u[1] * d, o[2] - u[2] * d];
     }
 }

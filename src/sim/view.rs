@@ -352,7 +352,28 @@ impl Player {
         let p = self.pitch_offset(s, angles);
         let o = self.view_offset;
         let drop = self.sprint_eye_drop(s, now);
-        [o[0] + origin[0] + (p[0] + 0.0), o[1] + origin[1] + (p[1] + 0.0), o[2] + origin[2] + (drop + p[2] + 0.0)]
+        let e = [o[0] + origin[0] + (p[0] + 0.0), o[1] + origin[1] + (p[1] + 0.0), o[2] + origin[2] + (drop + p[2] + 0.0)];
+        add(self.step_smoothing, e)
+    }
+
+    /// The eye's lag behind a step eases out: at most twice the step height, shrinking by
+    /// e^(-10 dt) each movement call.
+    pub fn decay_step_smoothing(&mut self, frametime: f32) {
+        let o = self.step_smoothing;
+        if o == [0.0; 3] {
+            return;
+        }
+        let dt = if 0.0 <= frametime { frametime } else { 0.0 };
+        let l = ((o[1] * o[1] + o[0] * o[0]) + o[2] * o[2]).sqrt();
+        let e = crt_expf(dt * -10.0);
+        let cap = self.step_height + self.step_height;
+        let m = (if l <= cap { l } else { cap }) * e + (1.0 - e) * 0.0;
+        self.step_smoothing = if m <= 0.0 || l <= 0.0 {
+            [0.0; 3]
+        } else {
+            let k = m / l;
+            [k * o[0], o[1] * k, o[2] * k]
+        };
     }
 
     /// How far sprinting lowers the eye: `sprintViewOffset` eased in on a quarter sine.
