@@ -4,6 +4,7 @@
 pub mod buttons;
 pub mod climb;
 pub mod collide;
+pub mod cue;
 pub mod duck;
 pub mod ground;
 pub mod input;
@@ -14,10 +15,12 @@ pub mod pilot;
 pub mod rootmotion;
 pub mod setup;
 pub mod sprint;
+pub mod step;
 pub mod view;
 pub mod walk;
 pub mod zipline;
 
+use cue::{Cue, Probe};
 use math::V3;
 
 /// Per-stance block of the player settings.
@@ -35,6 +38,10 @@ pub struct Stance {
     pub low_acceleration: f32,
     pub sprint_acceleration: f32,
     pub sprint_deceleration: f32,
+    /// Milliseconds between footsteps.
+    pub footstep_interval: i32,
+    pub footstep_interval_sprint: i32,
+    pub footstep_min_speed: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -108,6 +115,13 @@ pub struct Settings {
     pub sprint_view_offset: f32,
     pub fov: f32,
     pub pitch_offset_scale: f32,
+    /// Horizontal speed lost against a wall that counts as an impact.
+    pub impact_speed: f32,
+    /// Fall heights in feet: a hard landing, and the land animation's low/medium/high.
+    pub hard_fall_dist: f32,
+    pub land_dist_low: f32,
+    pub land_dist_medium: f32,
+    pub land_dist_high: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -307,6 +321,17 @@ pub struct Player {
     /// The view's lean on a zipline, a spring toward the roll the rope asks for, and its rate.
     pub zipline_roll: f32,
     pub zipline_roll_vel: f32,
+    /// The last surface stood on.
+    pub surface: Option<u32>,
+    /// Milliseconds until the next footstep may sound.
+    pub step_time: f32,
+    pub step_side: bool,
+    pub step_probe: Option<Probe>,
+    /// The last landing's speed, which picks the land animation.
+    pub land_speed: f32,
+    pub land_probe: Option<Probe>,
+    /// The last landing's speed if it was hard, else 0.
+    pub heavy_land_speed: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -405,6 +430,8 @@ pub struct Move<'a> {
     pub stance_index: Option<usize>,
     /// Where a traversal's animation puts the player; model data, not in the image.
     pub root: &'a dyn mantle::RootMotion,
+    /// What this call asks the client to play.
+    pub cues: Vec<Cue>,
 }
 
 const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
@@ -414,7 +441,7 @@ impl Player {
     /// vector, for the jump grace period; and keep the height climbs are measured from.
     /// Airborne, the fall speed is taken from the velocity the call starts with.
     pub fn pre_think(&mut self, curtime: f32, velocity: V3) {
-        if self.ground.is_none() {
+        if self.ground.is_none() && !self.has_parent {
             self.fall_velocity = (velocity[1] * 0.0 + velocity[0] * 0.0) - velocity[2] * 1.0;
         }
         if self.ground.is_some() {
@@ -469,6 +496,7 @@ impl Move<'_> {
             let v = self.mv.velocity;
             self.p.fall_velocity = (0.0 * v[1] + 0.0 * v[0]) + -1.0 * v[2];
         }
+        self.update_step_sound();
         self.duck();
         self.update_sprint();
         self.mv.maxspeed = self.max_speed();

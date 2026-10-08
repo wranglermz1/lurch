@@ -5,10 +5,30 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { test -f dumps/current.bin || zstd -dq --long=27 dumps/current.bin.zst -o dumps/current.bin || echo 'lurch: could not unpack dumps/current.bin.zst (is zstd installed?)'; }"
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/tools/session-start.sh"
           }
         ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "caveman": {
+      "source": {
+        "source": "github",
+        "repo": "JuliusBrussee/caveman",
+        "ref": "v3.2.0"
+      }
+    },
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail",
+        "ref": "v5.1.0"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "caveman@caveman": true,
+    "ponytail@ponytail": true
   }
 }

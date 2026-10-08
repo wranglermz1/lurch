@@ -32,7 +32,6 @@ pub struct Spring {
     pub damping: V3,
 }
 
-const LANDING_KICK_MIN_SPEED: f32 = 80.0;
 const LANDING_SALT: u32 = 0x7670_4c58;
 const JUMP_SALT: u32 = 0x7670_4a58;
 const WALL_START_SALT: u32 = 0x7657_5258;
@@ -200,22 +199,6 @@ impl Move<'_> {
         spring_step(&mut self.p.weapon_punch_angle, &mut self.p.weapon_punch_vel, &sp, dt);
     }
 
-    /// The fall speed a landing this call reports, once, and clears.
-    fn landed_from(&mut self) -> Option<f32> {
-        if !self.on_ground() {
-            return None;
-        }
-        let mut fall = self.p.fall_velocity;
-        let u = self.p.up;
-        let (x, y, z) = (-u[0], -u[1], -u[2]);
-        if fall != 0.0 && (y * 0.0 + x * 0.0) - z * 1.0 != 1.0 {
-            let v = self.p.prev_velocity;
-            fall = y * v[1] + x * v[0] + z * v[2];
-        }
-        self.p.fall_velocity = 0.0;
-        (LANDING_KICK_MIN_SPEED <= fall).then_some(fall)
-    }
-
     /// Adds `shape(draws)` to the base punch's angular velocity and a fifth of it to the
     /// weapon's, whose roll is left alone unless `weapon_roll`.
     pub(super) fn kick(&mut self, salt: u32, weapon_roll: bool, shape: impl Fn(V3) -> V3) {
@@ -246,8 +229,7 @@ impl Move<'_> {
         });
     }
 
-    pub fn landing_kick(&mut self) {
-        let Some(fall) = self.landed_from() else { return };
+    pub fn landing_kick(&mut self, fall: f32) {
         if !(0.0 <= fall) {
             return;
         }

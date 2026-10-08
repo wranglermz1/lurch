@@ -6,7 +6,6 @@ use super::{Move, Trace};
 
 const SPRINT_INPUT: f32 = 1.25;
 const MIN_GROUND_SPEED: f32 = 1.0;
-const GRAVITY_DIR: V3 = [0.0, 0.0, -1.0];
 const MAX_COORD: f32 = 65536.0;
 const BACKUP_DECEL: f32 = 0.6;
 
@@ -61,6 +60,7 @@ impl Move<'_> {
         self.check_jump();
         self.climb_think();
         self.check_velocity();
+        let before = self.mv.velocity;
         if self.on_ground() {
             self.ground_move(dt);
         } else {
@@ -69,13 +69,14 @@ impl Move<'_> {
             }
             self.air_move(dt);
         }
+        self.wall_impact(before);
         self.categorize(false);
         self.half_gravity(dt);
         if self.on_ground() {
             self.mv.velocity = reject(self.mv.velocity, self.p.up);
         }
         self.check_velocity();
-        self.landing_kick();
+        self.land_check();
     }
 
     /// Forward and right along the ground plane. On a wall the view's right vector, not its

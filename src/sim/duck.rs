@@ -3,6 +3,7 @@
 //! The duck is a timed state machine on `traversal_state`: 0 standing, 1 going down, 2 down,
 //! 3 coming up. The timer counts milliseconds; a slide uses the 200 ms timing, else 400.
 
+use super::cue::Cue;
 use super::math::*;
 use super::Move;
 
@@ -104,6 +105,7 @@ impl Move<'_> {
                 self.mv.velocity = [v[0] * r, v[1] * r, v[2]];
             }
             self.p.slide_boost_pending = true;
+            self.cues.push(Cue::SlideBoost);
         }
         self.p.slide_start = self.g.curtime;
     }
@@ -200,6 +202,7 @@ impl Move<'_> {
             }
         } else {
             if !was_down {
+                self.cues.push(Cue::Crouch);
                 let plane = self.p.ground_plane;
                 self.start_slide(plane, false);
                 if self.p.sliding {
@@ -263,6 +266,7 @@ impl Move<'_> {
 
     fn after_duck(&mut self, was_down: bool) {
         if 1 < self.p.traversal_state.wrapping_sub(1) && was_down {
+            self.cues.push(Cue::Stand);
             self.end_slide();
         }
     }

@@ -4,6 +4,7 @@ use std::borrow::Cow;
 
 use crate::ltr::{open, Record};
 use crate::oracle::{self, outcome, LogTracer, Outcome};
+use crate::sim::cue::Cue;
 use crate::sim::pilot::{self, Pilot};
 use crate::sim::setup::UserCmd;
 use crate::sim::{Move, MoveData, Player, Scratch, Settings, Tracer};
@@ -18,6 +19,7 @@ pub struct Step {
     pub unused: usize,
     /// Modelled fields beyond the outcome that disagree with the oracle.
     pub diffs: Vec<String>,
+    pub cues: Vec<Cue>,
 }
 
 impl Step {
@@ -82,12 +84,12 @@ pub fn simulate_with(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mu
     }
     let g = oracle::globals(&rec.globals, p.lagged);
     let surface = |_: u32| pilot::SURFACE_FRICTION;
-    let unseeded_kick = {
+    let (unseeded_kick, cues) = {
         let root = oracle::RecordedRoot::of(rec);
-        let mut m = Move { p: &mut p, mv: &mut mv, s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None, root: &root };
+        let mut m = Move { p: &mut p, mv: &mut mv, s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None, root: &root, cues: Vec::new() };
         m.pre_think();
         m.process_movement(pilot::SV_OPTIMIZEDMOVEMENT);
-        m.scratch.unseeded_kick
+        (m.scratch.unseeded_kick, m.cues)
     };
     let theirs = oracle::player(&rec.player_out);
     let mut diffs = Vec::new();
@@ -103,7 +105,7 @@ pub fn simulate_with(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mu
     diffs.extend(oracle::diff_player(&p, &theirs));
     diffs.extend(oracle::diff_move(&mv, &oracle::move_data(&rec.mv_out, rec.seq)));
     let got = Outcome { origin: mv.origin, velocity: mv.velocity, on_ground: p.ground.is_some(), surface_friction: p.surface_friction };
-    (Step { seq: rec.seq, want, got, missing: 0, unused: 0, diffs }, p, mv)
+    (Step { seq: rec.seq, want, got, missing: 0, unused: 0, diffs, cues }, p, mv)
 }
 
 /// Every call of a recording whose input was recorded (see `oracle::input_recorded`).
@@ -254,7 +256,7 @@ pub fn from_commands(path: &str, mut world: Option<&mut dyn Tracer>) -> std::io:
         };
         pl.step_with(&s, &cmd, clock.curtime, tr, &oracle::RecordedRoot::of(&rec));
         let got = Outcome { origin: pl.origin, velocity: pl.velocity, on_ground: pl.player.ground.is_some(), surface_friction: pl.player.surface_friction };
-        steps.push(Step { seq: rec.seq, want: outcome(&rec), got, missing: log.missing.len(), unused: log.unused(), diffs: Vec::new() });
+        steps.push(Step { seq: rec.seq, want: outcome(&rec), got, missing: log.missing.len(), unused: log.unused(), diffs: Vec::new(), cues: pl.cues.clone() });
     }
     Ok(steps)
 }

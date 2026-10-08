@@ -26,6 +26,9 @@ pub fn settings() -> Settings {
                 low_acceleration: 2500.0,
                 sprint_acceleration: 100.0,
                 sprint_deceleration: 1250.0,
+                footstep_interval: 400,
+                footstep_interval_sprint: 275,
+                footstep_min_speed: 30.0,
             },
             Stance {
                 hull_min: [-16.0, -16.0, 0.0],
@@ -39,6 +42,9 @@ pub fn settings() -> Settings {
                 low_acceleration: -1.0,
                 sprint_acceleration: -1.0,
                 sprint_deceleration: -1.0,
+                footstep_interval: 450,
+                footstep_interval_sprint: 475,
+                footstep_min_speed: 20.0,
             },
             Stance {
                 hull_min: [-16.0, -16.0, 0.0],
@@ -52,6 +58,9 @@ pub fn settings() -> Settings {
                 low_acceleration: -1.0,
                 sprint_acceleration: -1.0,
                 sprint_deceleration: -1.0,
+                footstep_interval: 400,
+                footstep_interval_sprint: 475,
+                footstep_min_speed: 10.0,
             },
         ],
         speed_scale_side: 1.0,
@@ -209,6 +218,11 @@ pub fn settings() -> Settings {
         fov: 70.0,
         pitch_offset_scale: 9.2,
         wall_start_kick: view::Kick { base: [-1.5, 0.0, 5.0], random: [0.5, 0.5, 0.5] },
+        impact_speed: 380.0,
+        hard_fall_dist: 20.0,
+        land_dist_low: 3.0,
+        land_dist_medium: 11.0,
+        land_dist_high: 33.0,
     }
 }
 
@@ -267,13 +281,15 @@ pub struct Pilot {
     oldbuttons: u32,
     /// The zipline ridden after the last command, for the camera.
     pub rope: Option<zipline::RopeView>,
+    /// What the last command asked the client to play.
+    pub cues: Vec<Cue>,
 }
 
 impl Pilot {
     /// The spawned player's event times are all zero, so a clock starting at zero would
     /// read the first seconds as just after a jump, a landing and a slide: start it later.
     pub fn new(origin: V3) -> Self {
-        Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0, rope: None }
+        Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0, rope: None, cues: Vec::new() }
     }
 
     pub fn oldbuttons(&self) -> u32 {
@@ -310,10 +326,11 @@ impl Pilot {
         p.view_angles = mv.angles;
         let g = Globals { curtime, frametime: cmd.frametime * p.lagged };
         let surface = |_: u32| SURFACE_FRICTION;
-        let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None, root };
+        let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None, root, cues: Vec::new() };
         m.player_use();
         m.pre_think();
         m.process_movement(SV_OPTIMIZEDMOVEMENT);
+        self.cues = m.cues;
         self.origin = mv.origin;
         self.velocity = mv.velocity;
         self.oldbuttons = mv.buttons;

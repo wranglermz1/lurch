@@ -6,6 +6,7 @@ use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
 use crate::sim::climb::Climb;
 use crate::sim::jump::{Lurch, Skip};
+use crate::sim::cue::Probe;
 use crate::sim::mantle::Mantle;
 use crate::sim::zipline::{self, Zipline};
 use crate::sim::view::{Kick, Spring, ViewTuning};
@@ -127,6 +128,9 @@ pub fn settings(blob: &[u8]) -> Settings {
             low_acceleration: f32_at(blob, o + 0x58),
             sprint_acceleration: f32_at(blob, o + 0x5c),
             sprint_deceleration: f32_at(blob, o + 0x60),
+            footstep_interval: u32_at(blob, o + 0x30) as i32,
+            footstep_interval_sprint: u32_at(blob, o + 0x34) as i32,
+            footstep_min_speed: f32_at(blob, o + 0x40),
         }
     };
     Settings {
@@ -247,6 +251,11 @@ pub fn settings(blob: &[u8]) -> Settings {
         fov: f32_at(blob, 0x7ac),
         pitch_offset_scale: f32_at(blob, 0xdd4),
         wall_start_kick: Kick { base: [f32_at(blob, 0x9ec), f32_at(blob, 0x9f4), f32_at(blob, 0x9fc)], random: [f32_at(blob, 0x9f0), f32_at(blob, 0x9f8), f32_at(blob, 0xa00)] },
+        impact_speed: f32_at(blob, 0x7ec),
+        hard_fall_dist: f32_at(blob, 0xdb8),
+        land_dist_low: f32_at(blob, 0xdbc),
+        land_dist_medium: f32_at(blob, 0xdc0),
+        land_dist_high: f32_at(blob, 0xdc4),
     }
 }
 
@@ -362,7 +371,7 @@ pub fn player(p: &[u8]) -> Player {
         step_smoothing: vec3_at(p, 0x2098),
         grapple_time: f32_at(p, 0x27d0),
         mantle_blocked: (u32_at(p, 0x2cac) >> 11) & 1 != 0
-            || u64::from_le_bytes(p[0x2ac8..0x2ad0].try_into().unwrap()) as i64 > 0
+            || u64_at(p, 0x2ac8) as i64 > 0
             || (byte(p, 0x2800) != 0 && u32_at(p, 0x27b4) as i32 > 0)
             || matches!(u32_at(p, 0x2a4c), 1 | 3 | 4),
         traversal_kind: u32_at(p, 0x26ec) as i32,
@@ -407,11 +416,31 @@ pub fn player(p: &[u8]) -> Player {
         zipline_view_offset_vel: vec3_at(p, 0x2a2c),
         zipline_roll: f32_at(p, 0x3110),
         zipline_roll_vel: f32_at(p, 0x3114),
+        surface: (u64_at(p, 0x3a58) != 0).then_some(UNKNOWN_SURFACE),
+        step_time: f32_at(p, 0x25f0),
+        step_side: u32_at(p, 0x1a38) != 0,
+        step_probe: pending(p, 0x1a24),
+        land_speed: f32_at(p, 0x25c0),
+        land_probe: pending(p, 0x19c8),
+        heavy_land_speed: f32_at(p, 0x19cc),
     }
 }
 
 fn handle(p: &[u8], off: usize) -> Option<u32> {
     Some(u32_at(p, off)).filter(|&h| h != u32::MAX)
+}
+
+/// The oracle keeps a pointer to the surface's data, not its index.
+pub const UNKNOWN_SURFACE: u32 = u32::MAX;
+
+fn u64_at(b: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes(b[off..off + 8].try_into().unwrap())
+}
+
+/// A queued ground probe, by its job handle. Where it was aimed is not kept on the player, so
+/// it is aimed again from where the player is now, with its collision bounds' height.
+fn pending(p: &[u8], off: usize) -> Option<Probe> {
+    (u32_at(p, off) != u32::MAX).then(|| Probe::below(vec3_at(p, 0x14c), vec3_at(p, 0x266c), f32_at(p, 0x47c) - f32_at(p, 0x470)))
 }
 
 pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
@@ -771,6 +800,10 @@ macro_rules! modelled_fields {
         $m!(zipline_use_point);
         $m!(zipline_param);
         $m!(zipline_reverse);
+        $m!(step_time);
+        $m!(step_side);
+        $m!(land_speed);
+        $m!(heavy_land_speed);
     };
 }
 
@@ -801,9 +834,17 @@ fn diff_player_as(ours: &Player, theirs: &Player, norm: fn(String) -> String) ->
         };
     }
     modelled_fields!(field);
-    if ours.ground.is_some() != theirs.ground.is_some() {
-        out.push(format!("ground {} want {}", ours.ground.is_some(), theirs.ground.is_some()));
+    macro_rules! present {
+        ($f:ident) => {
+            if ours.$f.is_some() != theirs.$f.is_some() {
+                out.push(format!("{} {} want {}", stringify!($f), ours.$f.is_some(), theirs.$f.is_some()));
+            }
+        };
     }
+    present!(ground);
+    present!(surface);
+    present!(step_probe);
+    present!(land_probe);
     out
 }
 
@@ -834,6 +875,9 @@ pub fn with_state(mut base: Player, state: &Player) -> Player {
     }
     modelled_fields!(take);
     base.ground = state.ground;
+    base.surface = state.surface;
+    base.step_probe = state.step_probe;
+    base.land_probe = state.land_probe;
     base
 }
 

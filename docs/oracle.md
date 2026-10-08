@@ -107,6 +107,16 @@ command's, `+0x3a92`/`+0x3a93` are set on every recorded player, and so is flag 
 | `0x2cb8` | speed scale |
 | `0x3108`, `0x310c` | air speed, air acceleration |
 | `0x358c` | lagged movement value |
+| `0x1a24`, `0x19c8` | footstep and landing probe job handles (`-1` = none) |
+| `0x1a38` | `m_nStepside` |
+| `0x1a68` | `m_flFallVelocity` |
+| `0x19cc` | last landing's speed if hard, else 0 |
+| `0x25c0` | last landing's speed, for the land animation |
+| `0x25f0` | `m_flStepSoundTime` (ms) |
+| `0x2608`, `0x260c` | `m_sprintStartedTime`, `m_sprintStartedFrac` |
+| `0x2610`, `0x2614` | `m_sprintEndedTime`, `m_sprintEndedFrac` |
+| `0x2618` | `m_stickySprintStartTime` (when the intent to sprint began) |
+| `0x3a58` | surface data of the last ground stood on (set with surface friction, `0x805710`) |
 
 ## Player settings
 
@@ -128,10 +138,20 @@ Stance fields are offsets inside that block.
 | `0x23878e8` | `0x7e8` | `airDrag` | AirMove |
 | `0x2387098` | `0x7e4` | unnamed | AirMove, constant drag term |
 | `0x2387a38` | `0xe07` | `airStrafeEnabled` | AirMove |
+| `0x2385e90`, `0x23863d0`, `0x2388050` | stance `0x30`, `0x34`, `0x40` | `footstepInterval`, `footstepIntervalSprint` (ints, ms), `footstepMinSpeed` | footsteps |
+| `0x2387da8` | `0x328` | `footstep_type` | footstep, landing and jump sound names |
+| `0x2387ac8` | `0x7ec` | `impactSpeed` | wall impact |
+| `0x2386c98` | `0xdb8` | `hardFallDist` | landing |
+| `0x2387398`, `0x2386f00`, `0x23868d8` | `0xdbc`, `0xdc0`, `0xdc4` | `landDistLow/Medium/High` | land animation |
+| `0x2385b98`, `0x2385a30`, `0x23861c0`, `0x2386460` | `0xd70`–`0xd7c` | `sprintStartDelay`, `sprintStartDuration`, `sprintStartFastDuration`, `sprintEndDuration` | sprint blend |
 
 The capture writes these values to the trace `settings` line under these names, read
 the way the oracle reads them, along with `sv_gravity` (the ConVar pointed to by
 `0x231ed78`, float at `+0x68`).
+
+The `sound_*` strings (`0x3c8`–`0x778`), `classActivityModifier` (`0x320`), `quadMoveAnims`
+(`0xe1e`), `sprintAnimOrientToMoveDir` (`0xe1f`) and `aimAngle*` (`0xcb4`–`0xcc0`) are read by
+the sound and animation code; `docs/feedback.md` has what each does.
 
 ## Ground wish (floor path of `0x818320`)
 
@@ -174,6 +194,13 @@ replaying recordings through `src/sim`. Names are ours.
 | `0x81f070` | `categorize` | Probe by step height (walking) or 2; walkable at n·up ≥ 0.7; re-probes past a steep lip, alternating by command parity |
 | `0x81ebb0` | `set_ground` | Landing slowdown (`0x869a80`); leaving the ground clears `+0x30ed` (jumped recently), which a jump then sets again |
 | `0x805710` | (surface) | Surface friction ×1.25, capped at 1, by the trace's surface index |
+| `0x859840` | `update_step_sound` | Footstep timer and probe; called after categorize, before duck |
+| `0x81aad0` | `wall_impact` | Speed lost against a wall; restarts the footstep timer |
+| `0x820fe0`, `0x820790` | `land_check` | End of the walk move: landing probe, speed, animation event |
+| `0x865240` | `sprint_view_frac` | The sprint blend, from the sprint timestamps |
+
+Sound and animation around these, and the client code that turns cues into them, are in
+`docs/feedback.md`.
 
 ## Wall climb
 

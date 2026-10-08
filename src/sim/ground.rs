@@ -77,6 +77,7 @@ impl Move<'_> {
     fn stand_on(&mut self, t: &Trace) {
         self.set_ground(Some(t));
         self.p.surface_friction = ((self.surface)(t.surface) * 1.25).min(1.0);
+        self.p.surface = Some(t.surface);
         let kind = if is_world_up(self.p.up) { 0 } else { 2 };
         self.p.move_trace = MoveTraceInfo { endpos: t.endpos, normal: t.normal, kind };
     }

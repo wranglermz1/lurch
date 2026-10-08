@@ -49,19 +49,42 @@ Done: the state the movement call keeps (sprint tilt, view punch springs and the
 landing and wall kicks, sprint transition times, eye height through a duck) and the view
 setup's frame update (slide tilt, slide FOV ease) are ported and exact on the recordings.
 The camera is composed from them: `Player::eye_position`, `camera_angles` (punch and
-roll) and `view_fov`. Next: sprint shake; on the workstation, record the command's random
-seed so kicks can be drawn in replay, and hook the view setup's output to check what is
-composed.
+roll) and `view_fov`. Next: sprint shake, and the camera step jolt a footstep adds
+(`cockpit_stepJolt_*` in `0x67d3e0`, `docs/feedback.md`), on the `Footstep` cue. On the
+workstation, record the command's random seed so kicks can be drawn in replay, and hook the
+view setup's output to check what is composed.
 
-## 4. Viewmodel
+## 4. Sound and animation assets
+
+The framework is in (`src/sound.rs`, `src/anim/`, spec in `docs/feedback.md`): movement raises
+cues, verified against the oracle; the sound layer names what plays; the body and viewmodel
+pick activities and drive pose parameters. What it waits on is game data, which a session
+with the game files supplies:
+
+- Player settings strings: `footstep_type`, the `sound_*` fields, `classActivityModifier`
+  (`PlayerSounds`, `BodySettings`).
+- Surface property names by index (`Surfaces`), and surface indices for map geometry.
+- The sound events behind the names, and a mixer to play them (`Mixer`).
+- Sequences from the player and viewmodel models (`AnimSet`): activity and modifiers, length,
+  looping, root motion, events, pose parameter ranges, matched to the numbers from
+  `tools/tables.py`.
+
+Check: `cargo run --bin cues` over a recording names every sound and activity with no
+placeholder left. Recording the client's own animation state (the body fields at
+`+0x1c30`–`+0x1c48`, the sequence and pose parameters) would let a gate check the body as the
+movement gates do.
+
+## 5. Viewmodel
 
 First a stand-in model driven by the recovered sway and bob. The real arms and weapon need
 the game's models and animations, which are art and stay out of scope until asked for.
 In the shell it is a second `Camera3d` (`order: 1`) rendering `RenderLayers::layer(1)`, the
 sun on layers 0 to 2 (it already is), and `IsDefaultUiCamera` on the main camera so the HUD
 stays put (`docs/game-shell-plan.md` section 8).
+The viewmodel's answer to movement (sprint loop, jump and landing overlays) is in
+`src/anim/viewmodel.rs`.
 
-## 5. Collision polish
+## 6. Collision polish
 
 - About 1 ms per trace against a full map mesh; keep the area around the player in memory.
 - The engine leaves a hull about 0.014 units closer to triangle leaves than the 1/32 skin
