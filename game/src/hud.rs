@@ -2,6 +2,7 @@ use std::fmt::Write;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use lurch::sim::mantle::MOVETYPE_TRAVERSE;
 use lurch::sim::math::is_world_up;
 
 use crate::binds::WheelMode;
@@ -79,7 +80,9 @@ pub fn hud_text(h: &HudView) -> String {
     let v = p.velocity;
     let speed = v[0].hypot(v[1]);
     let on = |set: bool, name: &'static str| if set { name } else { "" };
-    let place = if !p.player.on_ground() {
+    let place = if p.player.movetype == MOVETYPE_TRAVERSE {
+        "mantle"
+    } else if !p.player.on_ground() {
         "air"
     } else if is_world_up(p.player.up) {
         "ground"
