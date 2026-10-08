@@ -144,7 +144,7 @@ fn setup_move_builds_the_recorded_move_data() {
             let key = |m: &lurch::sim::MoveData| {
                 format!(
                     "{:?}",
-                    (m.angles, m.forward, m.side, m.up, m.view_forward, m.flat_forward, m.flat_right, m.flat_wish, m.ground_wish, m.jump_dir, m.hull_height, m.hull_half_width)
+                    (m.angles, m.forward, m.side, m.up, m.view_forward, m.flat_forward, m.flat_right, m.flat_wish, m.ground_wish, m.jump_dir, m.hull_height, (m.hull_half_width, m.view_wish, m.pressed))
                 )
             };
             if key(&got) != key(&want) {

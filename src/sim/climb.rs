@@ -103,7 +103,7 @@ impl Move<'_> {
 
     /// Moving along `dir` and pushing into `n` closely enough to count as reaching for a
     /// ledge above.
-    fn reaching_for_ledge(&self, dir: V3, n: V3) -> bool {
+    pub(super) fn reaching_for_ledge(&self, dir: V3, n: V3) -> bool {
         let w = self.mv.flat_wish;
         let into = -((w[0] * n[0] + n[1] * w[1]) + n[2] * w[2]);
         if into < 0.0 {

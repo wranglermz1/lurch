@@ -8,6 +8,7 @@ pub mod duck;
 pub mod ground;
 pub mod input;
 pub mod jump;
+pub mod mantle;
 pub mod math;
 pub mod pilot;
 pub mod setup;
@@ -83,6 +84,7 @@ pub struct Settings {
     pub skip: jump::Skip,
     pub wallrun: bool,
     pub climb: climb::Climb,
+    pub mantle: mantle::Mantle,
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
@@ -242,6 +244,34 @@ pub struct Player {
     pub view_offset: V3,
     /// Where the eye lags the origin after a step up or a snap down, easing back to zero.
     pub step_smoothing: V3,
+    /// When a grapple last pulled the player, which lets a mantle start without forward input.
+    pub grapple_time: f32,
+    /// Something outside movement forbids mantling now (a view mode, touching slip entities).
+    pub mantle_blocked: bool,
+    /// The traversal (mantle). Kind 0 is a mantle (1 a window). Type: 3 to 6 by where the eye
+    /// starts against the ledge (below, level, above, high), 4 more when ducked, 11 hanging at
+    /// rest, 12 jumping off. Begin, mid and end are the procedural path in the ledge entity's
+    /// frame, reached at progress 0, mid_frac and 1.
+    pub traversal_kind: i32,
+    pub traversal_type: i32,
+    pub traversal_begin: V3,
+    pub traversal_mid: V3,
+    pub traversal_end: V3,
+    pub traversal_mid_frac: f32,
+    pub traversal_forward: V3,
+    pub traversal_ref: V3,
+    pub traversal_progress: f32,
+    pub traversal_start_time: f32,
+    pub traversal_release_time: f32,
+    pub traversal_blend_time: f32,
+    pub traversal_blend_offset: V3,
+    pub traversal_jump_time: f32,
+    pub traversal_hang: bool,
+    pub traversal_backoff: bool,
+    pub traversal_push: bool,
+    pub traversal_rest: f32,
+    /// The first-person animation's cycle, which chases progress past the type's start.
+    pub traversal_cycle: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -267,6 +297,10 @@ pub struct MoveData {
     pub maxspeed: f32,
     pub hull_height: f32,
     pub hull_half_width: f32,
+    /// Buttons that went down this command, as SetupMove saw them.
+    pub pressed: u32,
+    /// The input's wish along the view, pitch included, at most unit length.
+    pub view_wish: V3,
     /// The command's random seed, which view kicks draw from. Recordings do not hold it.
     pub random_seed: Option<u32>,
     pub origin: V3,
@@ -330,6 +364,8 @@ pub struct Move<'a> {
     pub scratch: Scratch,
     /// The stance block PlayerMove picked on entry; it holds for the whole call.
     pub stance_index: Option<usize>,
+    /// Where a traversal's animation puts the player; model data, not in the image.
+    pub root: &'a dyn mantle::RootMotion,
 }
 
 const OPTIMIZED_LEAVE_SPEED: f32 = 200.0;
@@ -398,8 +434,16 @@ impl Move<'_> {
         self.update_sprint();
         self.mv.maxspeed = self.max_speed();
         self.sprint_tilt();
-        if matches!(self.p.movetype, 2 | 7) {
-            self.full_walk_move();
+        match self.p.movetype {
+            2 | 7 => {
+                if self.try_traversal() {
+                    self.traversal_move(true);
+                } else {
+                    self.full_walk_move();
+                }
+            }
+            mantle::MOVETYPE_TRAVERSE => self.traversal_move(false),
+            _ => {}
         }
         self.p.decay_step_smoothing(self.g.frametime);
     }

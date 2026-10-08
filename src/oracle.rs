@@ -6,6 +6,7 @@ use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
 use crate::sim::climb::Climb;
 use crate::sim::jump::{Lurch, Skip};
+use crate::sim::mantle::Mantle;
 use crate::sim::view::{Kick, Spring, ViewTuning};
 use crate::sim::{Globals, HullQuery, MoveData, Player, Settings, Stance, Trace, Tracer};
 
@@ -79,6 +80,31 @@ const WALL_CONVARS: Climb = Climb {
     mantle_max_angle_push: 50.0,
     mantle_max_angle_view: 50.0,
     mantle_wallrun_max_angle_view: 45.0,
+};
+
+/// The automantle_* and traversal_* ConVars the mantle reads.
+pub const MANTLE_CONVARS: Mantle = Mantle {
+    enabled: false,
+    height: 0.0,
+    duration: [0.0; 4],
+    jump_up_speed: 0.0,
+    jump_outward_speed: 0.0,
+    forward_dist: 26.0,
+    min_dist: 18.0,
+    search_dist: 5.0,
+    height_below: -10.0,
+    height_level: 10.0,
+    height_above: 30.0,
+    rest_frac: 0.4,
+    rest_frac_below: 0.3,
+    jumpoff_duration: 0.1,
+    jumpoff_anim_maxfrac: 0.5,
+    backoff_anim_maxfrac: 0.7,
+    dangle_required_space: 60.0,
+    cooldown: 0.25,
+    traversal_cooldown: 0.5,
+    hand_required_width: 6.0,
+    grapple_auto_mantle: 0.25,
 };
 
 fn byte(b: &[u8], off: usize) -> u8 {
@@ -178,6 +204,14 @@ pub fn settings(blob: &[u8]) -> Settings {
             wall_accel_horizontal: f32_at(blob, 0x9d0),
             wall_decel_horizontal: f32_at(blob, 0x9d4),
             ..WALL_CONVARS
+        },
+        mantle: Mantle {
+            enabled: byte(blob, 0xdf5) != 0,
+            height: f32_at(blob, 0x87c),
+            duration: [f32_at(blob, 0x884), f32_at(blob, 0x888), f32_at(blob, 0x88c), f32_at(blob, 0x890)],
+            jump_up_speed: f32_at(blob, 0x9dc),
+            jump_outward_speed: f32_at(blob, 0x9e4),
+            ..MANTLE_CONVARS
         },
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
@@ -311,6 +345,30 @@ pub fn player(p: &[u8]) -> Player {
         sprint_intent_time: f32_at(p, 0x2618),
         view_offset: vec3_at(p, 0xb8),
         step_smoothing: vec3_at(p, 0x2098),
+        grapple_time: f32_at(p, 0x27d0),
+        mantle_blocked: (u32_at(p, 0x2cac) >> 11) & 1 != 0
+            || u64::from_le_bytes(p[0x2ac8..0x2ad0].try_into().unwrap()) as i64 > 0
+            || (byte(p, 0x2800) != 0 && u32_at(p, 0x27b4) as i32 > 0)
+            || matches!(u32_at(p, 0x2a4c), 1 | 3 | 4),
+        traversal_kind: u32_at(p, 0x26ec) as i32,
+        traversal_type: u32_at(p, 0x26e8) as i32,
+        traversal_begin: vec3_at(p, 0x26f0),
+        traversal_mid: vec3_at(p, 0x26fc),
+        traversal_end: vec3_at(p, 0x2708),
+        traversal_mid_frac: f32_at(p, 0x2714),
+        traversal_forward: vec3_at(p, 0x2718),
+        traversal_ref: vec3_at(p, 0x2724),
+        traversal_progress: f32_at(p, 0x2730),
+        traversal_start_time: f32_at(p, 0x2734),
+        traversal_release_time: f32_at(p, 0x273c),
+        traversal_blend_time: f32_at(p, 0x2740),
+        traversal_blend_offset: vec3_at(p, 0x2744),
+        traversal_jump_time: f32_at(p, 0x275c),
+        traversal_hang: byte(p, 0x2760) != 0,
+        traversal_backoff: byte(p, 0x2761) != 0,
+        traversal_push: byte(p, 0x2762) != 0,
+        traversal_rest: f32_at(p, 0x2768),
+        traversal_cycle: f32_at(p, 0x1eb4),
     }
 }
 
@@ -334,6 +392,8 @@ pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
         maxspeed: f32_at(mv, 0xd4),
         hull_height: f32_at(mv, 0xc8),
         hull_half_width: f32_at(mv, 0xd0),
+        pressed: u32_at(mv, 0x2c),
+        view_wish: vec3_at(mv, 0x84),
         random_seed: None,
         origin: vec3_at(mv, 0x118),
         velocity: vec3_at(mv, 0x124),
@@ -457,6 +517,31 @@ impl Tracer for LogTracer<'_> {
     }
 }
 
+/// The traversal animation's root as the oracle placed it on this call: its origin less the
+/// share of the blend-out offset still applied.
+pub struct RecordedRoot(Option<V3>);
+
+impl RecordedRoot {
+    pub fn of(rec: &Record) -> Self {
+        let q = &rec.player_out;
+        if byte(q, 0x452) != crate::sim::mantle::MOVETYPE_TRAVERSE {
+            return RecordedRoot(None);
+        }
+        let o = vec3_at(&rec.mv_out, 0x118);
+        let off = vec3_at(q, 0x2744);
+        let k = (f32_at(&rec.globals, 0x10) - f32_at(q, 0x2740)) / 0.2;
+        let k = if 0.0 >= k { 0.0 } else if 1.0 <= k { 1.0 } else { k };
+        let left = 1.0 - k;
+        RecordedRoot(Some([o[0] - left * off[0], o[1] - left * off[1], o[2] - left * off[2]]))
+    }
+}
+
+impl crate::sim::mantle::RootMotion for RecordedRoot {
+    fn place(&self, _: i32, _: f32, _: V3, _: V3) -> Option<V3> {
+        self.0
+    }
+}
+
 /// Every modelled player field but `ground`, in one list for diffing, carrying and adopting.
 macro_rules! modelled_fields {
     ($m:ident) => {
@@ -531,6 +616,25 @@ macro_rules! modelled_fields {
         $m!(sprint_intent_time);
         $m!(view_offset);
         $m!(step_smoothing);
+        $m!(traversal_kind);
+        $m!(traversal_type);
+        $m!(traversal_begin);
+        $m!(traversal_mid);
+        $m!(traversal_end);
+        $m!(traversal_mid_frac);
+        $m!(traversal_forward);
+        $m!(traversal_ref);
+        $m!(traversal_progress);
+        $m!(traversal_start_time);
+        $m!(traversal_release_time);
+        $m!(traversal_blend_time);
+        $m!(traversal_blend_offset);
+        $m!(traversal_jump_time);
+        $m!(traversal_hang);
+        $m!(traversal_backoff);
+        $m!(traversal_push);
+        $m!(traversal_rest);
+        $m!(traversal_cycle);
     };
 }
 

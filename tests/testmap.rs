@@ -4,6 +4,7 @@
 use lurch::sim::duck::IN_DUCK;
 use lurch::sim::ground::WALKABLE;
 use lurch::sim::jump::{IN_FORWARD, IN_JUMP};
+use lurch::sim::mantle::MOVETYPE_TRAVERSE;
 use lurch::sim::math::{is_world_up, V3};
 use lurch::sim::pilot::{self, Pilot};
 use lurch::sim::setup::UserCmd;
@@ -19,6 +20,7 @@ struct State {
     velocity: V3,
     /// On ground the right way up, not on a wall.
     standing: bool,
+    mantling: bool,
 }
 
 /// Runs forward from a spot for `steps` commands, with buttons from `press`.
@@ -34,7 +36,8 @@ fn drive(spot: &str, steps: u32, mut press: impl FnMut(&Pilot) -> u32) -> Vec<St
         let cmd = UserCmd { command_number: i, angles: [0.0, yaw, 0.0], forward: 1.0, side: 0.0, up: 0.0, buttons: press(&p), frametime: DT, random_seed: i };
         p.step(&s, &cmd, clock as f32, &mut world);
         clock += DT as f64;
-        out.push(State { origin: p.origin, velocity: p.velocity, standing: p.player.ground.is_some() && is_world_up(p.player.up) });
+        let mantling = p.player.movetype == MOVETYPE_TRAVERSE;
+        out.push(State { origin: p.origin, velocity: p.velocity, standing: !mantling && p.player.ground.is_some() && is_world_up(p.player.up), mantling });
     }
     out
 }
@@ -52,11 +55,16 @@ fn steps_up_no_higher_than_the_step_height() {
     }
 }
 
+/// Slopes up to walkable are walked up. A steeper one is climbed, and the top reached only by
+/// mantling onto it; 60 degrees is not climbed at all.
 #[test]
 fn walks_up_slopes_no_steeper_than_walkable() {
     for deg in RAMP_DEGREES {
         let run = drive(&format!("ramp {deg}"), 800, |_| RUN);
-        assert_eq!(stood_at(&run, RAMP_RISE), deg.to_radians().cos() >= WALKABLE, "ramp {deg}");
+        let walkable = deg.to_radians().cos() >= WALKABLE;
+        let mantled = run.iter().any(|s| s.mantling);
+        assert_eq!(stood_at(&run, RAMP_RISE), walkable || deg < 60.0, "ramp {deg}");
+        assert_eq!(mantled, !walkable && deg < 60.0, "ramp {deg}");
     }
 }
 
@@ -77,9 +85,21 @@ fn a_wall_under_jump_height_is_jumped() {
     assert!(run.last().unwrap().origin[0] > FEATURE_X + 64.0);
 }
 
+/// A wall whose top the climb brings within mantling reach is mantled, and the run carries on
+/// over it.
+#[test]
+fn walls_in_reach_are_mantled() {
+    for h in [96.0, 128.0, 160.0, 192.0, 256.0] {
+        let run = run_at_wall(h);
+        assert!(run.iter().any(|s| s.mantling), "wall {h}");
+        assert!(stood_at(&run, h), "wall {h}");
+        assert!(run.last().unwrap().origin[0] > FEATURE_X + 64.0, "wall {h}");
+    }
+}
+
 #[test]
 fn every_wall_too_tall_to_climb_tops_out_at_the_same_height() {
-    let peaks: Vec<f32> = [256.0, 384.0, 1024.0]
+    let peaks: Vec<f32> = [384.0, 1024.0]
         .map(|h| {
             let run = run_at_wall(h);
             let last = run.last().unwrap();

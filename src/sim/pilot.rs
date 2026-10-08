@@ -159,6 +159,14 @@ pub fn settings() -> Settings {
             mantle_max_angle_view: 50.0,
             mantle_wallrun_max_angle_view: 45.0,
         },
+        mantle: mantle::Mantle {
+            enabled: true,
+            height: 80.0,
+            duration: [0.7, 0.6, 0.5, 0.35],
+            jump_up_speed: 240.0,
+            jump_outward_speed: 188.0,
+            ..crate::oracle::MANTLE_CONVARS
+        },
         sv_gravity: 750.0,
         sv_maxvelocity: 34000.0,
         extra_air_accel: 2.0,
@@ -273,6 +281,11 @@ impl Pilot {
 
     /// Runs `cmd` at game time `curtime`, with collision answered by `world`.
     pub fn step(&mut self, s: &Settings, cmd: &UserCmd, curtime: f32, world: &mut dyn Tracer) {
+        self.step_with(s, cmd, curtime, world, &mantle::RECOVERED);
+    }
+
+    /// The same with a traversal's animation placed by `root`.
+    pub fn step_with(&mut self, s: &Settings, cmd: &UserCmd, curtime: f32, world: &mut dyn Tracer, root: &dyn mantle::RootMotion) {
         let mut mv = setup_move(s, cmd, self.oldbuttons, self.origin, self.velocity);
         let p = &mut self.player;
         p.prev_velocity = self.velocity;
@@ -280,7 +293,7 @@ impl Pilot {
         p.view_angles = mv.angles;
         let g = Globals { curtime, frametime: cmd.frametime * p.lagged };
         let surface = |_: u32| SURFACE_FRICTION;
-        let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None };
+        let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None, root };
         m.pre_think();
         m.process_movement(SV_OPTIMIZEDMOVEMENT);
         self.origin = mv.origin;

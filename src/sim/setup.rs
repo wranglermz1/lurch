@@ -79,6 +79,14 @@ pub fn setup_move(s: &Settings, cmd: &UserCmd, oldbuttons: u32, origin: V3, velo
     let rinv = 1.0 / ((gr[1] * gr[1] + gr[0] * gr[0]) + gr[2] * gr[2]).sqrt().max(TINY);
     let gr = [gr[0] * rinv, gr[1] * rinv, rinv * gr[2]];
     let ground_wish = at_most_unit([side * gr[0] + forward * gf[0], forward * gf[1] + side * gr[1], forward * gf[2] + side * gr[2]]);
+    let vw = [side * r[0] + forward * f[0], forward * f[1] + side * r[1], forward * f[2] + side * r[2]];
+    let vl2 = (vw[1] * vw[1] + vw[0] * vw[0]) + vw[2] * vw[2];
+    let view_wish = if 1.0 < vl2 {
+        let inv = 1.0 / vl2.sqrt().max(TINY);
+        [vw[0] * inv, inv * vw[1], inv * vw[2]]
+    } else {
+        vw
+    };
     let st = &s.stances[0];
     MoveData {
         origin_changed: false,
@@ -99,6 +107,8 @@ pub fn setup_move(s: &Settings, cmd: &UserCmd, oldbuttons: u32, origin: V3, velo
         maxspeed: 0.0,
         hull_height: st.hull_max[2] - st.hull_min[2],
         hull_half_width: (st.hull_max[0] - st.hull_min[0]) * 0.5,
+        pressed: cmd.buttons & !oldbuttons,
+        view_wish,
         random_seed: Some(cmd.random_seed),
         origin,
         velocity,

@@ -83,7 +83,8 @@ pub fn simulate_with(rec: &Record, carried: Option<&(Player, MoveData)>, tr: &mu
     let g = oracle::globals(&rec.globals, p.lagged);
     let surface = |_: u32| pilot::SURFACE_FRICTION;
     let unseeded_kick = {
-        let mut m = Move { p: &mut p, mv: &mut mv, s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None };
+        let root = oracle::RecordedRoot::of(rec);
+        let mut m = Move { p: &mut p, mv: &mut mv, s, g, tr, surface: &surface, scratch: Scratch::default(), stance_index: None, root: &root };
         m.pre_think();
         m.process_movement(pilot::SV_OPTIMIZEDMOVEMENT);
         m.scratch.unseeded_kick
@@ -230,9 +231,9 @@ pub fn chain_world(path: &str, world: &mut dyn Tracer, s: Option<&Settings>) -> 
 
 /// Replay a recording from its commands and clock alone: a pilot spawned where the recording
 /// starts, the built-in settings, and move data built from each command. Collision comes from
-/// `world`, or from the oracle's log without one. Only the outcome is scored, as a spawned
-/// pilot has none of the recorded player's history. The run ends at the first call whose
-/// command was not recorded.
+/// `world`, or from the oracle's log without one; a traversal's animation from the recording.
+/// Only the outcome is scored, as a spawned pilot has none of the recorded player's history.
+/// The run ends at the first call whose command was not recorded.
 pub fn from_commands(path: &str, mut world: Option<&mut dyn Tracer>) -> std::io::Result<Vec<Step>> {
     let s = pilot::settings();
     let mut steps = Vec::new();
@@ -251,7 +252,7 @@ pub fn from_commands(path: &str, mut world: Option<&mut dyn Tracer>) -> std::io:
             Some(w) => w,
             None => &mut log,
         };
-        pl.step(&s, &cmd, clock.curtime, tr);
+        pl.step_with(&s, &cmd, clock.curtime, tr, &oracle::RecordedRoot::of(&rec));
         let got = Outcome { origin: pl.origin, velocity: pl.velocity, on_ground: pl.player.ground.is_some(), surface_friction: pl.player.surface_friction };
         steps.push(Step { seq: rec.seq, want: outcome(&rec), got, missing: log.missing.len(), unused: log.unused(), diffs: Vec::new() });
     }

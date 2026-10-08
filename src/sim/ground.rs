@@ -153,7 +153,7 @@ impl Move<'_> {
             if stands {
                 self.stand_on(&t);
             } else {
-                if self.on_ground() || self.g.curtime - self.p.last_ground_time < 0.1 {
+                if t.entity != 0 && (self.on_ground() || self.g.curtime - self.p.last_ground_time < 0.1) {
                     self.p.last_ground_time = self.g.curtime;
                 }
                 self.set_ground(None);
