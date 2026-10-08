@@ -81,6 +81,15 @@ movement fields. The pitch offset (`0x858170`) moves the eye forward by `pitchOf
 (9.2) × sin(pitch), halved looking up, × (0.6 + 0.4 sin((1 − duck)·π/2)) (`0x869500`).
 Lean, jetpack and prediction-error smoothing terms are left out.
 
+Step smoothing (`+0x2098`, ported as `Player::step_smoothing`): the hull steps up, and
+snaps down to the ground, by up to the step height (22) in one call. The camera does not:
+each of those moves subtracts its rise along the player's up, capped at the step height,
+from an offset the eye adds last (`0x869640` → `0x85ed00`). The offset decays at the end of
+every movement call (`0x85ed70`): its length, capped at twice the step height, times
+e^(−10·dt). Set by the step move (`0x815e70`), the ground snap after a move (`0x806f20`)
+and categorize's snap (`0x81f070`), the snaps only past a √2 drop. Gated with the movement
+fields, exact on every recording.
+
 Angles (`0x67eff0`, ported as `Player::camera_angles`): the view angles plus the punch
 (`0x8580b0`: base `+0x20a4` + weapon `+0x20bc`, the weapon's pitch and yaw scaled by
 1 − ADS fraction), plus a weapon-side offset (`0x857770`, `0x857980`, not recovered), then

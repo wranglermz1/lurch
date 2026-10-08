@@ -38,7 +38,6 @@ The goal is a playable first-person practice shell on the test map (`src/testmap
 
 Deferred:
 
-- **Mantle.** Not ported (roadmap item 1, which needs the workstation). On the test-map walls between 96 and 192 units, the climb slows under the ledge and drops back. That is expected and is not a shell bug.
 - **Sprint shake and view bob.** Not ported yet (roadmap item 3). They will reach the shell through `Pilot::eye` once lurch has them.
 - **Viewmodel and models.** A stand-in viewmodel comes with roadmap item 4. Our own glTF models come later (section 8). Apex models and animations stay out for legal reasons.
 - **Multiplayer.** Later (section 8).
@@ -972,7 +971,7 @@ The approach is Source-style numbered commands with server authority. It is like
 
 ### Mantle and the rest of the tech list
 
-These land in lurch (roadmap item 1), and the shell gets them with no change. Once mantle exists, show `mantle` in the HUD state line.
+These land in lurch (roadmap item 1), and the shell gets them with no change. The mantle has landed; the HUD state line shows `mantle` while it runs.
 
 ### Real maps
 
@@ -1076,7 +1075,6 @@ Each question names the step that settles it, and the answer is written under it
 - **Features.** Changing the feature list costs a near-full rebuild. Settle it in M3.
 - **Disk.** One target dir is about 2.5 to 3 GB. A second profile or feature set doubles that.
 - **Vulkan only.** A machine without a Vulkan driver panics at startup.
-- **Mantle.** It is missing, so walls of 96 to 192 units drop the pilot back. Players may read that as a shell bug; the docs say so.
 - **Fixed-tick creep.** A future switch to a fixed-tick netcode crate would change fps-dependent mechanics, and the replay gates would not notice; only the shell tests would.
 - **Pipelined rendering off.** It may cost frame rate. Measured in M10, and `--pipelined` restores it.
 - **Wayland present modes.** No Immediate mode; Fifo fallback ignores `--fps-max`. Mitigated by XWayland; M10.

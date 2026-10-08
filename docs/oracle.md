@@ -76,6 +76,7 @@ retail layout; only the bit meanings carry over to this build.
 | `0x03c`, `0x048`, `0x054` | `AngleVectors` forward, right, up |
 | `0x060`, `0x06c` | forward and right flattened to z = 0, normalised |
 | `0x078` | flat wish direction: fwd·flatForward + side·flatRight, normalised only if longer than 1 |
+| `0x084` | view wish: fwd·forward + side·right, normalised only if longer than 1; the mantle reads it |
 | `0x090`, `0x09c` | forward and right with their component along `0x0a8` removed, normalised |
 | `0x0a8` | ground plane normal, initialised to (0, 0, 1) |
 | `0x0b4` | ground wish: fwd·`0x090` + side·`0x09c`, normalised only if longer than 1 |
@@ -323,6 +324,9 @@ Not recovered: where `view_fov` becomes a frustum (whether it is 4:3 Hor+); the 
   prints `(e.z + along.z·k) + 0.01`. On a failed slope move it traces into the caller's trace.
 - Slip (`slipSpeed`, `slipAcceleration`, `0x808e40`) only acts while the player touches
   entities listed at `+0x2ac8`; on plain ground its direction is zero and it does nothing.
+- Categorize refreshes the last-ground time (`+0x3084`) only when its probe hit something and
+  the player is on the ground or left it under 0.1 s ago. Walking off a ledge keeps the time
+  of the last grounded call, which the mantle's 0.25 s coyote window reads.
 
 ## Ghidra caveat
 
@@ -342,24 +346,43 @@ assembly.
   (probably the active weapon) sets one at `+0x1a14`.
 - The constant drag term at settings `0x7e4` has no name in the registry.
 - Jump, keyboard redirect (lurch, tap strafe), crouch and slide are ported and verified.
-- Mantle: traversal, movetype 12. Not ported; the move needs animation data (below).
+- Mantle: ported (below), but for the animation's root motion between start and exit.
 
-## Mantle (not ported)
+## Mantle
 
-- `player_move` runs, for movetypes 2 and 7 and unless within `traversal_cooldown` of the
-  last traversal (`+0x273c`), the automantle check `0x811650` and then `0x810960`; either
-  starting a traversal runs `0x8139e0(this, 1)` instead of the walk move. Movetype 12 runs
-  `0x8139e0(this, 0)`.
-- `0x811650` returns early on the ground with world up unless jump is held, and within 0.25
-  s of leaving the ground; otherwise it sweeps the hull forward along the view yaw by
-  `automantle_searchdist` or the speed (the two sweeps by `automantle_forwarddist` seen in
-  air calls), finds the ledge with `0x80f360`, and sets the traversal up (`0x812770`,
-  `0x8100f0`): type `+0x26e8` (3 below, 4 level, 5 above, 6 high; +4 ducked; 11, 12 ends),
-  progress `+0x2730`, start time `+0x2734`, ledge point `+0x2724`.
-- `0x8139e0` advances progress at `(1 − h·k)/mantleDuration*` per second by type, and with
-  `traversal_anim 1` places the origin by the first-person model's bone transform for
-  sequence `0x2fe + type` at that cycle (`0x7c2bf0`, `0x1d6c80`, then matrix products).
-  With `traversal_anim 0` it would use `0x866eb0` instead. At progress 1 it ends
-  (`0x815210`), returns to movetype 2 and, if moving forward, leaves at sprint or run
-  speed along the wish. Jumping out early (`automantle_jumpoff_*`) uses `wallrunJumpUpSpeed`
-  and `wallrunJumpOutwardSpeed`.
+The traversal movetype (12). Ported in `src/sim/mantle.rs`, verified by
+`traces/mantle_sprint.ltr` (a sprint into a chest-high wall) and `mantle_climb.ltr` (a wall
+climb that ends in a mantle): every oracle trace is matched, and every field is exact call
+by call and chained.
+
+| RVA | Ours | Behaviour |
+|---|---|---|
+| `0x8221b0` | `player_move` | Movetypes 2 and 7: with `traversal_enable` and not within `traversal_cooldown` (0.5 s) of the last traversal's end (`+0x273c`), the automantle check and then the window check (`0x810960`, which needs a traversal-window entity, so never here); either starting one runs the traversal move instead of the walk move. Movetype 12 runs the traversal move, and skips categorize |
+| `0x811650` | `automantle` | Refuses with `automantle_enable` or the mantle setting (`0xdf5`) off, in a view mode or touching slip entities; standing on world-up ground, or within 0.25 s of leaving it, unless jump is held; within `automantle_cooldown` (0.25 s) of the last start. Wants a mantle with forward input ≥ 0.3 (or within `grapple_autoMantle` of a grapple); without that, needs to be moving along the view's yaw. Sweeps the hull along the view's yaw by max(`automantle_searchdist` − 0.5, speed · dt), lifting the sweep along a walkable slope; a wall it hits goes to the ledge finder |
+| `0x80f360` | `find_ledge` | Needs the input into the wall and the view facing it (`0x80ed90`, shared with the climb). Probes from a height above the origin that cycles with the command number mod 7: h + 1/32 (0 and 4), and 66.5, 26.5, 16.5, 34.5 × h/80 (h is `mantleHeight`, 80); on 6 it asks for a traversal hint instead (`0x9cc140`, entities, none here) and finds nothing that call. A ducked hull swept into the wall by max(`automantle_forwarddist` 26, `automantle_mindist` 18) must get 18 past the face, then dropped by h + 1/32 land on a walkable top at least 1/32 above the origin, and a ducked hull must fit straight up from the origin to the probe height. A ledge under step height + 1/32 that a standing hull fits on is left to the step; a low obstacle a ducked hull clears at half the rise is left alone. A line 55 below the top and two hull widths into the wall finds whether there is room to hang below |
+| `0x811650` | `mantle_onto` | Mid: the height at which a ducked hull swept back from the ledge reaches the origin's xy (1/64 above the top's plane, else rising 4 at a time). Begin: h + 1/32 below mid. End: the ledge top a hull width past the wall, as far as a standing hull fits (a ducked one, forcing a duck, `0x8212e0`, if standing does not), at most reach − mindist. The player starts at the higher of its origin and begin; `mid_frac` = h / (forward + half width + h), progress starts at the origin's height share of it. `+0x2768` is how far below begin a hull can hang |
+| `0x812770` | `place_hands` | The ledge point: an 8-tall box probe down at either side; if one side misses, a box sweep along the edge finds `traversal_hand_required_width` of room and the point slides there; then line traces fanned over the edge bisect where wall meets top. Marks the hang flag when the hands fit |
+| `0x8100f0` | `start_traversal` | The path stored in the ledge entity's frame, the ledge point floored to 1/32, the blend offset set, ground set to the ledge's entity, velocity zero, slide and jump flags cleared, the climb ended, movetype 12 |
+| `0x8139e0` | `traversal_move` | Type, at the first call, by the eye against the ledge point: 3 below (eye more than 10 under it, and not behind it), 4 level (−10 to 10), 5 above (10 to 30), 6 high (30 up); 4 more ducked, 11 hanging at rest, 12 jumping off. Progress moves toward a target at (1 − ((band + h)/h) · `mid_frac`) / duration per second, the band being the type's eye height bound less the eye height (−h for below), the duration `mantleDuration*` by type (below 0.7, level 0.6, above 0.5, high 0.35). Target: 1 while pushing along the ledge's forward (view wish · forward > 0.1), or once past mid; with room to hang and no input it stops at `automantle_rest_frac_below` (0.3) or `_rest_frac` (0.4), type 11. Pulling back (< −0.3) lets go past `mid_frac` or `automantle_backoff_anim_maxfrac`. Jump (once past `mid_frac` if pushing) leaves after `automantle_jumpoff_duration` (0.1 s) or past `automantle_jumpoff_anim_maxfrac` (0.5): below mid as a wall jump (`wallrunJumpOutwardSpeed` out, `wallrunJumpUpSpeed` up), above it along the ground wish at run or sprint speed, then the jump check. At progress 1 the player stands at end, with run or sprint speed along the wish if pushing |
+| `0x815210` | `end_traversal` | Every exit: the player onto the procedural path at the stored progress, movetype 2, categorize. The first-person model takes the jump as a view offset (`+0x1380`) |
+| `0x866eb0` | `traversal_pos` | The procedural path: begin to mid up to `mid_frac`, then mid to end |
+
+Between start and exit the position is not procedural. With `traversal_anim 1` each call
+places the player by the first-person model's sequence for the type (activity `0x2fe` +
+type) at the animation cycle (`+0x1eb4`, which chases (progress − p0) / (1 − p0) at 1.5×
+the rate, p0 the type's start share): its root motion (`0x1d6c80`) placed at the ledge
+point facing the ledge's forward, plus the offset from where the player stood when the
+sequence started, blended out over 0.2 s (`+0x2740`, `+0x2744`). The root motion is in the
+model files, not the image. Every exit puts the player back on the procedural path, so the
+outcome does not depend on it; only the path the camera takes does. `src/bin/rootmotion.rs`
+recovers the curve from recordings (`src/sim/rootmotion.rs`: types 3 and 5 so far); other
+types follow the procedural path, as `traversal_anim 0` would. In replay the recording
+supplies it.
+
+Player fields: type `+0x26e8`, kind `+0x26ec` (0 mantle, 1 window), begin `+0x26f0`, mid
+`+0x26fc`, end `+0x2708`, `mid_frac` `+0x2714`, forward `+0x2718`, ledge point `+0x2724`,
+progress `+0x2730`, start `+0x2734`, hand time `+0x2738`, end time `+0x273c`, blend start
+`+0x2740` and offset `+0x2744`, jump time `+0x275c`, hang `+0x2760`, back off `+0x2761`,
+push latch `+0x2762`, gun lowered `+0x2764`, rest `+0x2768`, cycle `+0x1eb4`. Retail's
+`m_traversal*` names fit these with a 0x488 shift. The hand time and the gun-lowered count
+only drive the weapon and hands, and are not modelled.

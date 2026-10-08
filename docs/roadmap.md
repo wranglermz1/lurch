@@ -6,19 +6,18 @@ top. Each item names how it is checked.
 
 ## 1. Movement still to port
 
-- **Mantle.** Movetype 12. Needs the workstation: with `traversal_anim 1` the mantle's
-  position each call is the traversal animation's root motion. `TraversalMove` (`0x8139e0`)
-  plays activity `0x2fe + type` (types 3 to 12) on the first-person model and places the
-  player by its bone transform, so the sequences' keyframes have to come from the game's
-  model files (or a capture hook that logs the root offset per call). The rest is portable
-  from the image and is mapped in `docs/oracle.md`. Recordings: `traces/pending/mantle_*.ltr`.
-  On the test map, walls between jump height and the climb's peak (96 to 192) are where it
-  shows: the climb slows under the ledge and, with no mantle, drops back.
-- **Superglide.** Mantle plus a timed jump. Record once mantle replays.
+- **Mantle animation types.** The mantle is ported and exact on its recordings
+  (`docs/oracle.md`, Mantle). Between start and exit the position is the first-person
+  model's root motion, recovered from recordings by `src/bin/rootmotion.rs` for the types
+  recorded so far (3, below, and 5, above). Record mantles of the other types on the
+  workstation (level, high, ducked, hanging at rest, jumping off) and rerun the tool; until
+  then they follow the procedural path, which ends in the same place.
+- **Superglide.** Mantle plus a jump in the frame the mantle ends. Record one; the jump-off
+  and end paths it runs through are ported.
 - **Superjump.** On the tech list, not yet recorded.
 - **Climbing slopes.** Every climb recording is on a vertical wall. The ported rules climb
-  any surface too steep to stand on (the test map's 46° and 50° ramps), but not 60°.
-  Record a run at a steep slope to confirm.
+  any surface too steep to stand on (the test map's 46° and 50° ramps, then mantle onto
+  the top), but not 60°. Record a run at a steep slope to confirm.
 
 Any session can decompile these (`tools/dec.sh`, once Ghidra is installed). Write what
 is recovered into `docs/oracle.md` as behaviour, not decompiler output.

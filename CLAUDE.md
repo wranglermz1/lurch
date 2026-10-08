@@ -92,6 +92,7 @@ pattern. Retail strips it.
     docs/game-shell-plan.md  the Bevy game shell plan (roadmap item 2) and its status
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
     src/              the lurch crate: trace parser, movement step, replay, test map
+    src/bin/rootmotion.rs   mantle root motion out of recordings, into src/sim/rootmotion.rs
     game/             the Bevy game shell; its own workspace, root cargo test never builds it
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
     traces/local/     recordings kept off git (none now); gated when present
@@ -126,13 +127,16 @@ velocity and all 71 modelled player fields:
 Both pass again on the built-in pilot settings (`src/sim/pilot.rs`). A third run takes
 nothing from the oracle but each command and the clock: a pilot spawned where the
 recording starts, move data built from the command (`src/sim/setup.rs`). It is bit-exact
-on origin and velocity for every recording.
+on origin and velocity for every recording, taking a mantle's animation root motion from
+the recording as it takes collision.
 
 Recordings: walking, turning, sliding and seeded random input over World's Edge terrain;
 wall climbs there (walking, sprinting, ducking off, releasing, jumping off); on
 mp_rr_arena_empty jumps, sprint jumps, bunny hops, lurch, tap strafe, air turning, crouch,
-crouch jump, air duck, slide, slide hop, slide jump; and seeded random input
-(`tools/fuzz.py`). Mantle is not ported.
+crouch jump, air duck, slide, slide hop, slide jump, mantles (sprinting at a chest-high
+wall, and at the end of a wall climb); and seeded random input (`tools/fuzz.py`). The
+camera's lag behind a step up or ground snap is ported and exact. Out of the mantle
+animation's root motion, only types 3 and 5 are recorded (`src/sim/rootmotion.rs`).
 
 Camera: what the movement call keeps for the view (sprint tilt, view punch springs, fall
 speed, sprint transition times, eye height through a duck) is among those fields, and so
