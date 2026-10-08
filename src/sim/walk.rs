@@ -18,13 +18,19 @@ impl Move<'_> {
         self.p.speed_scale * speed * 1.0
     }
 
-    /// Half of this frame's gravity: applied before the move and again after it.
+    /// Half of this frame's gravity: applied before the move and again after it. A slide also
+    /// takes the across-gravity part of the ground's push back, which pulls it down a slope.
     pub fn half_gravity(&mut self, t: f32) {
         let g = if self.p.gravity == 0.0 { 1.0 } else { self.p.gravity };
         let k = if self.s.gravity_scale * g != 0.0 { self.s.gravity_scale * g } else { 1.0 };
         let dv = ((k * self.s.sv_gravity) as f64 * 0.5 * t as f64 * 1.0) as f32;
         let v = self.mv.velocity;
         self.mv.velocity = [GRAVITY_DIR[0] * dv + v[0], GRAVITY_DIR[1] * dv + v[1], v[2] + GRAVITY_DIR[2] * dv];
+        if self.on_ground() && self.p.sliding {
+            let n = self.p.ground_normal;
+            let push = scale(scale(n, dv), -dot(n, GRAVITY_DIR));
+            self.mv.velocity = add(self.mv.velocity, reject(push, GRAVITY_DIR));
+        }
     }
 
     /// Clamp to sv_maxvelocity per axis and keep the origin inside the world.

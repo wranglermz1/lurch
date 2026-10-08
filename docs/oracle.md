@@ -197,6 +197,14 @@ plane dist `+0x2c`, fraction `+0x30`, allsolid `+0x38`, startsolid `+0x39`, a st
   Found by fuzzed input: the quantisation flips the test when facing is near perpendicular
   to velocity.
 - `+0x41c` is the previous call's final velocity (FinishMove).
+- `+0x30ed` (jumped recently, read by the anti multi-jump penalty) is cleared whenever the
+  player leaves the ground: walking off an edge clears it, and a jump sets it again after.
+  It survives landing.
+- Sliding on the ground, each half-gravity step also adds `(n·dv)·n.z` across gravity, n the
+  ground normal (`+0x1d04`): the slide is pulled down a slope, and vertical gravity is
+  unchanged. The order `(n·dv)·n.z` is the one that replays bit-exact. Whether the push's
+  vertical part really is dropped on a slope is unverified: no recording jumps out of a
+  slide on a slope.
 
 ## Ghidra caveat
 

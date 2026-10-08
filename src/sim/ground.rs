@@ -46,8 +46,11 @@ impl Move<'_> {
                 let landing = self.p.ground.is_none();
                 self.start_slide(t.normal, landing);
             }
-            if new.is_none() && self.p.movetype == MOVETYPE_TRAVERSE {
-                self.p.movetype = MOVETYPE_WALK;
+            if new.is_none() {
+                self.p.jumped_recently = false;
+                if self.p.movetype == MOVETYPE_TRAVERSE {
+                    self.p.movetype = MOVETYPE_WALK;
+                }
             }
             self.p.flags = if new.is_some() { self.p.flags | 1 } else { self.p.flags & !1 };
         }
