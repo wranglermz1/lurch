@@ -11,6 +11,7 @@ pub mod jump;
 pub mod mantle;
 pub mod math;
 pub mod pilot;
+pub mod rootmotion;
 pub mod setup;
 pub mod sprint;
 pub mod view;

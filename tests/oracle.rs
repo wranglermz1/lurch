@@ -68,6 +68,28 @@ fn arena_recordings_hold_with_our_own_collision() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
+/// The built-in root motion (`src/sim/rootmotion.rs`, made by `src/bin/rootmotion.rs`) puts
+/// every recorded mantle's animation root where the oracle did. Types never recorded fall back
+/// to the procedural path and are not covered.
+#[test]
+fn recovered_root_motion_places_the_recorded_mantles() {
+    use lurch::sim::mantle::{RootMotion, RECOVERED};
+    let mut bad = Vec::new();
+    for p in recordings() {
+        for rec in lurch::ltr::open(p.to_str().unwrap()).unwrap() {
+            let rec = rec.unwrap();
+            let Some(want) = lurch::oracle::RecordedRoot::of(&rec).at() else { continue };
+            let q = lurch::oracle::player(&rec.player_out);
+            let Some(got) = RECOVERED.place(q.traversal_type, q.traversal_cycle, q.traversal_ref, q.traversal_forward) else { continue };
+            let err = (0..3).map(|i| (got[i] - want[i]).abs()).fold(0.0, f32::max);
+            if err > lurch::replay::TOL {
+                bad.push(format!("{} seq {:x}: {got:?} want {want:?}", p.display(), rec.seq));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
 /// The work queue: `cargo test --release -- --ignored` reports how far each pending recording
 /// is from replaying.
 #[test]

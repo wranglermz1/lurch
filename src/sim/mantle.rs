@@ -61,8 +61,33 @@ impl RootMotion for Procedural {
     }
 }
 
-/// The root motion recovered from recordings, for the traversal types recorded so far.
-pub static RECOVERED: Procedural = Procedural;
+/// The root motion recordings show (`super::rootmotion`), for the traversal types recorded so
+/// far; other types follow the procedural path.
+pub struct Recovered;
+
+impl RootMotion for Recovered {
+    fn place(&self, kind: i32, cycle: f32, ledge: V3, forward: V3) -> Option<V3> {
+        let rows = super::rootmotion::CURVES.iter().find(|(k, _)| *k == kind)?.1;
+        let i = rows.partition_point(|r| r[0] < cycle);
+        let l = match i {
+            0 => [rows[0][1], rows[0][2], rows[0][3]],
+            i if i == rows.len() => [rows[i - 1][1], rows[i - 1][2], rows[i - 1][3]],
+            i => {
+                let (a, b) = (rows[i - 1], rows[i]);
+                let t = (cycle - a[0]) / (b[0] - a[0]);
+                [a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t]
+            }
+        };
+        let left = [-forward[1], forward[0], 0.0];
+        Some([
+            ledge[0] + forward[0] * l[0] + left[0] * l[1],
+            ledge[1] + forward[1] * l[0] + left[1] * l[1],
+            ledge[2] + forward[2] * l[0] + l[2],
+        ])
+    }
+}
+
+pub static RECOVERED: Recovered = Recovered;
 
 /// An entity's coordinate frame, 3x4. Only the world carries a player through a mantle here,
 /// and its frame is the identity.

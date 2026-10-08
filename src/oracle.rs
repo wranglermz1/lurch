@@ -534,6 +534,10 @@ impl RecordedRoot {
         let left = 1.0 - k;
         RecordedRoot(Some([o[0] - left * off[0], o[1] - left * off[1], o[2] - left * off[2]]))
     }
+
+    pub fn at(&self) -> Option<V3> {
+        self.0
+    }
 }
 
 impl crate::sim::mantle::RootMotion for RecordedRoot {
