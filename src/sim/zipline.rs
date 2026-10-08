@@ -3,10 +3,10 @@
 //! from the zipline to its `next` entity, which is another zipline (a chain) or an end.
 //! docs/oracle.md, Zipline, maps each function to its RVA.
 
+pub use super::buttons::IN_USE;
 use super::math::*;
 use super::{HullQuery, Move, Trace};
 
-pub const IN_USE: u32 = 0x20;
 const USE_BUTTONS: u32 = 0x8000_2020;
 const DROP_BUTTONS: u32 = 0x400_0006;
 pub const REQUESTED: i32 = 1;
@@ -39,8 +39,28 @@ pub struct Tuning {
     pub jump_off_speed: f32,
     pub jump_off_damp: f32,
     pub view_offset: V3,
+    pub roll_strength: f32,
+    pub roll_max: f32,
+    pub roll_view_angle_min: f32,
+    pub roll_view_angle_max: f32,
     /// `context_action_can_use`: any zipline is usable, not only those flagged so.
     pub context_action_can_use: bool,
+}
+
+/// The rope ridden, as the camera reads it: its kind and its first and last points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RopeView {
+    pub kind: i32,
+    pub ends: [V3; 2],
+}
+
+impl RopeView {
+    /// The rope of zipline `id` in `ziplines`, while it runs somewhere.
+    pub fn of(ziplines: &[Zipline], id: Option<u32>) -> Option<Self> {
+        let z = ziplines.iter().find(|z| Some(z.id) == id).filter(|z| z.rope)?;
+        z.next.filter(|n| ziplines.iter().any(|e| e.id == *n))?;
+        Some(RopeView { kind: z.kind, ends: [z.points[0], *z.points.last()?] })
+    }
 }
 
 /// A zipline entity, or the zipline_end that finishes a rope. Ids are entity handles in replay.

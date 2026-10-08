@@ -78,6 +78,8 @@ pub fn without_view(p: &Pilot) -> Pilot {
     p.player.fov_duration = spawned.fov_duration;
     p.player.fov_from = spawned.fov_from;
     p.player.fov_to = spawned.fov_to;
+    p.player.zipline_roll = spawned.zipline_roll;
+    p.player.zipline_roll_vel = spawned.zipline_roll_vel;
     p
 }
 
@@ -101,7 +103,7 @@ impl Plugin for SimPlugin {
         let clock = Clock::default();
         let pose = Pose(pilot.eye(&settings, cfg.fov_scale, clock.now()));
         app.insert_resource(Sim { pilot, clock, settings, view_now: clock.now() })
-            .insert_resource(Map(CollisionWorld::from_tris(map.tris)))
+            .insert_resource(Map(map.world()))
             .insert_resource(Spots { list: map.spots, current })
             .init_resource::<History>()
             .insert_resource(pose)
@@ -154,7 +156,7 @@ fn run_cmds(mut sim: ResMut<Sim>, mut map: ResMut<Map>, mut queue: ResMut<CmdQue
     }
     if let Some(cmd) = last {
         *view_now = clock.now();
-        pilot.player.view_frame(settings, pilot.velocity, *view_now, cmd.frametime);
+        pilot.view_frame(settings, *view_now, cmd.frametime);
     }
 }
 

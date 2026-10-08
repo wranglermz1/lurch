@@ -304,6 +304,9 @@ pub struct Player {
     /// The camera's sway while riding, a spring toward a noisy target, and its rate.
     pub zipline_view_offset: V3,
     pub zipline_view_offset_vel: V3,
+    /// The view's lean on a zipline, a spring toward the roll the rope asks for, and its rate.
+    pub zipline_roll: f32,
+    pub zipline_roll_vel: f32,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -4,6 +4,7 @@ pub const IN_JUMP: u32 = 0x2;
 pub const IN_DUCK: u32 = 0x4;
 pub const IN_FORWARD: u32 = 0x8;
 pub const IN_BACK: u32 = 0x10;
+pub const IN_USE: u32 = 0x20;
 pub const IN_LEFT: u32 = 0x80;
 pub const IN_RIGHT: u32 = 0x100;
 pub const IN_MOVELEFT: u32 = 0x200;

@@ -175,6 +175,10 @@ pub fn settings() -> Settings {
             jump_off_speed: 400.0,
             jump_off_damp: 1.0,
             view_offset: [-16.0, -6.0, 0.0],
+            roll_strength: 0.7,
+            roll_max: 25.0,
+            roll_view_angle_min: 30.0,
+            roll_view_angle_max: 50.0,
             context_action_can_use: true,
         },
         sv_gravity: 750.0,
@@ -261,13 +265,15 @@ pub struct Pilot {
     pub origin: V3,
     pub velocity: V3,
     oldbuttons: u32,
+    /// The zipline ridden after the last command, for the camera.
+    pub rope: Option<zipline::RopeView>,
 }
 
 impl Pilot {
     /// The spawned player's event times are all zero, so a clock starting at zero would
     /// read the first seconds as just after a jump, a landing and a slide: start it later.
     pub fn new(origin: V3) -> Self {
-        Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0 }
+        Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0, rope: None }
     }
 
     pub fn oldbuttons(&self) -> u32 {
@@ -311,6 +317,23 @@ impl Pilot {
         self.origin = mv.origin;
         self.velocity = mv.velocity;
         self.oldbuttons = mv.buttons;
+        self.rope = zipline::RopeView::of(world.ziplines(), self.player.zipline);
+        self.player.zipline_sway(s, self.origin, curtime, cmd.frametime, self.rope.map(|r| r.kind));
+    }
+
+    /// The view setup's once-a-frame update at game time `curtime`, after the frame's
+    /// commands: the player's own (slide tilt, FOV ease) and the lean a zipline asks for.
+    pub fn view_frame(&mut self, s: &Settings, curtime: f32, frametime: f32) {
+        self.player.view_frame(s, self.velocity, curtime, frametime);
+        let p = &self.player;
+        let target = match self.rope {
+            Some(r) if !p.grappling && r.kind != zipline::VERTICAL && r.kind != zipline::VINE => {
+                let eye = p.eye_position(s, self.origin, p.view_angles, curtime);
+                p.zipline_roll_target(s, eye, p.punched(p.view_angles), r.ends[0], r.ends[1])
+            }
+            _ => 0.0,
+        };
+        self.player.zipline_roll_frame(target, frametime);
     }
 }
 

@@ -19,6 +19,7 @@ pub const SKY: Color = Color::srgb(0.55, 0.70, 0.85);
 pub const BODY_LAYER: usize = 2;
 const TILE: f32 = 256.0;
 const FLOOR: f32 = 16384.0;
+const ROPE_RADIUS: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -105,10 +106,32 @@ fn floor_tiles(push: &mut impl FnMut(V3, [f32; 4])) {
     }
 }
 
+/// A rope's span drawn as a thin square tube: drawing only, ropes do not collide.
+fn rope_tris(a: V3, b: V3) -> Vec<Tri> {
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let side = if d[0].abs() < 1e-3 && d[1].abs() < 1e-3 { [1.0, 0.0, 0.0] } else { [-d[1], d[0], 0.0] };
+    let l = (side[0] * side[0] + side[1] * side[1] + side[2] * side[2]).sqrt();
+    let u = side.map(|c| c / l * ROPE_RADIUS);
+    let w = [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]];
+    let lw = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
+    let w = w.map(|c| c / lw * ROPE_RADIUS);
+    let corner = |p: V3, s: f32, t: f32| [p[0] + u[0] * s + w[0] * t, p[1] + u[1] * s + w[1] * t, p[2] + u[2] * s + w[2] * t];
+    let ring = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)];
+    let mut out = Vec::new();
+    for i in 0..4 {
+        let ((s0, t0), (s1, t1)) = (ring[i], ring[(i + 1) % 4]);
+        let (p0, p1, q0, q1) = (corner(a, s0, t0), corner(a, s1, t1), corner(b, s0, t0), corner(b, s1, t1));
+        out.push([p0, p1, q1]);
+        out.push([p0, q1, q0]);
+    }
+    out
+}
+
 /// The test map as one flat-shaded mesh: the floor drawn as a checker (collision keeps its
-/// two triangles), everything else tinted.
+/// two triangles), everything else tinted, and the ziplines' ropes.
 pub fn map_mesh() -> Mesh {
-    let tris = testmap::build().tris;
+    let map = testmap::build();
+    let tris = map.tris;
     let (mut positions, mut colors) = (Vec::new(), Vec::new());
     let mut push = |v: V3, c: [f32; 4]| {
         positions.push(pos(v).to_array());
@@ -119,6 +142,16 @@ pub fn map_mesh() -> Mesh {
         let c = tint(t);
         for v in t {
             push(*v, c);
+        }
+    }
+    let rope = srgb(0.15, 0.15, 0.15);
+    for z in map.ziplines.iter().filter(|z| z.rope) {
+        for w in z.points.windows(2) {
+            for t in rope_tris(w[0], w[1]) {
+                for v in t {
+                    push(v, rope);
+                }
+            }
         }
     }
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)

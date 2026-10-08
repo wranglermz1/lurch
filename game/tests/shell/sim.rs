@@ -60,7 +60,7 @@ impl Reference {
     pub fn at(spot: &str) -> Self {
         let map = testmap::build();
         let origin = map.spot(spot).origin;
-        Reference { pilot: Pilot::new(origin), clock: Clock::default(), world: CollisionWorld::from_tris(map.tris) }
+        Reference { pilot: Pilot::new(origin), clock: Clock::default(), world: map.world() }
     }
 
     pub fn frame(&mut self, cmds: &[UserCmd], view_each: bool) {
@@ -69,7 +69,7 @@ impl Reference {
             self.pilot.step(&s, c, self.clock.now(), &mut self.world);
             self.clock.advance(c.frametime);
             if view_each || i + 1 == cmds.len() {
-                self.pilot.player.view_frame(&s, self.pilot.velocity, self.clock.now(), c.frametime);
+                self.pilot.view_frame(&s, self.clock.now(), c.frametime);
             }
         }
     }
@@ -149,7 +149,7 @@ fn history_replays_bit_for_bit() {
     assert_eq!(history.len(), HISTORY);
     let mut pilot = history[0].pilot.clone();
     let mut clock = history[0].clock;
-    let mut world = CollisionWorld::from_tris(testmap::build().tris);
+    let mut world = testmap::build().world();
     let s = pilot::settings();
     for snap in history.iter().skip(1) {
         pilot.step(&s, &snap.cmd, clock.now(), &mut world);

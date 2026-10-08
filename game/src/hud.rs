@@ -82,6 +82,8 @@ pub fn hud_text(h: &HudView) -> String {
     let on = |set: bool, name: &'static str| if set { name } else { "" };
     let place = if p.player.movetype == MOVETYPE_TRAVERSE {
         "mantle"
+    } else if p.player.zipline.is_some() {
+        "zipline"
     } else if !p.player.on_ground() {
         "air"
     } else if is_world_up(p.player.up) {

@@ -222,6 +222,10 @@ pub fn settings(blob: &[u8]) -> Settings {
             jump_off_speed: f32_at(blob, 0xc4c),
             jump_off_damp: f32_at(blob, 0xc50),
             view_offset: vec3_at(blob, 0xc64),
+            roll_strength: f32_at(blob, 0xc54),
+            roll_max: f32_at(blob, 0xc58),
+            roll_view_angle_min: f32_at(blob, 0xc5c),
+            roll_view_angle_max: f32_at(blob, 0xc60),
             context_action_can_use: byte(blob, 0xe1c) != 0,
         },
         sv_gravity: SV_GRAVITY,
@@ -401,6 +405,8 @@ pub fn player(p: &[u8]) -> Player {
         zipline_reverse: byte(p, 0x2a18) != 0,
         zipline_view_offset: vec3_at(p, 0x2a20),
         zipline_view_offset_vel: vec3_at(p, 0x2a2c),
+        zipline_roll: f32_at(p, 0x3110),
+        zipline_roll_vel: f32_at(p, 0x3114),
     }
 }
 

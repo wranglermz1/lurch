@@ -349,11 +349,144 @@ impl Player {
 
     /// Where the camera sits for a player standing at `origin` and looking along `angles`.
     pub fn eye_position(&self, s: &Settings, origin: V3, angles: V3, now: f32) -> V3 {
-        let p = self.pitch_offset(s, angles);
+        let p = self.sway_eye(self.pitch_offset(s, angles));
         let o = self.view_offset;
         let drop = self.sprint_eye_drop(s, now);
         let e = [o[0] + origin[0] + (p[0] + 0.0), o[1] + origin[1] + (p[1] + 0.0), o[2] + origin[2] + (drop + p[2] + 0.0)];
         add(self.step_smoothing, e)
+    }
+
+    /// The zipline sway, in the frame of the view's yaw: forward, left, up.
+    fn sway_eye(&self, p: V3) -> V3 {
+        let c = self.zipline_view_offset;
+        let (ax, ay, az) = (c[0].abs(), c[1].abs(), c[2].abs());
+        let m = if ax <= ay { ay } else { ax };
+        if !(0.01 < if m <= az { az } else { m }) {
+            return p;
+        }
+        let facing = if self.precise_view { self.view_angles } else { self.eye_angles };
+        let (f, _, _) = angle_vectors(facing);
+        let l = (f[0] * f[0] + f[1] * f[1] + 0.0).sqrt();
+        let inv = 1.0 / if l > TINY { l } else { TINY };
+        let f = [f[0] * inv, f[1] * inv, inv * 0.0];
+        let (left, up) = yaw_basis(f);
+        [
+            ((p[0] + f[0] * c[0]) + left[0] * c[1]) + up[0] * c[2],
+            ((p[1] + f[1] * c[0]) + left[1] * c[1]) + up[1] * c[2],
+            ((p[2] + f[2] * c[0]) + left[2] * c[1]) + up[2] * c[2],
+        ]
+    }
+
+    /// PostThink's camera sway on a zipline, `kind` that of the rope ridden: the eye's offset
+    /// springs toward `ziplineViewOffset` on a vertical rope (else nothing), stirred by noise
+    /// over where and when the rider is.
+    pub fn zipline_sway(&mut self, s: &Settings, origin: V3, curtime: f32, frametime: f32, kind: Option<i32>) {
+        let mut t = if kind.is_some_and(|k| k == super::zipline::VERTICAL || k == super::zipline::VINE) { s.zipline.view_offset } else { [0.0; 3] };
+        if kind.is_some() {
+            let x = origin[0] * 0.001;
+            let z = origin[2] * 0.001 + curtime * 0.02;
+            let y = origin[1] * 0.001;
+            let (n1, n2, n3) = (perlin([x, y, z]), perlin([z, x, y]), perlin([y, z, x]));
+            let mut dz = n3 * 5.0;
+            if -4.0 < dz {
+                dz = -8.0 - dz;
+            }
+            t = [t[0] + n1 * 5.0, t[1] + n2 * 5.0, t[2] + dz];
+        }
+        let c = self.zipline_view_offset;
+        if 0.001 < (t[0] - c[0]).abs() || 0.001 < (t[1] - c[1]).abs() || 0.001 < (t[2] - c[2]).abs() {
+            let v = self.zipline_view_offset_vel;
+            let d = sub(c, t);
+            let w = frametime * 4.0;
+            let inv = 1.0 / (w * 0.48 * w + w + 1.0 + w * 0.235 * w * w);
+            let fy = (d[1] * 4.0 + v[1]) * frametime;
+            let fx = (d[0] * 4.0 + v[0]) * frametime;
+            let fz = (d[2] * 4.0 + v[2]) * frametime;
+            self.zipline_view_offset_vel = [(v[0] - fx * 4.0) * inv, (v[1] - fy * 4.0) * inv, (v[2] - fz * 4.0) * inv];
+            self.zipline_view_offset = [t[0] + (fx + d[0]) * inv, (fy + d[1]) * inv + t[1], (fz + d[2]) * inv + t[2]];
+        } else {
+            self.zipline_view_offset = t;
+            self.zipline_view_offset_vel = [0.0; 3];
+        }
+    }
+
+    /// How far the view rolls on a zipline with rope ends `a`..`b`, seen from `eye` along
+    /// `angles`: looking more than `ziplineRollViewAngleMin` off the nearest point of the
+    /// rope, the view leans to bring it overhead, by up to `ziplineRollMax`.
+    pub fn zipline_roll_target(&self, s: &Settings, eye: V3, angles: V3, a: V3, b: V3) -> f32 {
+        let (max, strength) = (s.zipline.roll_max, s.zipline.roll_strength);
+        if !(0.0 < max && 0.0 < strength) {
+            return 0.0;
+        }
+        let flat = |p: V3| {
+            let d = (p[0] * 0.0 + p[1] * 0.0) - p[2] * 1.0;
+            ([p[0] - d * 0.0, p[1] - d * 0.0, p[2] - d * -1.0], d)
+        };
+        let (fa, _) = flat(a);
+        let (fb, _) = flat(b);
+        let (fe, de) = flat(eye);
+        let sg = [fb[0] - fa[0], fb[1] - fa[1], fb[2] - fa[2]];
+        let l2 = sg[0] * sg[0] + sg[1] * sg[1] + sg[2] * sg[2];
+        let t = if 1e-5 <= l2 {
+            ((((eye[1] - de * 0.0) * sg[1] + (eye[0] - de * 0.0) * sg[0]) + fe[2] * sg[2]) - ((sg[1] * fa[1] + sg[0] * fa[0]) + sg[2] * fa[2])) / l2
+        } else {
+            0.0
+        };
+        let t = if t <= 0.0 { 0.0 } else if 1.0 <= t { 1.0 } else { t };
+        let v = [((b[0] - a[0]) * t + a[0]) - eye[0], ((b[1] - a[1]) * t + a[1]) - eye[1], ((b[2] - a[2]) * t + a[2]) - eye[2]];
+        let (f, _, up) = angle_vectors(angles);
+        let k = (f[0] * v[0] + f[1] * v[1]) + f[2] * v[2];
+        let lat = [v[0] - f[0] * k, v[1] - f[1] * k, v[2] - f[2] * k];
+        let lat2 = (lat[1] * lat[1] + lat[0] * lat[0]) + lat[2] * lat[2];
+        if !(0.0 < lat2) {
+            return 0.0;
+        }
+        let clamp1 = |c: f32| if c <= -1.0 { -1.0 } else if 1.0 <= c { 1.0 } else { c };
+        let inv = 1.0 / ((v[1] * v[1] + v[0] * v[0]) + v[2] * v[2]).sqrt();
+        let off = clamp1(((inv * v[0]) * f[0] + (inv * v[1]) * f[1]) + (inv * v[2]) * f[2]).acos() * 57.295_776;
+        let (lo, hi) = (s.zipline.roll_view_angle_min, s.zipline.roll_view_angle_max);
+        if !(lo <= off) {
+            return 0.0;
+        }
+        let w = if lo == hi {
+            if 0.0 <= off - hi { 1.0 } else { 0.0 }
+        } else {
+            let w = (off - lo) / (hi - lo);
+            let w = if w <= 0.0 { 0.0 } else if 1.0 <= w { 1.0 } else { w };
+            (1.0 - 0.0) * w + 0.0
+        };
+        if !(0.0 < w) {
+            return 0.0;
+        }
+        let li = 1.0 / lat2.sqrt();
+        let n = [li * lat[0], li * lat[1], li * lat[2]];
+        let mut a2 = clamp1((n[1] * up[1] + n[0] * up[0]) + n[2] * up[2]).acos();
+        let k2 = (a2 - 1.570_796_4) / 1.570_796_4;
+        let k2 = if k2 <= 0.0 { 0.0 } else if 1.0 <= k2 { 1.0 } else { k2 };
+        let side = (up[1] * n[2] - up[2] * n[1]) * f[0] + (up[2] * n[0] - up[0] * n[2]) * f[1] + (up[0] * n[1] - up[1] * n[0]) * f[2];
+        if side < 0.0 {
+            a2 *= -1.0;
+        }
+        let r = (a2 * 57.295_776) % 360.0;
+        let r = if 180.0 < r { r - 360.0 } else if r < -180.0 { r + 360.0 } else { r };
+        let r = if r <= -max { -max } else if max <= r { max } else { r };
+        w * strength * (1.0 - k2) * r
+    }
+
+    /// The view setup's zipline roll: a critically damped spring toward `target`.
+    pub fn zipline_roll_frame(&mut self, target: f32, frametime: f32) {
+        let (c, v) = (self.zipline_roll, self.zipline_roll_vel);
+        if 0.001 <= target.abs() || 0.001 <= c.abs() || c.abs() < target.abs() {
+            let w = frametime * 6.666_666_5;
+            let inv = 1.0 / (w * 0.48 * w + w + 1.0 + w * 0.235 * w * w);
+            let d = c - target;
+            let f = (d * 6.666_666_5 + v) * frametime;
+            self.zipline_roll = (f + d) * inv + target;
+            self.zipline_roll_vel = (v - f * 6.666_666_5) * inv;
+        } else {
+            self.zipline_roll = 0.0;
+            self.zipline_roll_vel = 0.0;
+        }
     }
 
     /// The eye's lag behind a step eases out: at most twice the step height, shrinking by
@@ -460,9 +593,13 @@ impl Player {
     /// then the roll. Aiming down sights would scale the weapon's pitch and yaw down; weapon
     /// view kick and drift are left out.
     pub fn camera_angles(&self, s: &Settings, angles: V3) -> V3 {
-        let (b, w) = (self.punch_angle, self.weapon_punch_angle);
-        let a = [w[0] + b[0] + angles[0], w[1] + b[1] + angles[1], w[2] + b[2] + angles[2]];
+        let a = self.punched(angles);
         [a[0], a[1], self.view_roll(s, a)]
+    }
+
+    pub fn punched(&self, angles: V3) -> V3 {
+        let (b, w) = (self.punch_angle, self.weapon_punch_angle);
+        [w[0] + b[0] + angles[0], w[1] + b[1] + angles[1], w[2] + b[2] + angles[2]]
     }
 
     /// The roll the view adds, in degrees: sprint tilt, and the slide's tilt when looking off
@@ -471,7 +608,7 @@ impl Player {
         let (f, _, _) = angle_vectors(angles);
         let t = self.slide_tilt;
         let slide = f[1] * t[1] + f[0] * t[0] + f[2] * t[2];
-        let r = angles[2] + (0.0 - slide * s.view.slide_tilt_side) + s.sprint_tilt_max_roll * self.sprint_tilt;
+        let r = angles[2] + (0.0 - slide * s.view.slide_tilt_side) + s.sprint_tilt_max_roll * self.sprint_tilt + self.zipline_roll;
         let r = r % 360.0;
         if r > 180.0 {
             r - 360.0
@@ -481,4 +618,62 @@ impl Player {
             r
         }
     }
+}
+
+/// Ken Perlin's reference permutation ("Improving Noise", 2002), which the engine's noise uses.
+const PERLIN: [u8; 256] = [
+    151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10,
+    23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87,
+    174, 20, 125, 136, 171, 168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211,
+    133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208,
+    89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123, 5,
+    202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119,
+    248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232,
+    178, 185, 112, 104, 218, 246, 97, 228, 251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145, 235, 249,
+    14, 239, 107, 49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205,
+    93, 222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180,
+];
+
+fn grad(hash: i32, x: f32, y: f32, z: f32) -> f32 {
+    let h = hash & 15;
+    let u = if h < 8 { x } else { y };
+    let v = if h < 4 { y } else if h == 12 || h == 14 { x } else { z };
+    let u = if hash & 1 != 0 { -u } else { u };
+    let v = if hash & 2 != 0 { -v } else { v };
+    v + u
+}
+
+/// Ken Perlin's improved noise, in the engine's evaluation order.
+pub fn perlin(p: V3) -> f32 {
+    let fl = p.map(f32::floor);
+    let (x, y, z) = (p[0] - fl[0], p[1] - fl[1], p[2] - fl[2]);
+    let (xi, yi, zi) = (fl[0] as i32, fl[1] as i32, fl[2] as i32);
+    let perm = |i: i32| PERLIN[(i & 0xff) as usize] as i32;
+    let fade = |t: f32| ((t * 6.0 - 15.0) * t + 10.0) * (t * t * t);
+    let lerp = |t: f32, a: f32, b: f32| (b - a) * t + a;
+    let a = perm(xi) + yi;
+    let (aa, ab) = (perm(a) + zi, perm(a + 1) + zi);
+    let b = perm(xi + 1) + yi;
+    let (ba, bb) = (perm(b) + zi, perm(b + 1) + zi);
+    let (u, v, w) = (fade(x), fade(y), fade(z));
+    let y1 = lerp(v, lerp(u, grad(perm(aa), x, y, z), grad(perm(ba), x - 1.0, y, z)), lerp(u, grad(perm(ab), x, y - 1.0, z), grad(perm(bb), x - 1.0, y - 1.0, z)));
+    let y2 = lerp(
+        v,
+        lerp(u, grad(perm(aa + 1), x, y, z - 1.0), grad(perm(ba + 1), x - 1.0, y, z - 1.0)),
+        lerp(u, grad(perm(ab + 1), x, y - 1.0, z - 1.0), grad(perm(bb + 1), x - 1.0, y - 1.0, z - 1.0)),
+    );
+    lerp(w, y1, y2)
+}
+
+/// Forward `f` (flat), with left and up, as the engine builds a frame from a direction and the
+/// world's up.
+fn yaw_basis(f: V3) -> (V3, V3) {
+    let r = [1.0 * f[1] - 0.0 * f[2], 0.0 * f[2] - f[0] * 1.0, f[0] * 0.0 - 0.0 * f[1]];
+    let l = ((r[1] * r[1] + r[0] * r[0]) + r[2] * r[2]).sqrt();
+    let inv = 1.0 / if l > TINY { l } else { TINY };
+    let r = [inv * r[0], inv * r[1], inv * r[2]];
+    let u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+    let l = ((u[1] * u[1] + u[0] * u[0]) + u[2] * u[2]).sqrt();
+    let inv = 1.0 / if l > TINY { l } else { TINY };
+    ([-r[0], -r[1], -r[2]], [inv * u[0], inv * u[1], inv * u[2]])
 }
