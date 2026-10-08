@@ -192,7 +192,7 @@ replaying recordings through `src/sim`. Names are ours.
 | `0x828000` | `settle` | The slide used to drop back down; stops on a plane with n·up > 0.1 |
 | `0x806f20` | `stay_on_ground` | Probe down by step height, snap if walkable |
 | `0x81f070` | `categorize` | Probe by step height (walking) or 2; walkable at n·up ≥ 0.7; re-probes past a steep lip, alternating by command parity |
-| `0x81ebb0` | `set_ground` | Landing slowdown (`0x869a80`); leaving the ground clears `+0x30ed` (jumped recently), which a jump then sets again |
+| `0x81ebb0` | `set_ground` | Landing slowdown (`0x869a80`); leaving the ground clears `+0x30ed` (jumped recently), which a jump then sets again; landing leaves it |
 | `0x805710` | (surface) | Surface friction ×1.25, capped at 1, by the trace's surface index |
 | `0x859840` | `update_step_sound` | Footstep timer and probe; called after categorize, before duck |
 | `0x81aad0` | `wall_impact` | Speed lost against a wall; restarts the footstep timer |
