@@ -30,10 +30,14 @@ top. Each item names how it is checked.
   dropped (`0x80c030` copies the velocity at `0x80c352`, before the unwrap and the anchor
   checks, and writes the copy back to `mv+0x124` at `0x80c4c8`, so the pull's starting
   impulse never reaches the move and moving away faster than `grapple_detachAwaySpeed` lets
-  go at once), and when and along what the ability fires (`attackParams.dir`). Retail Apex is
-  said to keep a hook that reaches its target from where it was fired; this build measures
-  the reach from the eye every tick (`0x9d57d0`), and the grapple data holds no firing point.
-  A take moving away and firing near the longest reach would show which the recordings hold. The hook catching a zipline (`0xa12820`) and the grab it leads to,
+  go at once; the server's copy does the same: its update `0xb8ceb0` copies the velocity at
+  `0xb90201` and writes it back at `0xb902a3` around `0xf9dcf0`, whose start of the pull
+  `0xf98690` works on the global move data), and when and along what the ability fires
+  (`attackParams.dir`). The reach is measured from the eye every tick (`0x9d57d0`); the
+  grapple data holds no firing point, and playing R5Reloaded did not show a hook reaching
+  past that. Playing it never showed a hook that caught and then let go either, which the
+  image predicts when moving away along the rope faster than 500 as the pull starts: a take
+  doing that would settle it. The hook catching a zipline (`0xa12820`) and the grab it leads to,
   the camera's grapple roll (`0x6851f0`), the sounds, the arms' grapple animation, the rope
   (`0x6c0810`) and the crosshair's in-range ring are ported too; a take grappling a zipline
   and one at a wall would check the first-person animation state and the roll. Not built:
