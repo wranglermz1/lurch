@@ -4,9 +4,11 @@
 #![allow(clippy::eq_op, clippy::neg_cmp_op_on_partial_ord, clippy::manual_clamp, clippy::neg_multiply)]
 
 pub mod anim;
+pub mod assets;
 pub mod ltr;
 pub mod oracle;
 pub mod replay;
+pub mod rope;
 pub mod sim;
 pub mod sound;
 pub mod testmap;

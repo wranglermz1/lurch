@@ -10,8 +10,12 @@ files.
 
 - Take work from the top of `docs/roadmap.md` unless the user names something else.
 - Build only what practising movement needs. Never build rendering beyond a flat-shaded
-  map and a stand-in viewmodel; weapons, abilities, legends; Apex models, animations as art
-  or other game assets; map loading beyond collision; menus or game modes.
+  map, the test map's props, the first-person arms and the grapple's rope; weapons beyond
+  the fists, abilities other than Pathfinder's grapple, legends' kits; other Apex models or
+  game assets; map loading beyond collision; menus or game modes.
+- The arms, their animation, the movement sounds and the test map's props are read from the
+  user's R5Reloaded install at run time (`docs/assets.md`). Never commit anything taken
+  from the install.
 - Multiplayer and our own models are deferred, not refused (`docs/game-shell-plan.md`
   section 8). Ask before starting them.
 

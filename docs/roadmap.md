@@ -11,7 +11,10 @@ top. Each item names how it is checked.
   model's root motion, recovered from recordings by `src/bin/rootmotion.rs` for the types
   recorded so far (3, below, and 5, above). Record mantles of the other types on the
   workstation (level, high, ducked, hanging at rest, jumping off) and rerun the tool; until
-  then they follow the procedural path, which ends in the same place.
+  then they follow the procedural path, which ends in the same place. The curves are the
+  movement of the arms model's `ACT_VM_MANTLE_*` sequences, which the game shell now loads
+  from the install: porting Studio_SeqMovement (`0x1d6c80`) would give every type from the
+  model, with the recorded curves as its gate.
 - **Superglide.** Mantle plus a jump in the frame the mantle ends. Record one; the jump-off
   and end paths it runs through are ported.
 - **Ziplines.** Ported from the image (`docs/oracle.md`, Zipline) and on the test map, but
@@ -19,6 +22,23 @@ top. Each item names how it is checked.
   call) and record the takes `docs/capture.md` lists; each should replay exact call by call
   and chained. Then: the server's rope physics if the recorded rope points move while
   ridden, and the viewmodel's mount sequence length if `+0x29bc` is not `mountZiplineTime`.
+  The recordings then also gate where the zipline sounds' callbacks fall.
+- **Grapple.** Pathfinder's tactical is ported from the image (`docs/oracle.md`, Grapple)
+  and bound to Q in the game shell, but never recorded. Record the takes `docs/capture.md`
+  lists, as Pathfinder; each should replay exact call by call and chained, and the takes
+  settle what the image leaves open: whether the anchor checks' velocity changes are really
+  dropped (`0x80c030` copies the velocity at `0x80c352`, before the unwrap and the anchor
+  checks, and writes the copy back to `mv+0x124` at `0x80c4c8`, so the pull's starting
+  impulse never reaches the move and moving away faster than `grapple_detachAwaySpeed` lets
+  go at once), and when and along what the ability fires (`attackParams.dir`). Retail Apex is
+  said to keep a hook that reaches its target from where it was fired; this build measures
+  the reach from the eye every tick (`0x9d57d0`), and the grapple data holds no firing point.
+  A take moving away and firing near the longest reach would show which the recordings hold. The hook catching a zipline (`0xa12820`) and the grab it leads to,
+  the camera's grapple roll (`0x6851f0`), the sounds, the arms' grapple animation, the rope
+  (`0x6c0810`) and the crosshair's in-range ring are ported too; a take grappling a zipline
+  and one at a wall would check the first-person animation state and the roll. Not built:
+  the proxy's node table (transitions are found by the sequences' nodes), the RUI asset
+  behind the crosshair (ours is a ring), `P_grapple_sparks`.
 - **Superjump.** On the tech list, not yet recorded.
 - **Climbing slopes.** Every climb recording is on a vertical wall. The ported rules climb
   any surface too steep to stand on (the test map's 46° and 50° ramps, then mantle onto
@@ -56,33 +76,42 @@ view setup's output to check what is composed.
 
 ## 4. Sound and animation assets
 
-The framework is in (`src/sound.rs`, `src/anim/`, spec in `docs/feedback.md`): movement raises
-cues, verified against the oracle; the sound layer names what plays; the body and viewmodel
-pick activities and drive pose parameters. What it waits on is game data, which a session
-with the game files supplies:
+The framework is in (`src/sound.rs`, `src/anim/`, spec in `docs/feedback.md`), and the game
+data now comes from the user's own R5Reloaded install at run time (`docs/assets.md`): the
+legend's settings and sound names, the sound events through the game's own Miles, the fists'
+viewmodel and its sequences, the arms' mantle and climb sequences, the zipline sounds.
+`cargo run --release --bin cues -- --r5r INSTALL RECORDING` names every sound and viewmodel
+activity with the legend's own names. Still to do:
 
-- Player settings strings: `footstep_type`, the `sound_*` fields, `classActivityModifier`
-  (`PlayerSounds`, `BodySettings`).
-- Surface property names by index (`Surfaces`), and surface indices for map geometry.
-- The sound events behind the names, and a mixer to play them (`Mixer`).
-- Sequences from the player and viewmodel models (`AnimSet`): activity and modifiers, length,
-  looping, root motion, events, pose parameter ranges, matched to the numbers from
-  `tools/tables.py`.
-
-Check: `cargo run --bin cues` over a recording names every sound and activity with no
-placeholder left. Recording the client's own animation state (the body fields at
-`+0x1c30`–`+0x1c48`, the sequence and pose parameters) would let a gate check the body as the
-movement gates do.
+- Surface property names by index (`Surfaces`), and surface indices for map geometry: every
+  surface plays as `default` now.
+- The player model's sequences for the body (`AnimSet` over the legend's body model): the
+  body still runs on `NoAnims`.
+- Recording the client's own animation state (the body fields at `+0x1c30`–`+0x1c48`, the
+  viewmodel's sequence, cycle and layers, the sequence and pose parameters) would let a gate
+  check the body and viewmodel as the movement gates do. Until then they are ported, not
+  verified.
 
 ## 5. Viewmodel
 
-First a stand-in model driven by the recovered sway and bob. The real arms and weapon need
-the game's models and animations, which are art and stay out of scope until asked for.
-In the shell it is a second `Camera3d` (`order: 1`) rendering `RenderLayers::layer(1)`, the
-sun on layers 0 to 2 (it already is), and `IsDefaultUiCamera` on the main camera so the HUD
-stays put (`docs/game-shell-plan.md` section 8).
-The viewmodel's answer to movement (sprint loop, jump and landing overlays) is in
-`src/anim/viewmodel.rs`.
+The legend's arms on the fists' viewmodel, read from the install, skinned on the CPU with
+every vertex weight, drawn by a second camera (`order: 1`, `RenderLayers::layer(1)`) at the
+legend's `viewmodelfov`. The fists' weapon logic, sequence transitions, overlay layers and
+their sounds are ported (`src/anim/viewmodel.rs`, `src/anim/transition.rs`). Still to do, in
+order:
+
+- The first-person proxy's arms are drawn through a mantle and a wall climb, with the view
+  they carry (`docs/feedback.md`, First-person proxy). Left: retail's mantle clips
+  (`mantle_*_NEW_linear`, build 6ab42c93), which would need retail's paks read at run time;
+  the zipline mount (`ACT_VM_ZIPLINE_MOUNT`); the `ledgeAngle` pose parameter.
+- Placement: CalcViewModelView (`0x62a940`) with sway and bob from the fists' script, and the
+  view of the camera bone (`0x626110`, `0x62a100`). The viewmodel sits at the eye now.
+- The oracle's own bone concatenation and bone merge (Source's forms are used).
+- Materials: the arms draw their albedo, normal map and ambient occlusion through Bevy's
+  standard material. Gloss, spec, emissive and cavity are read but unused, and the game's
+  own shading is not ported.
+- A Windows build runs in the analysis guest (`docs/setup.md`); the real game is never
+  launched there.
 
 ## 6. Collision polish
 
@@ -98,4 +127,5 @@ The viewmodel's answer to movement (sprint loop, jump and landing overlays) is i
 
 ## Later
 
-Real map props (S3 rpak model collision), more maps.
+Real map props (S3 rpak model collision), more maps. The test map's props collide with their
+drawn triangles until the models' collision is read.

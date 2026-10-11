@@ -1,13 +1,18 @@
 pub mod args;
+pub mod audio;
+pub mod data;
 pub mod binds;
 pub mod cmd;
 pub mod convert;
 pub mod hud;
+pub mod install;
 pub mod limiter;
+pub mod miles;
 pub mod look;
 pub mod script;
 pub mod sim;
 pub mod view;
+pub mod viewmodel;
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -20,11 +25,14 @@ use lurch::sim::buttons::{IN_FORWARD, IN_JUMP};
 use lurch::sim::math::V3;
 use script::{Script, SCRIPT_FRAMETIME};
 
+pub use audio::AudioPlugin;
 pub use cmd::CmdPlugin;
+pub use data::DataPlugin;
 pub use hud::HudPlugin;
 pub use limiter::LimiterPlugin;
 pub use sim::SimPlugin;
 pub use view::ViewPlugin;
+pub use viewmodel::ViewmodelPlugin;
 
 /// Every flag, inserted by `main` or a test before the plugins are added.
 #[derive(Resource, Clone, Debug, PartialEq)]
@@ -49,6 +57,12 @@ pub struct Config {
     pub size: (u32, u32),
     pub frame_latency: Option<NonZeroU32>,
     pub pipelined: bool,
+    /// The player's `player_setting_autosprint` option, on or off.
+    pub autosprint: bool,
+    /// The R5Reloaded install the game's models, animations and sounds are read from.
+    pub r5r: Option<PathBuf>,
+    /// The legend played, by its `footstep_type` (wraith, bangalore, ...): its sounds and arms.
+    pub legend: String,
 }
 
 impl Default for Config {
@@ -71,6 +85,9 @@ impl Default for Config {
             size: (1600, 900),
             frame_latency: None,
             pipelined: false,
+            autosprint: false,
+            r5r: None,
+            legend: "wraith".into(),
         }
     }
 }

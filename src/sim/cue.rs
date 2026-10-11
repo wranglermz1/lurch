@@ -77,4 +77,36 @@ pub enum Cue {
     Stand,
     /// A slide started with its speed boost available.
     SlideBoost,
+    /// Sprinting stopped (StopSprint, `0x8653c0`): weapons that were sprinting raise.
+    SprintEnd,
+    /// The zipline script callbacks movement runs: `CodeCallback_ZiplineMount` as the mount
+    /// starts (`0xa14aa0`), `CodeCallback_ZiplineStart` as it completes (`0xa15360`) and
+    /// `CodeCallback_ZiplineStop` on letting go (`0xa16060`).
+    ZiplineMount,
+    ZiplineStart,
+    ZiplineStop,
+    /// The grapple fired (`0x86d160`).
+    GrappleFire,
+    /// The hook caught at `at` (`0x9d1b00`): the impact effect `grapple`, and the reel-in
+    /// sound stops.
+    GrappleCatch { at: V3 },
+    /// The pull started (`0x9d1970`), or the hook caught again while pulling: the traverse loop.
+    GrapplePull,
+    /// The grapple let go (`0x86c220`): the impact effect `grapple_extract` at the anchor when
+    /// it was attached, the pull's loops stop and the reel-in starts.
+    GrappleDetach { extract: Option<V3> },
+    /// The hook is back at the eye (`0x9d4760`).
+    GrappleReset,
+    /// The first-person proxy's grapple animation (`0x9d5290`, `0x9d5650`).
+    GrappleAnim(GrappleAnim),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrappleAnim {
+    /// `ACT_VM_GRAPPLE_START`, then `ACT_VM_GRAPPLE_IDLE`.
+    Start,
+    /// `ACT_VM_GRAPPLE_STOP`.
+    Stop,
+    /// The animation is over: the proxy hides.
+    End,
 }

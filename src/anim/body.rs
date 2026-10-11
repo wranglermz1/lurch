@@ -212,7 +212,7 @@ impl Body {
         let activity = self.main_activity(f, set);
         self.activity = Some(activity);
         let mods: Vec<&str> = self.modifiers.iter().map(String::as_str).collect();
-        self.playback.play(set.select(activity, &mods));
+        self.playback.play(set.select(activity, &mods, self.playback.seq));
 
         self.aim_pitch = self.eye_pitch;
         self.turn_body(f, set);
@@ -618,7 +618,7 @@ mod tests {
     /// at 200 units/s.
     struct Seqs;
     impl AnimSet for Seqs {
-        fn select(&self, a: Activity, _: &[&str]) -> Option<Sequence> {
+        fn select(&self, a: Activity, _: &[&str], _: Option<Sequence>) -> Option<Sequence> {
             Some(Sequence(a.0 as u32))
         }
         fn activity(&self, s: Sequence) -> Option<Activity> {

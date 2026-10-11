@@ -25,6 +25,42 @@ pub struct PlayerSounds {
     pub freefall: Phases,
     /// `sound_slide_prefix`: the slide loop is `<prefix>.<start|bump|stop>.<surface>_1p`.
     pub slide_prefix: String,
+    /// `sound_grapple_*_1p`.
+    pub grapple: GrappleSounds,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct GrappleSounds {
+    pub fire: String,
+    pub retract: String,
+    pub reset: String,
+    pub traverse: String,
+    pub reel_in_target: String,
+    pub swing: String,
+}
+
+impl PlayerSounds {
+    /// The sound strings of a player settings asset (`settings/player/mp/*.rpak`).
+    pub fn from_settings(s: &crate::assets::settings::Settings) -> PlayerSounds {
+        let get = |k: &str| s.str(k).unwrap_or("").to_string();
+        PlayerSounds {
+            footstep_type: get("footstep_type"),
+            stealth: s.bool("stealthSounds").unwrap_or(false),
+            stand_to_crouch: get("sound_standToCrouch_1p"),
+            crouch_to_stand: get("sound_crouchToStand_1p"),
+            slide_boost: get("sound_jumpjet_slide_start_1p"),
+            freefall: Phases { start: get("sound_freefall_start_1p"), body: get("sound_freefall_body_1p"), finish: get("sound_freefall_finish_1p") },
+            slide_prefix: get("sound_slide_prefix"),
+            grapple: GrappleSounds {
+                fire: get("sound_grapple_fire_1p"),
+                retract: get("sound_grapple_retract_1p"),
+                reset: get("sound_grapple_reset_1p"),
+                traverse: get("sound_grapple_traverse_1p"),
+                reel_in_target: get("sound_grapple_reel_in_target_1p"),
+                swing: get("sound_grapple_swing_1p"),
+            },
+        }
+    }
 }
 
 /// A sound in three parts: a one-shot, a loop, and a one-shot when the loop is stopped.
@@ -92,6 +128,28 @@ pub struct Frame {
     pub left_ground_time: f32,
 }
 
+/// What the server's zipline script plays for the rider (the install's `pilot/_zipline.gnut`,
+/// the player's half of EmitDifferentSoundsOnEntityForPlayerAndWorld): attach as the mount
+/// starts, the loop once it completes, and on letting go the loop stopped and detach.
+const ZIPLINE_ATTACH: &str = "player_zipline_attach";
+const ZIPLINE_LOOP: &str = "player_zipline_loop";
+const ZIPLINE_DETACH: &str = "player_zipline_detach";
+
+/// What the impact effects `grapple` and `grapple_extract` play for the local player's hook on
+/// a `default` surface (the impact table the game loads at run time; every surface here is
+/// `default`).
+const GRAPPLE_IMPACT: &str = "Default.Grapple.Impact_1P_vs_3P";
+const GRAPPLE_EXTRACT: &str = "Default.Grapple.Extract_1P_vs_3P";
+
+/// The script callbacks the first-person proxy's mantles call that play a sound, and the sound
+/// (the install's `cl_player.gnut`, SetupFirstPersonProxyEvents: EmitSoundOnEntity on the proxy).
+const CALLBACK_SOUNDS: &[(&str, &str)] = &[
+    ("mantle_smallmantle", "mantle_smallmantle"),
+    ("mantle_mediummantle", "mantle_mediummantle"),
+    ("mantle_lowmantle", "mantle_lowmantle"),
+    ("mantle_extralowmantle", "mantle_extralow"),
+];
+
 impl Sfx {
     pub fn new(sounds: PlayerSounds) -> Self {
         Sfx { sounds, slide: None, air: None, last_vz: 0.0 }
@@ -118,10 +176,56 @@ impl Sfx {
             Cue::Crouch => Some(self.sounds.stand_to_crouch.clone()),
             Cue::Stand => Some(self.sounds.crouch_to_stand.clone()),
             Cue::SlideBoost => Some(self.sounds.slide_boost.clone()),
-            Cue::Land { .. } => None,
+            Cue::ZiplineMount => Some(ZIPLINE_ATTACH.to_string()),
+            Cue::ZiplineStart => Some(ZIPLINE_LOOP.to_string()),
+            Cue::ZiplineStop => {
+                mixer.stop(ZIPLINE_LOOP);
+                Some(ZIPLINE_DETACH.to_string())
+            }
+            Cue::GrappleFire => Some(self.sounds.grapple.fire.clone()),
+            Cue::GrappleCatch { at: p } => {
+                mixer.stop(&self.sounds.grapple.retract);
+                mixer.play(GRAPPLE_IMPACT, p);
+                None
+            }
+            Cue::GrapplePull => Some(self.sounds.grapple.traverse.clone()),
+            Cue::GrappleDetach { extract } => {
+                if let Some(p) = extract {
+                    mixer.play(GRAPPLE_EXTRACT, p);
+                }
+                let g = &self.sounds.grapple;
+                for n in [&g.traverse, &g.swing, &g.reel_in_target] {
+                    mixer.stop(n);
+                }
+                Some(g.retract.clone())
+            }
+            Cue::GrappleReset => {
+                mixer.stop(&self.sounds.grapple.retract);
+                Some(self.sounds.grapple.reset.clone())
+            }
+            Cue::Land { .. } | Cue::SprintEnd | Cue::GrappleAnim(_) => None,
         };
         if let Some(n) = name.filter(|n| !n.is_empty()) {
             mixer.play(&n, at);
+        }
+    }
+
+    /// The sound a sequence event plays (the client's FireEvent, `0x5f3d50`): `AE_CL_PLAYSOUND`
+    /// names it, `AE_CL_PLAYSOUND_FOR_TYPE` as `<footstep_type>.<options>`, the type of the
+    /// player who owns the entity, and `AE_CL_VSCRIPT_CALLBACK` runs the script bound to its
+    /// options. Ground contacts name third-person sounds only.
+    pub fn anim_event(&self, event: u16, options: &str, at: V3, mixer: &mut dyn Mixer) {
+        let name = match event {
+            crate::anim::AE_CL_PLAYSOUND => options.to_string(),
+            crate::anim::AE_CL_PLAYSOUND_FOR_TYPE => format!("{}.{options}", self.sounds.footstep_type),
+            crate::anim::AE_CL_VSCRIPT_CALLBACK => match CALLBACK_SOUNDS.iter().find(|(c, _)| *c == options) {
+                Some((_, sound)) => sound.to_string(),
+                None => return,
+            },
+            _ => return,
+        };
+        if !options.is_empty() {
+            mixer.play(&name, at);
         }
     }
 
@@ -257,7 +361,13 @@ mod tests {
         s.cue(&Cue::Stand, [0.0; 3], &mut w, &Names, &mut log);
         s.sounds.stealth = true;
         s.cue(&Cue::Footstep { gait: Gait::Crouch, surface: StepSurface::Ground(Some(0)), side: false }, [0.0; 3], &mut w, &Names, &mut log);
-        assert_eq!(log.0, ["pilot.sprint.metal", "pilot.jump.concrete", "pilot.heavyland.metal", "crouch_1p", "pilot.crouch.concrete.stealth"]);
+        s.anim_event(crate::anim::AE_CL_PLAYSOUND_FOR_TYPE, "effort_land_1p", [0.0; 3], &mut log);
+        s.anim_event(crate::anim::AE_CL_PLAYSOUND, "KnuckleCrack", [0.0; 3], &mut log);
+        s.anim_event(crate::anim::AE_GROUND_CONTACT_L, "LandSweetener_Low", [0.0; 3], &mut log);
+        assert_eq!(
+            log.0,
+            ["pilot.sprint.metal", "pilot.jump.concrete", "pilot.heavyland.metal", "crouch_1p", "pilot.crouch.concrete.stealth", "pilot.effort_land_1p", "KnuckleCrack"]
+        );
     }
 
     fn frame(z: f32, vz: f32, on_ground: bool, sliding: bool, t: f32) -> Frame {

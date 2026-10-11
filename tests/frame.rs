@@ -23,7 +23,7 @@ fn spot(name: &str) -> ([f32; 3], World) {
 
 fn filled(keys: &mut Keys) -> UserCmd {
     let mut c = UserCmd::default();
-    keys.fill(&mut c);
+    keys.fill(&mut c, None);
     c
 }
 
@@ -158,6 +158,54 @@ fn sprint_press_is_flagged_on_its_first_command_only() {
     filled(&mut k);
     k.press(IN_SPEED);
     assert_ne!(filled(&mut k).buttons & IN_SPEED_PRESSED, 0);
+}
+
+#[test]
+fn autosprint_sprints_a_command_after_a_forward_run() {
+    let s = pilot::settings();
+    let (origin, mut world) = spot("wall 48");
+    let mut clock = Clock::default();
+    let mut p = Pilot::new(origin);
+    let mut k = Keys::default();
+    let mut last = UserCmd::default();
+    k.press(IN_MOVERIGHT);
+    for _ in 0..2 {
+        let mut c = cmd(1, 0.0, 0);
+        k.fill(&mut c, Some((&p.player, &last)));
+        assert_eq!(c.buttons & IN_SPEED, 0);
+        p.step(&s, &c, clock.now(), &mut world);
+        clock.advance(c.frametime);
+        last = c;
+    }
+    k.release(IN_MOVERIGHT);
+    k.press(IN_FORWARD);
+    // A fresh press reads 0.5, under the bar, so sprint goes down on the third command.
+    let mut buttons = Vec::new();
+    for n in 0..20 {
+        let mut c = cmd(n, 0.0, 0);
+        k.fill(&mut c, Some((&p.player, &last)));
+        buttons.push(c.buttons);
+        p.step(&s, &c, clock.now(), &mut world);
+        clock.advance(c.frametime);
+        last = c;
+    }
+    assert!(buttons[..2].iter().all(|b| b & IN_SPEED == 0));
+    assert_ne!(buttons[2] & IN_SPEED_PRESSED, 0);
+    assert!(buttons[3..].iter().all(|b| b & IN_SPEED != 0 && b & IN_SPEED_PRESSED == 0));
+    assert!(p.player.sprinting);
+}
+
+#[test]
+fn autosprint_needs_more_input_to_start_than_to_keep() {
+    let (origin, _) = spot("wall 48");
+    let mut p = Pilot::new(origin).player;
+    let run = |forward, side| UserCmd { forward, side, ..Default::default() };
+    assert!(!p.autosprints(&run(0.9, 0.0), 0));
+    assert!(p.autosprints(&run(0.95, 0.0), 0));
+    assert!(!p.autosprints(&run(0.6, 0.8), 0));
+    assert!(!p.autosprints(&run(1.0, 0.0), 1));
+    p.sprinting = true;
+    assert!(p.autosprints(&run(0.9, 0.0), 0));
 }
 
 #[test]

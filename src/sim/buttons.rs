@@ -11,6 +11,9 @@ pub const IN_MOVELEFT: u32 = 0x200;
 pub const IN_MOVERIGHT: u32 = 0x400;
 pub const IN_WALK: u32 = 0x800;
 pub const IN_SPEED: u32 = 0x8000;
+/// `+offhand1`, the tactical. Movement never reads it: the ability fires after the move
+/// (`Pilot::grapple`).
+pub const IN_OFFHAND1: u32 = 0x20_0000;
 pub const IN_TOGGLE_DUCK: u32 = 0x400_0000;
 pub const IN_DODGE: u32 = 0x1000_0000;
 /// Our name. CreateMove sets it on the command where IN_SPEED or IN_DODGE goes down; the sim

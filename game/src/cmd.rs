@@ -10,6 +10,7 @@ use lurch::sim::setup::{command_seed, UserCmd};
 
 use crate::binds::{Action, Held, Input, Wheel};
 use crate::look::Look;
+use crate::sim::Sim;
 use crate::{common, config, Config, Frame, FrameIndex, HudVisible, LookReset, Paused, Respawn};
 
 /// The retail `usercmd_frametime_min`/`_max` ConVars. The oracle's own clamp lives in
@@ -30,11 +31,13 @@ pub struct CmdBuilder {
     pub look: Look,
     pub wheel: Wheel,
     pub next_number: u32,
+    /// The last command made, which the pilot has run by the time the next is made.
+    pub last: UserCmd,
 }
 
 impl CmdBuilder {
     pub fn new(sens: f32) -> Self {
-        CmdBuilder { keys: Keys::default(), held: Held::default(), look: Look::new(sens), wheel: Wheel::default(), next_number: 1 }
+        CmdBuilder { keys: Keys::default(), held: Held::default(), look: Look::new(sens), wheel: Wheel::default(), next_number: 1, last: UserCmd::default() }
     }
 
     pub fn release_all(&mut self) {
@@ -159,7 +162,8 @@ fn apply_look_reset(mut resets: MessageReader<LookReset>, mut b: ResMut<CmdBuild
     }
 }
 
-fn make_cmd(time: Res<Time<Real>>, script: Option<Res<ScriptFrametime>>, paused: Res<Paused>, frame: Res<FrameIndex>, mut b: ResMut<CmdBuilder>, mut queue: ResMut<CmdQueue>, log: Option<ResMut<CmdLog>>) {
+#[allow(clippy::too_many_arguments)]
+fn make_cmd(time: Res<Time<Real>>, script: Option<Res<ScriptFrametime>>, paused: Res<Paused>, frame: Res<FrameIndex>, cfg: Res<Config>, sim: Option<Res<Sim>>, mut b: ResMut<CmdBuilder>, mut queue: ResMut<CmdQueue>, log: Option<ResMut<CmdLog>>) {
     if paused.0 || time.delta().is_zero() {
         return;
     }
@@ -170,7 +174,9 @@ fn make_cmd(time: Res<Time<Real>>, script: Option<Res<ScriptFrametime>>, paused:
     let n = b.next_number;
     b.next_number += 1;
     let mut cmd = UserCmd { command_number: n, angles: b.look.angles(), frametime, random_seed: command_seed(n), ..default() };
-    b.keys.fill(&mut cmd);
+    let last = b.last;
+    b.keys.fill(&mut cmd, sim.as_ref().filter(|_| cfg.autosprint).map(|s| (&s.pilot.player, &last)));
+    b.last = cmd;
     if let Some(mut log) = log {
         log.0.push((frame.0, cmd));
     }

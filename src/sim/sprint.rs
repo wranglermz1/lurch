@@ -4,7 +4,8 @@
 //! not modelled: both are taken as not blocking.
 
 use super::math::*;
-use super::Move;
+use super::cue::Cue;
+use super::{Move, Player};
 
 pub use super::buttons::IN_SPEED;
 use super::buttons::IN_WALK;
@@ -18,16 +19,22 @@ fn quantize(f: f32) -> f32 {
     (f * 1023.0 + 0.5).floor() / 1023.0
 }
 
+impl Player {
+    /// The input still reads as a run in a direction that allows sprinting.
+    pub fn can_keep_sprinting(&self, f: f32, s: f32) -> bool {
+        let m2 = f * f + s * s;
+        m2 >= MIN_INPUT2 && (m2 == 0.0 || -0.707 <= f / m2.sqrt()) && (!self.on_ground() || self.sliding || 1 < self.traversal_state.wrapping_sub(1))
+    }
+}
+
 impl Move<'_> {
     fn input(&self) -> (f32, f32) {
         (self.mv.forward, self.mv.side)
     }
 
-    /// The input still reads as a run in a direction that allows sprinting.
     fn can_keep_sprinting(&self) -> bool {
         let (f, s) = self.input();
-        let m2 = f * f + s * s;
-        m2 >= MIN_INPUT2 && (m2 == 0.0 || -0.707 <= f / m2.sqrt()) && (!self.on_ground() || self.p.sliding || 1 < self.p.traversal_state.wrapping_sub(1))
+        self.p.can_keep_sprinting(f, s)
     }
 
     fn sprint_allowed(&self) -> bool {
@@ -90,6 +97,7 @@ impl Move<'_> {
                 self.p.sprint_end_frac = frac;
                 self.p.sprint_end_time = now;
                 self.p.sprinting = false;
+                self.cues.push(Cue::SprintEnd);
             } else if self.p.sprint_started_fresh || SPRINT_STAMINA <= self.p.stamina {
                 self.p.sprint_start_frac = frac;
                 self.p.sprint_start_time = now;

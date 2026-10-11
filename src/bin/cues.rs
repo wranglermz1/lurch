@@ -1,14 +1,19 @@
 //! Replay recordings and print what they sound and look like: every cue movement raises, the
-//! sound it names, and each change of body and viewmodel activity. Names that game data will
-//! fill in are shown as `<footstep_type>`, `<surface N>` and the settings field's name.
-//! Ground probes are answered by the arena's floor.
+//! sound it names, and each change of body activity.
+//! `cues [--r5r INSTALL [--legend NAME]] RECORDING...`: with an install, the legend's own sound
+//! names, the fists' viewmodel and the arms' first-person proxy, their sequences and the
+//! sounds those play; without,
+//! `<footstep_type>` and the settings fields' names. Surfaces are shown as `<surface N>`, and
+//! ground probes are answered by the arena's floor.
 
 use lurch::anim::body::{Body, BodySettings, Frame};
-use lurch::anim::viewmodel::Viewmodel;
+use lurch::anim::model::ModelAnims;
+use lurch::anim::proxy::Proxy;
+use lurch::anim::viewmodel::{Viewmodel, WeaponTimes};
 use lurch::anim::{NoAnims, PlayerEvent};
 use lurch::sim::cue::Cue;
 use lurch::sim::math::V3;
-use lurch::sound::{Mixer, Phases, PlayerSounds, Sfx, Surfaces};
+use lurch::sound::{GrappleSounds, Mixer, Phases, PlayerSounds, Sfx, Surfaces};
 
 const ARENA_FLOOR: f32 = -2688.0;
 
@@ -32,8 +37,11 @@ impl Mixer for Print<'_> {
 }
 
 fn main() {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut flag = |name: &str| args.iter().position(|a| a == name).map(|i| args.drain(i..i + 2).nth(1).expect("flag without a value"));
+    let (install, legend) = (flag("--r5r"), flag("--legend").unwrap_or("wraith".into()));
     let surfaces = Placeholder((0..256).map(|i| format!("<surface {i}>")).collect());
-    let sounds = PlayerSounds {
+    let mut sounds = PlayerSounds {
         footstep_type: "<footstep_type>".into(),
         stealth: false,
         stand_to_crouch: "sound_standToCrouch_1p".into(),
@@ -45,13 +53,30 @@ fn main() {
             finish: "sound_freefall_finish_1p".into(),
         },
         slide_prefix: "<sound_slide_prefix>".into(),
+        grapple: GrappleSounds {
+            fire: "sound_grapple_fire_1p".into(),
+            retract: "sound_grapple_retract_1p".into(),
+            reset: "sound_grapple_reset_1p".into(),
+            traverse: "sound_grapple_traverse_1p".into(),
+            reel_in_target: "sound_grapple_reel_in_target_1p".into(),
+            swing: "sound_grapple_swing_1p".into(),
+        },
     };
-    for path in std::env::args().skip(1) {
+    let mut fists = None;
+    if let Some(dir) = install {
+        let l = lurch::assets::loadout(std::path::Path::new(&dir), &legend).unwrap();
+        sounds = PlayerSounds::from_settings(&l.legend);
+        let class = l.legend.str("classActivityModifier").filter(|m| !m.is_empty()).map(str::to_string);
+        let vm = Viewmodel::new(class.into_iter().collect(), WeaponTimes::from_script(|k| l.weapon_script.get(k)?.parse().ok()));
+        fists = Some((ModelAnims::new(&l.weapon), vm, ModelAnims::new(&l.arms)));
+    }
+    for path in args {
         println!("{path}");
-        let (mut sfx, mut body, mut vm) = (Sfx::new(sounds.clone()), Body::new(BodySettings::default()), Viewmodel::default());
+        let (mut sfx, mut body) = (Sfx::new(sounds.clone()), Body::new(BodySettings::default()));
+        let mut fists = fists.as_ref().map(|(set, vm, arms)| (set, vm.clone(), arms, Proxy::default()));
         let mut world = lurch::world::World::floor(ARENA_FLOOR);
-        let (mut was_body, mut was_vm) = (None, None);
-        for rec in lurch::ltr::open(&path).unwrap() {
+        let (mut was_body, mut was_vm, mut was_proxy) = (None, None, None);
+        for (i, rec) in lurch::ltr::open(&path).unwrap().enumerate() {
             let rec = rec.unwrap();
             let (step, p, mv) = lurch::replay::run(&rec, None);
             let s = lurch::oracle::settings(&rec.settings);
@@ -62,7 +87,6 @@ fn main() {
                 sfx.cue(cue, mv.origin, &mut world, &surfaces, &mut Print(&mut out));
                 if let Some(ev) = PlayerEvent::of(cue) {
                     body.event(ev, g.curtime);
-                    vm.event(ev, &NoAnims);
                 }
                 if let Cue::Land { speed, .. } = cue {
                     body.landed(*speed);
@@ -83,14 +107,53 @@ fn main() {
             sfx.after_move(&frame, &mut world, &surfaces, &mut Print(&mut out));
             let f = Frame { p: &p, s: &s, velocity: mv.velocity, eye: mv.angles, curtime: g.curtime, frametime: g.frametime, traversal_type: 0 };
             body.update(&f, &NoAnims);
-            vm.update(p.sprinting, false, g.curtime, g.frametime, &NoAnims);
             if body.activity != was_body {
                 was_body = body.activity;
                 out.push(format!("body {}", body.activity.and_then(|a| a.name()).unwrap_or("?")));
             }
-            if vm.main != was_vm {
-                was_vm = vm.main;
-                out.push(format!("viewmodel {}", vm.main.and_then(|a| a.name()).unwrap_or("?")));
+            if let Some((set, vm, arms, proxy)) = &mut fists {
+                if i == 0 {
+                    vm.deploy(set, p.sprinting, g.curtime);
+                }
+                let traversing = p.movetype == lurch::sim::mantle::MOVETYPE_TRAVERSE;
+                let was = proxy.visible;
+                if (traversing || p.climb_arms) && !was {
+                    vm.holster(set, g.curtime);
+                }
+                vm.command(set, &step.cues, p.sprinting, g.curtime);
+                for (ev, options) in vm.frame(set, g.curtime + g.frametime).1 {
+                    sfx.anim_event(ev, &options, mv.origin, &mut Print(&mut out));
+                }
+                let now = (vm.activity, vm.main.seq);
+                if was_vm != Some(now) {
+                    was_vm = Some(now);
+                    let label = vm.main.seq.map_or("?", |q| set.seqs[q.0 as usize].label.as_str());
+                    out.push(format!("viewmodel {} ({label})", vm.activity.and_then(|a| a.name()).unwrap_or("?")));
+                }
+                let traversal = traversing.then_some(lurch::anim::proxy::Traversal {
+                    ty: p.traversal_type,
+                    cycle: p.traversal_cycle,
+                    gun_up: p.traversal_gun != 0,
+                    start_time: p.traversal_start_time,
+                    ledge: p.traversal_ref,
+                    forward: p.traversal_forward,
+                    mid: p.traversal_mid,
+                    end: p.traversal_end,
+                });
+                proxy.command(arms, traversal, !vm.hidden(g.curtime), s.mantle.jumpoff_duration, g.curtime);
+                let rising = lurch::oracle::move_in(&rec).velocity[2] > f32::EPSILON;
+                proxy.climb(arms, p.climb_arms.then_some(lurch::anim::proxy::Climb { normal: p.up, rising }), g.curtime);
+                if was && !proxy.visible {
+                    vm.unholster(set, g.curtime);
+                }
+                for (ev, options) in proxy.frame(arms, g.curtime + g.frametime).1 {
+                    sfx.anim_event(ev, &options, mv.origin, &mut Print(&mut out));
+                }
+                let now = proxy.main.seq.filter(|_| proxy.visible);
+                if was_proxy != Some(now) {
+                    was_proxy = Some(now);
+                    out.push(format!("proxy {}", now.map_or("hidden", |q| arms.seqs[q.0 as usize].label.as_str())));
+                }
             }
             for line in out {
                 println!("  {:x} {line}", rec.seq);

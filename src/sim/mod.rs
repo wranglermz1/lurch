@@ -6,6 +6,7 @@ pub mod climb;
 pub mod collide;
 pub mod cue;
 pub mod duck;
+pub mod grapple;
 pub mod ground;
 pub mod input;
 pub mod jump;
@@ -95,6 +96,7 @@ pub struct Settings {
     pub climb: climb::Climb,
     pub mantle: mantle::Mantle,
     pub zipline: zipline::Tuning,
+    pub grapple: grapple::Tuning,
     pub sv_gravity: f32,
     pub sv_maxvelocity: f32,
     pub extra_air_accel: f32,
@@ -230,6 +232,16 @@ pub struct Player {
     pub repel_time: f32,
     pub repel_count: i32,
     pub hanging: bool,
+    /// The climbing arms are on (`+0x276c`): the first-person proxy plays its climb.
+    pub climb_arms: bool,
+    /// Whether a view-offset entity is set (`+0x2860`, the proxy's handle), how long its
+    /// blend takes in and out, an unidentified flag the climb clears, and the blend itself,
+    /// which the view setup moves each frame.
+    pub view_entity: bool,
+    pub view_entity_lerp_in: f32,
+    pub view_entity_lerp_out: f32,
+    pub view_entity_flag: bool,
+    pub view_entity_blend: f32,
     pub dodge_lock: bool,
     pub dodged: bool,
     pub wall_decel_scale: f32,
@@ -261,8 +273,38 @@ pub struct Player {
     pub view_offset: V3,
     /// Where the eye lags the origin after a step up or a snap down, easing back to zero.
     pub step_smoothing: V3,
-    /// When a grapple last pulled the player, which lets a mantle start without forward input.
+    /// When the grapple last let go (`+0x27d0`), which lets a mantle start without forward input.
     pub grapple_time: f32,
+    /// The grapple (`+0x2770`): the hook's velocity in flight; the rope's points from the
+    /// player's end, the last being the hook; whether the hook holds, pulls, swings, reels in,
+    /// and reels in fast after letting go; whether the pull has touched the ground; power used;
+    /// when it fired, the pull started and the hook caught; whether the pull is fast enough, and
+    /// since when it is not; the swing's length and hold time.
+    pub grapple_hook_vel: V3,
+    pub grapple_points: [V3; 4],
+    pub grapple_count: i32,
+    pub grapple_attached: bool,
+    pub grapple_pulling: bool,
+    pub grapple_swinging: bool,
+    pub grapple_retracting: bool,
+    pub grapple_forced: bool,
+    pub grapple_touched: bool,
+    pub grapple_power_used: f32,
+    pub grapple_fire_time: f32,
+    pub grapple_pull_time: f32,
+    pub grapple_attach_time: f32,
+    pub grapple_fast: bool,
+    pub grapple_slow_time: f32,
+    pub grapple_swing_length: f32,
+    pub grapple_swing_hold: f32,
+    /// The hook entity (`+0x3140`): where it is, which the rope is drawn to and a zipline grab
+    /// measures from, and the zipline it caught (`m_grappleZipline`, hook `+0x1300`).
+    pub grapple_hook_at: V3,
+    pub grapple_zipline: Option<u32>,
+    /// The first-person animation state (`+0x2a4c`): 5 while the proxy plays the grapple's.
+    pub first_person_anim: u32,
+    /// The suit's grapple power (`+0x1a64`), which firing needs and pulling uses.
+    pub suit_grapple_power: f32,
     /// Something outside movement forbids mantling now (a view mode, touching slip entities).
     pub mantle_blocked: bool,
     /// The traversal (mantle). Kind 0 is a mantle (1 a window). Type: 3 to 6 by where the eye
@@ -287,6 +329,9 @@ pub struct Player {
     pub traversal_backoff: bool,
     pub traversal_push: bool,
     pub traversal_rest: f32,
+    /// Whether the gun is still up through a mantle (1 or 0), which keeps the first-person
+    /// hands back; outside one it counts down.
+    pub traversal_gun: i32,
     /// The first-person animation's cycle, which chases progress past the type's start.
     pub traversal_cycle: f32,
     /// A context action holds the player (9: a zipline); it blocks sprinting and other uses.
@@ -363,6 +408,10 @@ pub struct MoveData {
     pub view_wish: V3,
     /// The command's random seed, which view kicks draw from. Recordings do not hold it.
     pub random_seed: Option<u32>,
+    /// `+0xe4`: the velocity the grapple's anchor checks left, which the move's own velocity
+    /// does not keep; the next update compares against it. CMoveData is static, so it lasts
+    /// from call to call.
+    pub grapple_stash: V3,
     pub origin: V3,
     pub velocity: V3,
 }
@@ -484,6 +533,9 @@ impl Move<'_> {
             self.p.duck_timer = (self.p.duck_timer - (self.g.frametime * 1000.0) as i32).max(0);
         }
         if self.p.movetype != 12 {
+            if 0 < self.p.traversal_gun {
+                self.p.traversal_gun -= 1;
+            }
             if self.p.movetype == 2 && !self.mv.origin_changed && optimized {
                 if OPTIMIZED_LEAVE_SPEED < math::dot(self.p.up, self.mv.velocity) {
                     self.set_ground(None);
@@ -498,6 +550,7 @@ impl Move<'_> {
         }
         self.update_step_sound();
         self.duck();
+        self.grapple_think();
         self.update_sprint();
         self.mv.maxspeed = self.max_speed();
         self.sprint_tilt();
@@ -513,6 +566,7 @@ impl Move<'_> {
             mantle::MOVETYPE_TRAVERSE => self.traversal_move(false),
             _ => {}
         }
+        self.grapple_wrap();
         self.p.decay_step_smoothing(self.g.frametime);
     }
 

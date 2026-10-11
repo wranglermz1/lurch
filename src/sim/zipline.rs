@@ -4,6 +4,7 @@
 //! docs/oracle.md, Zipline, maps each function to its RVA.
 
 pub use super::buttons::IN_USE;
+use super::cue::Cue;
 use super::math::*;
 use super::{HullQuery, Move, Trace};
 
@@ -417,7 +418,7 @@ fn within_reach(c: V3, a: V3, b: V3) -> Option<(f32, f32)> {
 }
 
 impl Move<'_> {
-    fn zipline(&self, id: Option<u32>) -> Option<Zipline> {
+    pub(super) fn zipline(&self, id: Option<u32>) -> Option<Zipline> {
         let id = id?;
         self.tr.ziplines().iter().find(|z| z.id == id).cloned()
     }
@@ -513,6 +514,7 @@ impl Move<'_> {
         if self.p.context_action == 0 {
             self.p.context_action = CONTEXT_ZIPLINE;
         }
+        self.cues.push(Cue::ZiplineMount);
     }
 
     /// The mount: alpha runs 0 to 1 over the mount time, the target slides along the rope as a
@@ -569,6 +571,7 @@ impl Move<'_> {
             self.p.zipline_mount_time = 0.0;
             self.p.zipline_mount_alpha = 0.0;
             self.reset_air_counts();
+            self.cues.push(Cue::ZiplineStart);
         }
     }
 
@@ -714,7 +717,7 @@ impl Move<'_> {
         }
         let p = self.p.zipline_param;
         if p != if reverse { 0.0 } else { 1.0 } {
-            let eye = self.p.eye_position(self.s, self.p.abs_origin, self.p.view_angles, self.g.curtime);
+            let eye = self.p.eye(self.s, self.p.abs_origin, self.p.view_angles, self.g.curtime);
             let o = self.p.abs_origin;
             let a = arrive.origin;
             let (e, f) = (sub(a, eye), sub(a, o));
@@ -766,6 +769,7 @@ impl Move<'_> {
         }
         self.p.floor_frozen = false;
         self.p.floor_height = self.p.abs_origin[2];
+        self.cues.push(Cue::ZiplineStop);
     }
 
     /// PreThink's use, before the movement call: a press of use, or holding it while the last
@@ -808,7 +812,7 @@ impl Move<'_> {
             return None;
         }
         let facing = self.facing();
-        let eye = self.p.eye_position(self.s, self.p.abs_origin, self.p.view_angles, self.g.curtime);
+        let eye = self.p.eye(self.s, self.p.abs_origin, self.p.view_angles, self.g.curtime);
         let fwd = angle_vectors(facing).0;
         let (z, point, _, _) = self.find_zipline(fwd)?;
         let d = sub(point, eye);
@@ -885,6 +889,12 @@ impl Move<'_> {
     /// Enabled ropes within the search radius of `c`: first across the floor plan, then along
     /// the rope.
     fn candidates(&self, c: V3) -> Vec<Zipline> {
+        self.candidates_within(c, SEARCH_RADIUS2)
+    }
+
+    /// `0xa0f850`: enabled ropes whose floor plan passes within √`r2` of `c`, then whose
+    /// polyline does.
+    fn candidates_within(&self, c: V3, r2: f32) -> Vec<Zipline> {
         let mut out = Vec::new();
         for z in self.tr.ziplines().iter().filter(|z| z.rope && z.enabled) {
             let Some(end) = self.next_of(z) else { continue };
@@ -907,7 +917,7 @@ impl Move<'_> {
                 py = dy * t + s[1];
             }
             let flat = (c[1] - py) * (c[1] - py) + (c[0] - px) * (c[0] - px);
-            if flat < SEARCH_RADIUS2 && 0.01 <= (e[2] - s[2]) * (e[2] - s[2]) + l2 && polyline_distance2(c, &pts) < SEARCH_RADIUS2 {
+            if flat < r2 && 0.01 <= (e[2] - s[2]) * (e[2] - s[2]) + l2 && polyline_distance2(c, &pts) < r2 {
                 out.push(z.clone());
             }
         }
@@ -984,5 +994,213 @@ impl Move<'_> {
             }
         }
         reverse
+    }
+}
+
+/// A hook's ray catches a zipline passing within 30 of it (`0xa12820`), searching ropes within
+/// that much of the ray's half length from its middle. A span reaching within 10 of the eye is
+/// cut to its part inside that sphere.
+const HOOK_SEARCH_PAD: f32 = 30.0;
+const HOOK_CATCH2: f32 = 900.0;
+const HOOK_EYE2: f32 = 100.0;
+const MASK_HOOK: u32 = 0x4640_400b;
+/// The grab from the grapple (`0xa13ab0`): the hook within 120 of the eye or the origin.
+const GRAPPLE_GRAB2: f32 = 14400.0;
+
+/// The part of span `a`..`b` a hook's ray is tested against: all of it, unless it reaches
+/// within 10 of the eye. Reaching in over an end leaves the part inside; passing through
+/// leaves nothing.
+fn eye_cut(eye: V3, a: V3, b: V3) -> Option<(V3, V3)> {
+    let (dx, dy, dz) = (b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    let (fx, fy, fz) = (a[0] - eye[0], a[1] - eye[1], a[2] - eye[2]);
+    let dd = dy * dy + dx * dx + dz * dz;
+    let ff = fy * fy + fx * fx + fz * fz;
+    let (t0, t1) = if dd != 0.0 {
+        let bq = fy * dy + fx * dx + fz * dz;
+        let bq = bq + bq;
+        let disc = bq * bq - (ff - HOOK_EYE2) * dd * 4.0;
+        if disc < 0.0 {
+            return Some((a, b));
+        }
+        let r = disc.sqrt();
+        let (t0, t1) = ((-bq - r) * (0.5 / dd), (r - bq) * (0.5 / dd));
+        if 1.0 < t0 || t1 < 0.0 {
+            return Some((a, b));
+        }
+        let t0 = if t0 < 0.0 { 0.0 } else { t0 };
+        let t1 = if 1.0 < t1 { 1.0 } else { t1 };
+        if !(t0 <= 0.0 || 1.0 <= t1) {
+            return None;
+        }
+        (t0, t1)
+    } else {
+        if !(ff <= HOOK_EYE2) {
+            return Some((a, b));
+        }
+        (0.0, 0.0)
+    };
+    Some(([t0 * dx + a[0], a[1] + t0 * dy, t0 * dz + a[2]], [t1 * dx + a[0], t1 * dy + a[1], a[2] + t1 * dz]))
+}
+
+impl Move<'_> {
+    /// `0xa12820`: the hook's ray `t` (from its start to where it stopped) catches a zipline it
+    /// passes within 30 of, where a ray between the two is clear; it then ends at its point
+    /// nearest the rope, on contents 0. Not the zipline ridden, nor the last one within
+    /// `grapple_lastZiplineCooldown` of letting go.
+    pub(super) fn zipline_on_ray(&mut self, t: &mut Trace) -> Option<u32> {
+        let (s0, e0) = (t.start, t.endpos);
+        let h = [(e0[0] - s0[0]) * 0.5, (e0[1] - s0[1]) * 0.5, (e0[2] - s0[2]) * 0.5];
+        let c = [s0[0] + h[0], s0[1] + h[1], s0[2] + h[2]];
+        let r = (h[1] * h[1] + h[0] * h[0] + h[2] * h[2]).sqrt() + HOOK_SEARCH_PAD;
+        let ridden = self.p.zipline;
+        let since = self.g.curtime - self.p.zipline_detach_time;
+        let last = self.p.last_zipline.filter(|_| !(self.s.grapple.last_zipline_cooldown < since));
+        let eye = self.grapple_eye();
+        let mut caught = None;
+        for z in self.candidates_within(c, r * r) {
+            if Some(z.id) == ridden || Some(z.id) == last {
+                continue;
+            }
+            for w in z.points.windows(2) {
+                let Some((a, b)) = eye_cut(eye, w[0], w[1]) else { continue };
+                if self.hook_ray_meets(t, a, b) {
+                    caught = Some(z.id);
+                }
+            }
+        }
+        caught
+    }
+
+    /// One span against the hook's ray: where they pass within 30 of each other and a ray
+    /// between those points is clear, the hook's ray ends there.
+    fn hook_ray_meets(&mut self, t: &mut Trace, a: V3, b: V3) -> bool {
+        let (s0, e0) = (t.start, t.endpos);
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let clear = |m: &mut Self, from: V3, to: V3| {
+            let r = m.tr.hull(&HullQuery { start: from, end: to, mins: ZERO, maxs: ZERO, mask: MASK_HOOK });
+            !(r.fraction < 1.0 || r.allsolid || r.startsolid)
+        };
+        let Some((ta, tb)) = super::grapple::closest_on_lines(s0, e0, a, b) else {
+            let l2 = d[1] * d[1] + d[0] * d[0] + d[2] * d[2];
+            let u = if 1e-5 <= l2 {
+                let u = ((s0[1] * d[1] + s0[0] * d[0] + s0[2] * d[2]) - (a[1] * d[1] + a[0] * d[0] + a[2] * d[2])) / l2;
+                if 0.0 <= u { if u <= 1.0 { u } else { 1.0 } } else { 0.0 }
+            } else {
+                0.0
+            };
+            let q = [u * d[0] + a[0], u * d[1] + a[1], u * d[2] + a[2]];
+            let (gx, gy, gz) = (s0[0] - q[0], s0[1] - q[1], s0[2] - q[2]);
+            if !(gy * gy + gx * gx + gz * gz < HOOK_CATCH2) || !clear(self, s0, q) {
+                return false;
+            }
+            let l = (gy * gy + gx * gx + gz * gz).sqrt();
+            let inv = 1.0 / if l <= TINY { TINY } else { l };
+            t.endpos = s0;
+            t.normal = [inv * gx, inv * gy, inv * gz];
+            t.fraction = 0.0;
+            t.contents = 0;
+            t.surface = 0;
+            t.flag3b = false;
+            return true;
+        };
+        let ta = if ta <= 0.0 { 0.0 } else if 1.0 <= ta { 1.0 } else { ta };
+        let tb = if tb <= 0.0 { 0.0 } else if 1.0 <= tb { 1.0 } else { tb };
+        let p = [(e0[0] - s0[0]) * ta + s0[0], (e0[1] - s0[1]) * ta + s0[1], (e0[2] - s0[2]) * ta + s0[2]];
+        let q = [d[0] * tb + a[0], d[1] * tb + a[1], d[2] * tb + a[2]];
+        let (qx, qy, qz) = (q[0] - p[0], q[1] - p[1], q[2] - p[2]);
+        let dd2 = qy * qy + qx * qx + qz * qz;
+        if !(dd2 < HOOK_CATCH2) {
+            return false;
+        }
+        let (sx, sy, sz) = (e0[0] - s0[0], e0[1] - s0[1], e0[2] - s0[2]);
+        let l2 = sy * sy + sx * sx + sz * sz;
+        if !(0.01 < l2) || !clear(self, p, q) {
+            return false;
+        }
+        let l = l2.sqrt();
+        let n = if dd2 <= 0.01 {
+            let inv = 1.0 / l;
+            [sx * inv, sy * inv, sz * inv]
+        } else {
+            let inv = 1.0 / dd2.sqrt();
+            [qx * inv, qy * inv, inv * qz]
+        };
+        let (px, py, pz) = (p[0] - s0[0], p[1] - s0[1], p[2] - s0[2]);
+        t.fraction = ((py * py + px * px + pz * pz).sqrt() * t.fraction) / l;
+        t.endpos = p;
+        t.normal = [-n[0], -n[1], -n[2]];
+        t.contents = 0;
+        t.surface = 0;
+        t.flag3b = false;
+        true
+    }
+
+    /// The point of zipline `id`'s rope, its fixed ends pulled in, nearest `at`: where a hook
+    /// that caught it holds (`0x9d1b00`).
+    pub(super) fn zipline_nearest(&mut self, id: u32, at: V3) -> V3 {
+        let Some(z) = self.zipline(Some(id)) else { return at };
+        let mut pts = z.points.clone();
+        let hang = self.hang();
+        self.trim_ends(&z, &mut pts, hang);
+        let mut best = f32::MAX;
+        let mut q = ZERO;
+        for w in pts.windows(2) {
+            let (p, d) = (w[0], sub(w[1], w[0]));
+            let l2 = d[1] * d[1] + d[0] * d[0] + d[2] * d[2];
+            let u = if 1e-5 <= l2 {
+                let u = ((at[1] * d[1] + at[0] * d[0] + at[2] * d[2]) - (d[0] * p[0] + d[1] * p[1] + d[2] * p[2])) / l2;
+                if 0.0 <= u { if u <= 1.0 { u } else { 1.0 } } else { 0.0 }
+            } else {
+                0.0
+            };
+            let c = [d[0] * u + p[0], d[1] * u + p[1], d[2] * u + p[2]];
+            let (ex, ez) = (at[0] - c[0], at[2] - c[2]);
+            let d2 = (at[1] - c[1]) * (at[1] - c[1]) + ex * ex + ez * ez;
+            if d2 < best {
+                best = d2;
+                q = c;
+            }
+        }
+        q
+    }
+
+    /// `0xa13ab0` from the grapple: once the hook holds a zipline and the eye or the origin is
+    /// within 120 of it, with a clear standing hull from the origin to hanging below it, the
+    /// zipline is grabbed there and the grapple lets go. The mount starts next movement call.
+    pub(super) fn grapple_zipline_grab(&mut self) -> bool {
+        if !self.may_zipline() || !self.p.grappling {
+            return false;
+        }
+        let Some(z) = self.zipline(self.p.grapple_zipline) else { return false };
+        let eye = self.grapple_eye();
+        let hook = self.p.grapple_hook_at;
+        let (ex, ey, ez) = (hook[0] - eye[0], hook[1] - eye[1], hook[2] - eye[2]);
+        let to_eye = ey * ey + ex * ex + ez * ez;
+        let o = self.p.abs_origin;
+        let oz = hook[2] - o[2];
+        let to_origin = (hook[1] - o[1]) * (hook[1] - o[1]) + (hook[0] - o[0]) * (hook[0] - o[0]) + oz * oz;
+        let near = if to_origin <= to_eye { to_origin } else { to_eye };
+        if GRAPPLE_GRAB2 < near {
+            return false;
+        }
+        let hang = self.hang();
+        let to = [hook[0] - 0.0, hook[1] - 0.0, hook[2] - hang];
+        if !self.zipline_clear(o, to) {
+            return false;
+        }
+        let reverse = self.ride_reverse(&z, hook, hang);
+        if Some(z.id) == self.p.zipline {
+            return false;
+        }
+        self.grapple_drop();
+        self.detach_zipline();
+        self.p.zipline = Some(z.id);
+        self.p.zipline_state = REQUESTED;
+        self.p.zipline_from = o;
+        self.p.zipline_from_velocity = self.mv.velocity;
+        self.p.zipline_use_point = hook;
+        self.p.zipline_reverse = reverse;
+        self.p.sliding = false;
+        true
     }
 }

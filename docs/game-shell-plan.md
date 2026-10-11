@@ -39,7 +39,7 @@ The goal is a playable first-person practice shell on the test map (`src/testmap
 Deferred:
 
 - **Sprint shake and view bob.** Not ported yet (roadmap item 3). They will reach the shell through `Pilot::eye` once lurch has them.
-- **Viewmodel and models.** A stand-in viewmodel comes with roadmap item 4. Our own glTF models come later (section 8). Apex models and animations stay out for legal reasons.
+- **Viewmodel and models.** The user later asked for the game's own arms, animation and sound, read from their R5Reloaded install at run time and never kept in the repository (`docs/assets.md`, roadmap items 4 and 5). Our own glTF models come later (section 8); they hold no Apex asset.
 - **Multiplayer.** Later (section 8).
 
 **Why the frame loop is shaped this way.** Each of these choices costs a few lines now and pays off offline:
@@ -553,10 +553,10 @@ Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
 
 ### Light and sky
 
-- **Sun.** `DirectionalLight { shadow_maps_enabled: false, ..default() }` with `Transform::default().looking_to(Vec3::new(-0.4, -1.0, -0.3), Vec3::Y)`. It is on all render layers the cameras use (section 8).
-- **Ambient.** `GlobalAmbientLight { brightness: 2000.0, ..default() }`. With the default of 80, faces turned away from the sun render at about (32,32,32) (measured). Tune within 1500 to 3000 from the M7 screenshots.
+- **Sun.** `DirectionalLight { shadow_maps_enabled: true, ..default() }` with `Transform::default().looking_to(Vec3::new(0.55, -0.65, -0.52), Vec3::Y)`: about 40° up and across the lanes, so the faces of a prop seen from a spot differ. It is on all render layers the cameras use (section 8).
+- **Ambient.** No `GlobalAmbientLight` (`GlobalAmbientLight::NONE`). Each camera, the viewmodel's too, carries `view::sky_light`: an `EnvironmentMapLight::hemispherical_gradient` from a pale sky (srgb 0.80, 0.85, 0.92) to a ground grey (srgb 0.45, 0.43, 0.40), intensity 1500. A flat ambient of 2000 lit every face alike, so the props and arms looked unlit; the gradient shades a face by where it points.
 - **Sky.** `ClearColor(Color::srgb(0.55, 0.70, 0.85))`. It renders as exactly (140,178,217) on lavapipe (measured).
-- **Shadows.** Off. If they are added, tune `CascadeShadowConfigBuilder` for a 400 m floor.
+- **Shadows.** The sun casts them with Bevy's default cascades, which reach 150 m from the camera. The `Body` cuboid and the viewmodel meshes are `NotShadowCaster`: the hull is not a body, and the arms have their own camera.
 
 ### Body
 
@@ -605,6 +605,7 @@ These are the Apex PC defaults as commonly documented. They are unverified again
 | C | IN_TOGGLE_DUCK (the sim toggles on the press edge) | Apex default |
 | Left Shift | IN_SPEED (a tap is enough; the sim keeps sprint intent) | Apex default |
 | E | IN_USE (grab a zipline) | Apex default |
+| Q | IN_OFFHAND1, the tactical: Pathfinder's grapple, fired after the command (`Pilot::grapple`). Its rope is drawn from a hand ahead of and below the eye (ours) through the rope's points to the hook | Apex default |
 | Wheel down | tap IN_FORWARD (tap-strafe bind) | Ours; Apex's default is weapon cycling, which is out of scope |
 | Wheel up | tap IN_JUMP (scroll jump) | Ours |
 | Left click | unpause and grab (in `pause_input`) | Ours |
@@ -633,6 +634,9 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | `--wheel-mode event\|notch` | `event` | M8 |
 | `--frame-latency N` | `Window.desired_maximum_frame_latency = NonZeroU32::new(N)`, unset by default | M8 |
 | `--pipelined` | Keeps `PipelinedRenderingPlugin` (off by default) | M8 |
+| `--autosprint` | `player_setting_autosprint` 1 (`docs/oracle.md`, Autosprint); off by default | |
+
+A `lurch.cfg` beside the executable holds the same flags, whitespace-separated, with `#` starting a comment line. Its flags are read before the command line's, so a flag given on the command line wins.
 
 ### Window and timing
 
@@ -795,7 +799,7 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
   - `script.rs` parses lines of the form `FRAME ACTION ARGS`.
     - `#` starts a comment. Frames are non-decreasing. Frame F is the F-th update from 0. Frame 0 makes no command, so input on frame 0 first shows in command 1.
     - Actions: `down KEY`, `up KEY`, `tap KEY` (press and release in the same frame), `wheel N` (one `MouseWheel { unit: Line, x: 0.0, y: N, window, phase: TouchPhase::Moved }`; 0.19.1's `MouseWheel` has a `phase` field; negative is down), `look DX DY` (one `MouseMotion`), `spot NAME` (`Respawn::Named`), and `exit`.
-    - KEY is one of `KeyW KeyA KeyS KeyD Space ControlLeft ShiftLeft KeyC KeyR BracketLeft BracketRight F1`.
+    - KEY is one of `KeyW KeyA KeyS KeyD Space ControlLeft ShiftLeft KeyC KeyE KeyQ KeyR BracketLeft BracketRight F1`.
   - `ScriptPlugin(Script)`: `inject_script`, `ScriptFrametime`, `script_end`.
   - `script_end`, at the `exit` frame:
     - prints `script::final_line(&Sim, &CmdBuilder)`, which is `final cmd=N origin=[..] velocity=[..] clock=..` with Debug formatting (exact);
@@ -926,9 +930,10 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 
 The user named multiplayer and models as later features (section 0). Ask before starting them. The viewmodel is already roadmap item 4.
 
-### Viewmodel (roadmap item 4)
+### Viewmodel (roadmap item 5)
 
-First built from Bevy primitives:
+Built as below, with the arms read from the install instead of Bevy primitives
+(`game/src/viewmodel.rs`):
 
 - A second `Camera3d` with `Camera { order: 1, .. }`, and `RenderLayers::layer(1)` for the viewmodel.
 - `RenderLayers::from_layers(&[0, 1])` on the DirectionalLight, or the viewmodel renders unlit. This follows `examples/camera/first_person_view_model.rs:186`. Add layer 2 if a third-person camera renders the `Body`.

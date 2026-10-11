@@ -41,7 +41,7 @@ fn final_of(app: &App) -> String {
 
 #[test]
 fn parser_rejects_bad_lines() {
-    assert!(parse("1 down KeyQ").unwrap_err().contains("unknown key"));
+    assert!(parse("1 down KeyZ").unwrap_err().contains("unknown key"));
     assert!(parse("1 jump").is_err());
     assert!(parse("1 dance KeyW").is_err());
     assert!(parse("5 down KeyW\n4 up KeyW").unwrap_err().contains("goes back"));

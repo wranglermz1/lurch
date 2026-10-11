@@ -240,6 +240,10 @@ impl Move<'_> {
 
 /// Moves `tilt` toward the horizontal velocity turned a quarter left, scaled from 0 at `lo`
 /// speed to 1 at `hi` and by `on`; at most `rise` per second while it grows, else `fall`.
+/// How many first-person proxies the player owns: every recording moves the view-offset blend
+/// by twice the frame's time.
+const FIRST_PERSON_PROXIES: usize = 2;
+
 fn tilt_toward(tilt: &mut V3, on: f32, v: V3, (lo, hi): (f32, f32), (rise, fall): (f32, f32), dt: f32) {
     let (lx, ly) = (-v[1], v[0]);
     let len2 = ly * ly + lx * lx + 0.0;
@@ -329,13 +333,19 @@ impl Player {
         [f[0] * inv * k, f[1] * inv * k, k * inv * 0.0]
     }
 
-    /// Where the camera sits for a player standing at `origin` and looking along `angles`.
+    /// Where the camera sits for a player standing at `origin` and looking along `angles`:
+    /// the eye with the step smoothing the view adds last (`0x869640` → `0x85ed00`).
     pub fn eye_position(&self, s: &Settings, origin: V3, angles: V3, now: f32) -> V3 {
+        add(self.step_smoothing, self.eye(s, origin, angles, now))
+    }
+
+    /// The eye as movement reads it (`0x858710`): the view offset, the pitch offset and the
+    /// zipline sway.
+    pub fn eye(&self, s: &Settings, origin: V3, angles: V3, now: f32) -> V3 {
         let p = self.sway_eye(self.pitch_offset(s, angles));
         let o = self.view_offset;
         let drop = self.sprint_eye_drop(s, now);
-        let e = [o[0] + origin[0] + (p[0] + 0.0), o[1] + origin[1] + (p[1] + 0.0), o[2] + origin[2] + (drop + p[2] + 0.0)];
-        add(self.step_smoothing, e)
+        [o[0] + origin[0] + (p[0] + 0.0), o[1] + origin[1] + (p[1] + 0.0), o[2] + origin[2] + (drop + p[2] + 0.0)]
     }
 
     /// The zipline sway, in the frame of the view's yaw: forward, left, up.
@@ -455,6 +465,60 @@ impl Player {
         w * strength * (1.0 - k2) * r
     }
 
+    /// How far the view rolls toward the grapple's rope (`0x6851f0`), seen from `eye` along
+    /// `angles`: the rope's last point off the view leans the view to bring it overhead,
+    /// weighted in by its distance and by how far off the view it is, by up to
+    /// `grapple_rollMax`. The view roll takes it in place of the zipline's while the grapple
+    /// is out (`0x85ffc0`).
+    pub fn grapple_roll_target(&self, s: &Settings, eye: V3, angles: V3) -> f32 {
+        let g = &s.grapple;
+        let (max, strength) = (g.roll_max, g.roll_strength);
+        if !(0.0 < max && 0.0 < strength) || self.grapple_count <= 0 {
+            return 0.0;
+        }
+        let p = self.grapple_points[(self.grapple_count - 1) as usize];
+        let v = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+        let d2 = v[1] * v[1] + v[0] * v[0] + v[2] * v[2];
+        if !(g.roll_distance_min * g.roll_distance_min <= d2) {
+            return 0.0;
+        }
+        let d = d2.sqrt();
+        let near = remap_clamped(d, g.roll_distance_min, g.roll_distance_max);
+        if !(0.0 < near) {
+            return 0.0;
+        }
+        let inv = 1.0 / d;
+        let (f, _, up) = angle_vectors(angles);
+        let k = v[1] * f[1] + v[0] * f[0] + v[2] * f[2];
+        let lat = [v[0] - f[0] * k, v[1] - f[1] * k, v[2] - f[2] * k];
+        let lat2 = lat[1] * lat[1] + lat[0] * lat[0] + lat[2] * lat[2];
+        if !(0.0 < lat2) {
+            return 0.0;
+        }
+        let clamp1 = |c: f32| if c <= -1.0 { -1.0 } else if 1.0 <= c { 1.0 } else { c };
+        let off = clamp1(inv * v[1] * f[1] + inv * v[0] * f[0] + inv * v[2] * f[2]).acos() * 57.295_776;
+        if !(g.roll_view_angle_min <= off) {
+            return 0.0;
+        }
+        let w = remap_clamped(off, g.roll_view_angle_min, g.roll_view_angle_max);
+        if !(0.0 < w) {
+            return 0.0;
+        }
+        let li = 1.0 / lat2.sqrt();
+        let n = [lat[0] * li, lat[1] * li, lat[2] * li];
+        let mut a2 = clamp1(up[1] * n[1] + up[0] * n[0] + up[2] * n[2]).acos();
+        let k2 = (a2 - 1.570_796_4) / 1.570_796_4;
+        let k2 = if k2 <= 0.0 { 0.0 } else if 1.0 <= k2 { 1.0 } else { k2 };
+        let side = (up[1] * n[2] - up[2] * n[1]) * f[0] + (up[2] * n[0] - up[0] * n[2]) * f[1] + (up[0] * n[1] - up[1] * n[0]) * f[2];
+        if side < 0.0 {
+            a2 *= -1.0;
+        }
+        let r = (a2 * 57.295_776) % 360.0;
+        let r = if 180.0 < r { r - 360.0 } else if r < -180.0 { r + 360.0 } else { r };
+        let r = if r <= -max { -max } else if max <= r { max } else { r };
+        near * strength * w * (1.0 - k2) * r
+    }
+
     /// The view setup's zipline roll: a critically damped spring toward `target`.
     pub fn zipline_roll_frame(&mut self, target: f32, frametime: f32) {
         let (c, v) = (self.zipline_roll, self.zipline_roll_vel);
@@ -541,6 +605,24 @@ impl Player {
         let on = if self.sliding { 1.0 } else { 0.0 };
         let speeds = (s.slide_stop_speed, v.slide_tilt_player_speed);
         tilt_toward(&mut self.slide_tilt, on, velocity, speeds, (v.slide_tilt_increase, v.slide_tilt_decrease), frametime);
+        self.view_entity_frame(frametime);
+    }
+
+    /// The first-person proxies' frame (`0x9cad50`, `view_offset_entity_enable` 1): the view
+    /// setup runs it for each first-person proxy the player owns (the list at `0x2570d728`),
+    /// and each moves the player's blend onto the view-offset entity, in over its lerp-in time
+    /// while one is set and out over its lerp-out time once none is.
+    fn view_entity_frame(&mut self, frametime: f32) {
+        let at_least = |d: f32| if 0.001 <= d { d } else { 0.001 };
+        for _ in 0..FIRST_PERSON_PROXIES {
+            let b = if self.view_entity {
+                frametime / at_least(self.view_entity_lerp_in) + self.view_entity_blend
+            } else {
+                self.view_entity_blend - frametime / at_least(self.view_entity_lerp_out)
+            };
+            let b = if b <= 0.0 { 0.0 } else { b };
+            self.view_entity_blend = if 1.0 <= b { 1.0 } else { b };
+        }
     }
 
     /// The view's FOV in degrees for the player's `cl_fovScale` option: the class `fov`
@@ -658,4 +740,14 @@ fn yaw_basis(f: V3) -> (V3, V3) {
     let l = ((u[1] * u[1] + u[0] * u[0]) + u[2] * u[2]).sqrt();
     let inv = 1.0 / if l > TINY { l } else { TINY };
     ([-r[0], -r[1], -r[2]], [inv * u[0], inv * u[1], inv * u[2]])
+}
+
+/// RemapValClamped onto 0..1 (`0x427190`): `x` from `lo`..`hi`, a step at `hi` when they meet.
+fn remap_clamped(x: f32, lo: f32, hi: f32) -> f32 {
+    if lo == hi {
+        return if 0.0 <= x - hi { 1.0 } else { 0.0 };
+    }
+    let w = (x - lo) / (hi - lo);
+    let w = if w <= 0.0 { 0.0 } else if 1.0 <= w { 1.0 } else { w };
+    (1.0 - 0.0) * w + 0.0
 }

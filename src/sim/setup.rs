@@ -110,6 +110,7 @@ pub fn setup_move(s: &Settings, cmd: &UserCmd, oldbuttons: u32, origin: V3, velo
         pressed: cmd.buttons & !oldbuttons,
         view_wish,
         random_seed: Some(cmd.random_seed),
+        grapple_stash: ZERO,
         origin,
         velocity,
     }

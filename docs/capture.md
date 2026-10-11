@@ -30,6 +30,14 @@ grabbing while running and while falling past a rope (hold `use`); a vertical ro
 top; a chain. Keep the DLL from before this change out of those takes: it records no
 ziplines, and the replay then has none to ride.
 
+Grapple. The grapple's state is player state (`+0x2770`–`+0x2804`, `docs/oracle.md`,
+Grapple), so the DLL needs no change. Play Pathfinder (`pilot_survival_grapple`); drive presses
+the tactical as `offhand1`. The shot runs after the movement call and is not recorded; it
+arrives in the next call's player state. Takes, on mp_rr_arena_empty unless a wall is needed
+(World's Edge has them): fire at a wall standing (`offhand1:0.05`, then nothing for 3 s); the
+same while running and in the air; a duck press mid-pull (`duck:0.05`); a jump mid-pull; firing
+again mid-pull to let go; a miss (aim at the sky); a pull over a ledge that bends the rope.
+
 Known capture faults, which the replay tolerates:
 
 - In `climb_walk` about one call in eleven holds another caller's CMoveData (other view

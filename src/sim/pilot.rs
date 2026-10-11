@@ -190,6 +190,56 @@ pub fn settings() -> Settings {
             roll_view_angle_max: 50.0,
             context_action_can_use: true,
         },
+        grapple: grapple::Tuning {
+            swing: false,
+            swing_type: 0,
+            swing_gravity: 1.0,
+            swing_hold_time: 0.4,
+            swing_sticky: true,
+            attach_vertical_boost: 0.0,
+            detach_vertical_boost: 200.0,
+            detach_vertical_max_speed: 200.0,
+            detach_gravity_time: 0.0,
+            detach_gravity_scale: 0.5,
+            detach_gravity_speed: 200.0,
+            detach_length_min: 33.0,
+            detach_length_max: 50.0,
+            detach_away_speed: 500.0,
+            gravity_frac_min: 0.25,
+            gravity_frac_max: 0.7,
+            detach_speed_loss: 300.0,
+            detach_speed_loss_min: 460.0,
+            detach_low_speed_threshold: 250.0,
+            detach_low_speed_time: 1.5,
+            detach_low_speed_wall_time: 1.2,
+            detach_low_speed_ground_time: 0.7,
+            detach_low_speed_swing_time: 0.2,
+            impact_vertical_boost: 300.0,
+            impact_vertical_max_speed: 300.0,
+            speed_ramp_min: 50.0,
+            speed_ramp_max: 800.0,
+            speed_ramp_time: 1.5,
+            swinging_speed_ramp_min: 10.0,
+            swinging_speed_ramp_max: 800.0,
+            swinging_speed_ramp_time: 3.0,
+            accel: 1500.0,
+            decel: 425.0,
+            air_speed_max: 420.0,
+            air_accel: 650.0,
+            detach_on_grapple: true,
+            detach_on_grapple_debounce_time: 0.5,
+            last_zipline_cooldown: 0.5,
+            roll_max: 20.0,
+            roll_strength: 1.0,
+            roll_distance_min: 0.0,
+            roll_distance_max: 150.0,
+            roll_view_angle_min: 0.0,
+            roll_view_angle_max: 65.0,
+            power_regen_delay: 3.0,
+            power_regen_rate: 10.0,
+            human: true,
+            weapon: grapple::WEAPON,
+        },
         sv_gravity: 750.0,
         sv_maxvelocity: 34000.0,
         extra_air_accel: 2.0,
@@ -224,6 +274,14 @@ pub fn settings() -> Settings {
         land_dist_medium: 11.0,
         land_dist_high: 33.0,
     }
+}
+
+/// Pathfinder (`pilot_survival_grapple`): the pilot with `grapple_attachVerticalBoost` 200. No
+/// other setting movement reads differs (the install's two settings assets, diffed).
+pub fn pathfinder() -> Settings {
+    let mut s = settings();
+    s.grapple.attach_vertical_boost = 200.0;
+    s
 }
 
 /// A player standing at `origin` on world-up ground, as a pilot spawns.
@@ -268,6 +326,7 @@ pub fn spawn(origin: V3) -> Player {
         zipline_allowed: true,
         fov_from: 1.0,
         fov_to: 1.0,
+        suit_grapple_power: 100.0,
         ..Default::default()
     }
 }
@@ -279,6 +338,8 @@ pub struct Pilot {
     pub origin: V3,
     pub velocity: V3,
     oldbuttons: u32,
+    /// CMoveData's grapple stash, which outlives the call.
+    stash: V3,
     /// The zipline ridden after the last command, for the camera.
     pub rope: Option<zipline::RopeView>,
     /// What the last command asked the client to play.
@@ -289,7 +350,7 @@ impl Pilot {
     /// The spawned player's event times are all zero, so a clock starting at zero would
     /// read the first seconds as just after a jump, a landing and a slide: start it later.
     pub fn new(origin: V3) -> Self {
-        Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0, rope: None, cues: Vec::new() }
+        Pilot { player: spawn(origin), origin, velocity: [0.0; 3], oldbuttons: 0, stash: [0.0; 3], rope: None, cues: Vec::new() }
     }
 
     pub fn oldbuttons(&self) -> u32 {
@@ -320,6 +381,7 @@ impl Pilot {
     /// The same with a traversal's animation placed by `root`.
     pub fn step_with(&mut self, s: &Settings, cmd: &UserCmd, curtime: f32, world: &mut dyn Tracer, root: &dyn mantle::RootMotion) {
         let mut mv = setup_move(s, cmd, self.oldbuttons, self.origin, self.velocity);
+        mv.grapple_stash = self.stash;
         let p = &mut self.player;
         p.prev_velocity = self.velocity;
         p.abs_origin = self.origin;
@@ -334,8 +396,37 @@ impl Pilot {
         self.origin = mv.origin;
         self.velocity = mv.velocity;
         self.oldbuttons = mv.buttons;
+        self.stash = mv.grapple_stash;
         self.rope = zipline::RopeView::of(world.ziplines(), self.player.zipline);
         self.player.zipline_sway(s, self.origin, curtime, cmd.frametime, self.rope.map(|r| r.kind));
+        self.player.grapple_power_regen(s, curtime, cmd.frametime);
+        self.player.grapple_anim_think(&mut self.cues);
+    }
+
+    /// The tactical fires after a command (the weapon's turn in RunCommand comes after the
+    /// move): the Grapple native along the view. Ours aims along the command's view angles;
+    /// the script's `attackParams.dir` is not recovered.
+    pub fn grapple(&mut self, s: &Settings, curtime: f32) -> bool {
+        let p = &mut self.player;
+        p.abs_origin = self.origin;
+        p.prev_velocity = self.velocity;
+        let a = p.view_angles;
+        let (pitch, yaw) = (math::deg2rad(a[0]), math::deg2rad(a[1]));
+        let cp = math::engine_cos(pitch);
+        let dir = [cp * math::engine_cos(yaw), cp * math::engine_sin(yaw + 0.0), -math::engine_sin(pitch + 0.0)];
+        p.grapple(s, dir, curtime, &mut self.cues)
+    }
+
+    /// Whether the crosshair shows the grapple in range, asked with the view as it stands.
+    pub fn grapple_in_range(&self, s: &Settings, curtime: f32, world: &mut dyn Tracer) -> bool {
+        let mut mv = MoveData { origin: self.origin, velocity: self.velocity, ..Default::default() };
+        let mut player = self.player.clone();
+        let p = &mut player;
+        p.abs_origin = self.origin;
+        let surface = |_: u32| SURFACE_FRICTION;
+        let g = Globals { curtime, frametime: 0.0 };
+        let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None, root: &mantle::RECOVERED, cues: Vec::new() };
+        m.grapple_in_range(self.velocity)
     }
 
     /// The view setup's once-a-frame update at game time `curtime`, after the frame's
@@ -343,11 +434,10 @@ impl Pilot {
     pub fn view_frame(&mut self, s: &Settings, curtime: f32, frametime: f32) {
         self.player.view_frame(s, self.velocity, curtime, frametime);
         let p = &self.player;
+        let eye = || p.eye_position(s, self.origin, p.view_angles, curtime);
         let target = match self.rope {
-            Some(r) if !p.grappling && r.kind != zipline::VERTICAL && r.kind != zipline::VINE => {
-                let eye = p.eye_position(s, self.origin, p.view_angles, curtime);
-                p.zipline_roll_target(s, eye, p.punched(p.view_angles), r.ends[0], r.ends[1])
-            }
+            _ if p.grappling => p.grapple_roll_target(s, eye(), p.punched(p.view_angles)),
+            Some(r) if r.kind != zipline::VERTICAL && r.kind != zipline::VINE => p.zipline_roll_target(s, eye(), p.punched(p.view_angles), r.ends[0], r.ends[1]),
             _ => 0.0,
         };
         self.player.zipline_roll_frame(target, frametime);

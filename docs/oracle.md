@@ -177,6 +177,7 @@ replaying recordings through `src/sim`. Names are ours.
 | `0x8702d0` | `pre_think` | Called by RunCommand before ProcessMovement; stamps the jump-grace time and up vector while standing |
 | `0x8221b0` | `player_move` | With `sv_optimizedmovement` and an unmoved origin, skips categorize unless moving up faster than 200 |
 | `0x865510` | `update_sprint` | `+speed` hold window, can-keep (`0x865160`) and allowed (`0x864d90`) tests; allowed needs last tick's velocity (`+0x41c`) in front of the eye yaw (`+0x1ebc`) |
+| `0x8653c0` | (`update_sprint`'s stop) | StopSprint: stamina bookkeeping, the sprint end fraction and time, then RaiseWeapon for weapons in the sprint state, raised as `Cue::SprintEnd` (`docs/feedback.md`, Viewmodel). Also called from `player_move` (`0x822ac2`) and `0x8615c0`, not ported |
 | `0x81a080` | `full_walk_move` | |
 | `0x8089e0` | `half_gravity` | While sliding on the ground, also pushes downhill: `v.xy += dv · plane.xy · plane.z` with the ground plane `+0x3e60` |
 | `0x809cb0` | `check_jump` | Grace period, skip penalty, anti multi-jump, slide jump, wall push |
@@ -216,13 +217,16 @@ The wallrun code with `wallrun` off; `climbEnabled` selects its climb paths. Por
 | `0x818320` wall branch | `wall_wish`, `wall_accelerate` | Axes from `up × right`; forward input pushes up the wall (`wallrun_upwardAutoPush`). Vertical and horizontal each decelerate beyond and accelerate toward their own top speed: `climbSpeedStart` easing to `climbSpeedEnd` near the top, `climbHorzSpeed`; without upward input the `wallrun*` speeds apply, with slip after `wallrun_slipstarttime` |
 | `0x8089e0` | `half_gravity` | On a wall, gravity × `0x806be0`: none while pushing into the wall, else ramping in over `wallrunGravityRampUpTime` by wall strength (`0x81d800`) |
 | `0x81d9c0` | `wall_jump` | Out by `wallrunJumpOutwardSpeed`, up by `climbFinalJumpUpHeight` × strength |
-| `0x866760` | `end_climb` | Up back to (−0, −0, 1), leave time stamped. Also run before an air move with a wall up |
+| `0x866760` | `end_climb` | Up back to (−0, −0, 1), leave time stamped, the climbing arms stopped. Also run before an air move with a wall up |
+| `0x866880` | `climb_arms` | From the climb branch of `0x818320` and a climb's start in wall_contact: a ray from the eye (`0x858710`) along −up, half the hull's floor diagonal plus `wallrunAllowedWallDistance`; within the allowed distance the arms start (once) and the proxy becomes the view-offset entity, else they stop (`0x866e00`). The animation side is in `docs/feedback.md` (The climb's arms) |
 | `0x870160` | `update_floor_height` | In pre-think: `+0x1d00` follows the abs origin down, and up only on walkable ground; each climb or wall jump lowers it by `wallclimb_vertical_gain_reduction` |
 
 Player fields: up `+0x266c`, previous up `+0x2678`, climb start origin `+0x2684`, climb
 count `+0x2690`, same wall `+0x2694`, push-away timer `+0x26a4`, retry `+0x26b0`/`+0x26b4`/
 `+0x26c0`, climb start time `+0x307c`, leave time `+0x3080`, repel wall `+0x1bb4`
-(count `+0x1bd0`), floor height `+0x1d00`. Landing on world-up ground clears the repel wall
+(count `+0x1bd0`), floor height `+0x1d00`, climbing arms on `+0x276c`, view-offset entity
+`+0x2860` (a handle; −1 for none) with lerp in `+0x2864`, lerp out `+0x2868`, a flag
+`+0x286c` and the blend `+0x2870` the view setup moves between calls. Landing on world-up ground clears the repel wall
 and sets "same wall"; a normal jump clears the count and "same wall".
 
 ## Traces
@@ -280,6 +284,30 @@ ComputeMove first and GetButtonBits(reset) after, so a command's bit is "down, o
 since the last command": a scroll-wheel tap (press and release before the command) sets its
 bit for exactly one command and moves 0.25. That is `down | impulse_down` read before
 KeyState's clear.
+
+**Autosprint.** `player_setting_autosprint` (registered at `0xe06f0`; image default 0, live 1
+in the dump) is read near the end of GetButtonBits, after the button bits. When the local
+player's `+0x2600` is 0, the mode test (`0x703a00`) decides: false if `player+0x2a70` is
+set; mode 1 true; mode 2 true unless the settings `generalClass` (`*0x23880e0`) is 1 or 3;
+mode 3 true only for those; anything else false. `+0x2600` = 2 turns autosprint off and any
+other non-zero value on (presumably `m_autoSprintForced`; unconfirmed). When on, IN_SPEED is
+added if all hold:
+
+- can-keep-sprinting (`0x865160`) passes;
+- the last command the player ran (`player+0x2f50`, else the copy at `+0x2cc0`) has
+  forward² + side² at least 0.8² while sprinting (`+0x2604`) or 0.94² while not, non-zero,
+  and forward / its length at least 0.707;
+- `now − t ≥ 0`, where `now` is the float at `*0x171f448 + 0x10` and `t` (`0x281a1268`) its value the last time those failed.
+  It never blocks while the clock runs forward;
+- traversal state (`+0x262c`) is not 1 or 2;
+- neither IN_ATTACK nor `0x1_0000` is in the bits (GetButtonBits adds `0x1_0000` from weapon
+  state just before).
+
+CreateMove's IN_SPEED edge comes after, so autosprint's first IN_SPEED is a press. A fresh
+key press reads 0.5, so autosprint starts on the second command a key is held. CreateMove
+also calls the mode test while firing (`0x7041c0`) to clear IN_SPEED; weapons are not
+modelled. Ported as `Player::autosprints` (`src/sim/input.rs`) for mode 1 only. Not checked
+against a recording.
 
 **CreateMove** (`0x703a70`, CInput slot `+0x20`; CInput at `0x22d0710`, vtable `0x13ffce8`):
 
@@ -396,8 +424,10 @@ by call and chained.
 | `0x866eb0` | `traversal_pos` | The procedural path: begin to mid up to `mid_frac`, then mid to end |
 
 Between start and exit the position is not procedural. With `traversal_anim 1` each call
-places the player by the first-person model's sequence for the type (activity `0x2fe` +
-type) at the animation cycle (`+0x1eb4`, which chases (progress − p0) / (1 − p0) at 1.5×
+places the player by the sequence the first-person proxy plays for the type (activity
+`0x236` + type, `ACT_VM_MANTLE_*` on the legend's `armsModel`; `docs/feedback.md`,
+First-person proxy; `0x2fe` + type, `ACT_MP_MANTLE_*`, only names it in the warning printed
+when the proxy has no sequence) at the animation cycle (`+0x1eb4`, which chases (progress − p0) / (1 − p0) at 1.5×
 the rate, p0 the type's start share): its root motion (`0x1d6c80`) placed at the ledge
 point facing the ledge's forward, plus the offset from where the player stood when the
 sequence started, blended out over 0.2 s (`+0x2740`, `+0x2744`). The root motion is in the
@@ -441,12 +471,12 @@ enabled `+0xd64`, speed scale `+0xe30`. A zipline_end has its auto-detach distan
 | `0xa0cc10` | `ride_reverse` | Which way to ride: toward the end the view faces along the rope (a vertical one toward its end unless the view is more than 120° off it when the rope runs up, or 60° off it when it runs down), but never toward an end within its auto-detach distance of the grab |
 | `0xa13ab0` | `try_zipline` | State 1, the grab: from a step above the origin and the velocity then, the use point, the direction; sliding stops |
 | `0x8221b0` | `player_move` | Movetypes 2 and 7 on a zipline with somewhere to go (`0x869d50`) run the zipline branch instead of the walk move: by state, mount start, mounting or riding, then the velocity check (`0x81e770`) and categorize. A no-zipline trigger (`0x80dc70`) lets go; none here |
-| `0xa14aa0` | `mount_start` | Ends a climb, forces standing (`+0x1a7c` 1), context action 9. The mount time is `mountZiplineTime` (0.5 s) unless the viewmodel has a mount sequence (`ACT_VM_ZIPLINE_MOUNT`), whose length then rules: model data, as in the mantle. Target: under the use point by the standing hull's height (72), the rider hanging below the rope |
-| `0xa15360` | `mounting` | Alpha runs to 1 over the mount time. The target rides along the rope as a rider would, starting at the larger of alpha · ½ `ziplineSpeed` and the grab velocity along the rope; a target the hull cannot reach keeps the last. The player closes alpha of the remaining way each call. At 1, state 3, and touching ground's resets (`0x869420`) |
+| `0xa14aa0` | `mount_start` | Ends a climb, forces standing (`+0x1a7c` 1), context action 9, then rumble `rumbleOnZiplineAttach` and `CodeCallback_ZiplineMount`. The mount time is `mountZiplineTime` (0.5 s) unless the viewmodel has a mount sequence (`ACT_VM_ZIPLINE_MOUNT`), whose length then rules: model data, as in the mantle. Target: under the use point by the standing hull's height (72), the rider hanging below the rope |
+| `0xa15360` | `mounting` | Alpha runs to 1 over the mount time. The target rides along the rope as a rider would, starting at the larger of alpha · ½ `ziplineSpeed` and the grab velocity along the rope; a target the hull cannot reach keeps the last. The player closes alpha of the remaining way each call. At 1, state 3, touching ground's resets (`0x869420`), then `CodeCallback_ZiplineStart` |
 | `0xa15a80` | `ride` | Speed along the rope: what the velocity carries along the current span (at least 0.01), plus `ziplineAcceleration` (400) · dt, at most `ziplineSpeed` (600) × the zipline's speed scale (`0xa0d980`). The hull hangs its height below the point reached; a blocked sweep lets go. Reaching the end of a chained rope moves onto the next (reverse: the previous) |
 | `0xa0df20` | `jump_off` | Jump, crouch or crouch toggle newly pressed. Crouch: velocity eased toward straight down at `ziplineJumpOffSpeed` (400) by `ziplineJumpOffDampScale` (1, so kept), capped at 400. Jump: the same toward the view's forward at 400, then a jump's √(2 g `jumpHeight`) along up. A vertical rope pushes off along the view, flattened, at 400 |
 | `0xa14eb0` | `end_of_line` | At the last rope's far end, or within the end entity's auto-detach distance of it (from the eye or the origin, the nearer), let go. Off the top of a vertical rope, push off at `ziplineJumpOffSpeed` along the end entity's facing if it pushes off, else the view's, flattened; added to the velocity if the rope preserves it |
-| `0xa16060` | `detach_zipline` | Remembers the zipline and when; a view kick (salt `0x76704a58`: pitch 10 + 3r, yaw and roll 10r) unless still mounting; standing allowed again, movetype 2, context action cleared, the floor height reset to the origin's |
+| `0xa16060` | `detach_zipline` | Remembers the zipline and when; a view kick (salt `0x76704a58`: pitch 10 + 3r, yaw and roll 10r) unless still mounting; standing allowed again, movetype 2, context action cleared, the floor height reset to the origin's; then `CodeCallback_ZiplineStop` |
 | `0xa0d5e0` | `rope_param` | Where along the rope, by length, the nearest point lies |
 
 Player fields: allowed `+0x2994`, zipline `+0x2998`, last zipline `+0x299c`, detach time
@@ -466,3 +496,129 @@ Not ported: vines (type 1: a detached end, which the client simulates as a rope 
 physics and anything it does to the points a map zipline networks, no-zipline triggers,
 weapons and hands, script callbacks that can veto a use. Ziplines carry a use mask
 (`+0x9e8`) the player's must meet; map ziplines are usable by all.
+
+## Grapple
+
+Pathfinder's tactical. Ported in `src/sim/grapple.rs`. No recording covers a grapple, so none
+of it is checked against the game yet (`docs/capture.md` lists the takes).
+
+Pathfinder plays `settings/player/mp/pilot_survival_grapple.rpak`. Of what movement reads it
+differs from the base pilot only in `grapple_attachVerticalBoost` (200; the pilot's 0), so
+`pilot::pathfinder()` is `pilot::settings()` with that one value (the install's two assets,
+diffed). `grapple_swing` is off in both.
+
+The ability's script (`mp_ability_grapple`) only calls the Grapple native with the aim
+(`attackParams.dir`); everything else is player code. The weapon runs after the move in
+RunCommand, so a shot lands in the player state the next call starts from. The weapon
+entity caches its grapple settings: `grapple_power_required` `+0x27c4` (100),
+`grapple_power_use_rate` `+0x27c8` (0), `grapple_maxLength` `+0x27cc` and
+`grapple_maxLengthVert` `+0x27d0` (850 each); the found-by-`grapple_weapon` flag is `+0x27c0`
+(`0xa5e580` walks the six weapon handles at `+0x16dc`). Without a grapple weapon the lengths
+read 10. The capture does not record the weapon; `grapple::WEAPON` holds the weapon file's
+values.
+
+The grapple data is a struct at `+0x2770`:
+
+| Off | Field |
+|---|---|
+| `+0x2778` | hook velocity while it flies |
+| `+0x2784` | rope points, four of 12 bytes, from the player's end; the last used is the hook |
+| `+0x27b4` | point count (0: no hook) |
+| `+0x27b8`, `+0x27b9`, `+0x27ba`, `+0x27bb` | attached, pulling, swinging, retracting |
+| `+0x27bc` | retract fast: set on letting go, cleared by a miss |
+| `+0x27bd` | the pull has touched the ground (`grapple_touchGroundOnAttach`) |
+| `+0x27c0` | power used this pull |
+| `+0x27c4`, `+0x27c8`, `+0x27cc`, `+0x27d0` | fired, pull started, caught, let go (curtime) |
+| `+0x27d4`, `+0x27d8` | auto-aim and melee target handles (−1) |
+| `+0x27dc`, `+0x27e0` | pulling fast enough along the rope, and since when not |
+| `+0x27e4`, `+0x27e8` | swing length, swing hold time (−1) |
+
+Elsewhere: grapple active `+0x2800`; window-hint flag `+0x2801` and hint handle `+0x2804`;
+hook entity `+0x3140`; suit grapple power `+0x1a64`. CMoveData `+0xe4` keeps the velocity the
+anchor checks left (below).
+
+| RVA | Ours | Behaviour |
+|---|---|---|
+| `0x86d160` | `Player::grapple` | The Grapple native. With the hook out: if `grapple_detachOnGrapple`, let go once `…DebounceTime` (0.5) has passed since firing. Otherwise refuse a zero aim or what `0x86c6b0` refuses (below); then active, count 1, the hook at the eye (`0x858710`) moving at `grapple_shootVel` (2000) along the aim, flags and power used cleared, fire time stamped, fast set, swing state reset; `sound_grapple_fire_1p` (`0x804c10`). `0x86c740` then bends the aim to a window hint the shot would miss. Last, without the climbing arms (`+0x276c`) and in first-person animation state 0 or 5, the proxy plays `ACT_VM_GRAPPLE_START` then `ACT_VM_GRAPPLE_IDLE` (`0x9d5290`, below), picked with the player's activity modifiers. Ours also clears the hook entity's zipline here: nothing in the image clears it but the hook's constructor (`0x9d6409`), and a stale one would grab the last zipline at the eye |
+| `0x86c6b0` | `Player::may_grapple` | Refuses a traversal (movetype 12), a blocked traversal (`+0x2c7c`), a first-person animation state other than 0 or 5 (`+0x2a4c`), and suit power below the weapon's `grapple_power_required`. Its other refusals (`+0xa2e`, `0x870860`, `0x870920`, `0x8709e0`) are states ours never enters |
+| `0x80c030` | `grapple_think` | PlayerMove, after the duck. First, with the grapple active and its hook entity holding a zipline (hook `+0x1300`), the grab from the grapple (`0xa13ab0`, below). A duck or crouch-toggle press (`mv+0x2c` & `0x4000004`) lets go, as does `+0x2184`. While pulling, the swing check (`0x80b420`; nothing without `grapple_swing`) runs its hold timer. Then: the velocity is copied; unwrap; on the anchor its checks; flight while not attached and not retracting with at most 3 points, else retract. Then CMoveData `+0xe4` takes the velocity, `+0x19d0` clears, active becomes count > 0, the copy is written back (what the anchor checks did to the velocity survives only in `+0xe4`), and a positive vertical velocity leaves the ground |
+| `0x80b320` | `grapple_params` | Gathers the weapon's four values with `grapple_detachLowSpeed*Threshold`, `grapple_detachLength{Min,Max}` and the sound names |
+| `0x9d3430` | `grapple_unwrap` | For each bend: when the eye (or the bend before) sees the point after it, and from 2.5 off the bend toward the nearest point of that line the line is clear too, the bend is dropped |
+| `0x9d3d20` | `grapple_anchored` | Not yet pulling: fast. Pulling: past `grapple_gracePeriod` (0.25) after the pull's start, power is used at the weapon's rate; fast while the speed along the rope tops `grapple_detachLowSpeedThreshold` (250). On losing fast, its time is stamped. If `0x9d2c20` says let go: let go with the speed loss. Else, not yet pulling and `grapple_pullDelay_human` (0.2) after the catch: start the pull |
+| `0x9d2c20` | `grapple_should_detach` | In a context action other than 6 or 7 while pulling. The nearer of origin and eye to the rope point (at most the third) farther than the longer max length + `grapple_detachExtraAllowedLength` (256). Closer than `grapple_detachLengthMax` (50) and either `…Min` (33) or within a margin growing with the speed along the rope (over `grapple_speedRampMax_human`, 400): arrived, and a pull gets up to `grapple_impactVerticalBoost`, capped at `…MaxSpeed`. Then, pulling, `0x9d2680` |
+| `0x9d2680` | `grapple_pull_over` | Looking away from the rope (and, looking down, also flat away from the point) ends the pull unless the velocity climbs past what `+0xe4` kept; so does moving away faster than `grapple_detachAwaySpeed` (500). Moving away adds `grapple_detachVerticalBoost` (200) up to `…VerticalMaxSpeed` (200). Not fast for longer than `grapple_detachLowSpeedTime` (1.5) in the air, `…GroundTime` (0.7) on world-up ground or `…WallTime` (1.2) on a wall ends it too |
+| `0x9d1970` | `grapple_start_pull` | Pulling, not swinging; on a parented hook or one holding a zipline, power used is the weapon's `grapple_power_required`, taken from the suit's power (at least 0); start time stamped; the initial impulse (`0x9d1610` → `0x9d7b40`), which leaves the ground; a zipline ridden is let go |
+| `0x9d7b40` | `grapple_impulse` | The velocity across the rope kept (vertical × `grapple_initialSlowFracVert_human`, 0.4); along it raised by `grapple_initialImpulse_human` (350) but only to `grapple_speedRampMin_human` (50); then `0x9d7960` |
+| `0x9d7960` | `grapple_off_ground` | Standing: the velocity into the ground undone and `grapple_initialImpulseOffGround_human` (50) added along up |
+| `0x9d57d0` | `grapple_fly` | The hook moves by its speed · dt, stopping at the max length (an ellipse of `grapple_maxLength` and `…Vert`). A ray (`0x4640400b`) from the hook: no hit, and at the length, let go (a miss: the fast retract flag clears). A hit within `grapple_detachLengthMin` of the eye, or on contents `0x800`, lets go. Else catch |
+| `0x9d1b00` | `grapple_catch` | Attached, not retracting, targets cleared. The first catch stamps its time and raises the velocity to `grapple_attachVerticalBoost` (a negative boost caps it). The repel wall count clears. A catch while retracting starts the pull at once; a new anchor while pulling only pushes off the ground (`0x9d7960`). It moves the hook entity, not the rope's points. On a zipline (the hit entity's vfunc `0x4e0`) the hook moves to the point of the zipline's rope nearest the hit, its fixed ends pulled in as the use search pulls them (`0xa14210`), and the hook entity remembers the zipline (`+0x1300`) instead of parenting to it. The impact effect is `grapple`, or `grapple_disallowed` when a trace with mask `0x30` from 100 back along the shot to the hit is blocked (no surface here carries those contents) |
+| `0xa12820` | `zipline_on_ray` | A hook's ray (the flight's, the falling reel-in's, and the crosshair's) catches a zipline: of the enabled ropes within half the ray's length + 30 of its middle (`0xa0f850`), not the one ridden nor the last one within `grapple_lastZiplineCooldown` (0.5) of letting go, each span of this frame's rope (cut, when it reaches within 10 of the eye, to its part inside that sphere, or skipped when it passes through) against the ray (`0x42fb90`): where they pass within 30 and a ray between the two points is clear (mask `0x4640400b`), the ray ends at its point nearest the rope, normal toward the ray, fraction scaled, contents 0, the zipline its entity. Parallel lines use the ray's start against the span. Later spans compare with the shortened ray |
+| `0xa13ab0` | `grapple_zipline_grab` | The zipline grab with the grapple flag: the grapple active, its hook entity holding a zipline, the hook within 120 of the eye or the abs origin (the nearer), and a clear standing hull from the abs origin to the hull's height under the hook (`0xa0c930`). Then, unless it is the zipline ridden: the grapple lets go (`0x86c5b0`), any zipline is let go, and the grab is the use's (state 1, from the origin with the abs velocity, the use point at the hook, the ride direction by `0xa0cc10`) |
+| `0x9d4760` | `grapple_retract` | The hook reels back through the bends at `grapple_forcedRetractVel` (3000) after letting go or with bends, else `grapple_retractVel` (6000). Passing a bend while wrapped (not after letting go) catches there. At the eye the hook is gone (count 0). Reeling in after a miss it falls by `grapple_fallSpeed` (300) and can still catch (ray `0x4640420b`) |
+| `0x86c220` | `grapple_detach` | Let go: speed loss (`0x86bfc0`: above `grapple_detachSpeedLossMin` (460), lose `grapple_detachSpeedLoss` (300) but not below it) when asked and pulling; retracting fast, not attached or pulling or swinging, let-go time stamped; after an attachment the floor height (`+0x1d00`) is reset to the origin's. Then the first-person animation: with the grapple active, no climbing arms, state 0 or 5, no scripted grapple animation (`+0x2a50`) and a proxy, `ACT_VM_GRAPPLE_STOP` (`0x9d5290`); otherwise it ends (`0x9d5650`) |
+| `0x9d5290` | `Player::grapple_anim_play` | The grapple's first-person animation on the proxy (`+0x313c`): the climbing arms stop (`0x866e00`); the proxy plays the sequence, through the node graph's transition first when its exit node is not the sequence's entry (`0x5f9d40`), and is shown; bodygroups `glove_default` 0 and `glove_animated` 1 when the model has both (Pathfinder's arms have neither); the view-offset entity becomes the proxy (`+0x2860`) with lerp in 0 and out 0.3, `+0x286c` cleared; state 5 (`+0x2a4c`), `+0x2a50` cleared; the sequence after it queued (`+0x2a54`, and `+0x2a58` behind it when a transition plays first) |
+| `0x9d5650` | `Player::grapple_anim_end` | In state 5: state 0, the proxy hidden with its transitions dropped and the glove bodygroups back, the view-offset entity let go (`0x869fc0`), the grapple let go when a scripted animation said to (`+0x2a50`), the queue cleared, and the arm's aim cleared (`+0x3118`–`+0x3124`, docs/feedback.md, Grapple). Also run by start_traversal |
+| `0x86ef40` | `Player::grapple_anim_think` | PostThink, state 5: when the view-offset entity is not the proxy, or the grapple is neither active nor reeling in (`+0x27bb`, which stays set after the hook is back until the next shot), or the proxy's sequence has finished (`+0xa2e` clear), the queued sequence plays (`0x9d5290`) or, with none, the animation ends. Ours ends at once on the first two; the proxy's finishing is the animation layer's (`Proxy::grapple_think`), which ends the state through the shell |
+| `0x8615c0` | `Player::grapple_power_regen` | PostThink: once `grapple_power_regen_delay` (3 s) has passed since the pull started (`+0x27c8`), the suit's grapple power gains `grapple_power_regen_rate` (10) a second, up to 100 |
+| `0x6851f0` | `Player::grapple_roll_target` | The view's roll toward the rope, which the view roll (`0x85ffc0`) takes in place of the zipline lean while the grapple is active (`+0x2800`), on the same spring: from the eye to the rope's last point, weighted 0 to 1 over `grapple_rollDistanceMin`..`Max` (0..150) and, by how far that point is off the view, over `grapple_rollViewAngleMin`..`Max` (0..65°) (RemapValClamped `0x427190`); the lean that brings it overhead as for a zipline (`0x685b20`), at most `grapple_rollMax` (20°), × `grapple_rollStrength` (1) |
+| `0x674cb0` | `Move::grapple_in_range` | Client, each frame, for the crosshair's `grapple_in_range` (and the times it last turned in and out, `grapple_in_range_time`, `grapple_out_of_range_time`): with the grapple weapon's `hud_grapple_indicator` (`0x86c610`) and `0x86c6b0`, the ray queued the frame before from the eye along the eye angles, 227023.36 long, mask `0x640400b`, through `0xa12820`, must end on contents in `0x4640400b` (a zipline counts) and not `0x800`, nearer than both the longer of `grapple_maxLength` and `…Vert` and the ellipse of the two along the aim, and not in a no-grapple volume (`0x9d5170`); moving away from it (abs velocity · aim < 0) shrinks the ellipse by that speed over `grapple_shootVel`. The distance is the fraction × 227023.36344968397 in double. A new ray is queued each frame |
+| `0x86c5b0` | (`grapple_drop`) | Player vfunc `0x870`: the same on the player's abs velocity, which FinishMove overwrites |
+| `0x80caa0` | `grapple_release` | The same on the move's velocity |
+| `0x80cb20` | `grapple_pull` | Walk move, after climb_think: while pulling, `0x9d8270`. Standing, a pull not into the ground plane (≥ −0.3, or ≥ −0.001 off world up) leaves it. Pulling into the last plane (or, standing with none, up) by more than half: try stepping around it, by command number & 3 up 0.4 · hull height, either side 0.4 · half width, or down 0.15 · height, at one and two steps; the first clear, a push of `grapple_around_obstacle_accel` · 4 · dt. Its result tells the air move's slope continuation and categorize the player is leaving |
+| `0x9d8270` | `grapple_pull_velocity` | Across the rope the velocity loses `grapple_decel` (425) · dt, sparing what falls (`grapple_dontFightGravity`) and what points along the view (`0x858e70`); along the rope it gains `grapple_accel` (1500) · dt up to the ramp; the vertical never ends below where it started |
+| `0x9d7f60` | `grapple_speed_ramp` | `grapple_speedRampMin` (50) to `…Max` (800) over `…Time` (1.5) from the later of catch and pull start |
+| `0x9d77e0` | `grapple_rope` | The rope: from `step_height` + 1 above the origin to the first point, plus `grapple_lift` (25) up |
+| `0x808550` | `grapple_gravity` | Gravity while pulled: `grapple_gravityFracMin` (0.25) up to `…Max` (0.7) as the input pushes under the rope, or full when the rope hangs more than `grapple_letGravityHelpCosAngle` (0.8) down |
+| `0x8089e0` | `grapple_gravity_scale` | half_gravity scales by `0x808550` while pulled, and by `grapple_detachGravityScale` easing out over `…Time` after letting go, below `…Speed` up; with the time 0 it never applies |
+| `0x80dd50` | `grapple_wrap` | End of PlayerMove. A ray from the eye to the first point blocked both ways (by > 0.001) puts a bend where the two hit planes meet near the hit (`0x42fb90`, then a ray from the eye), up to four points; a fourth makes the hook reel in. Contents `0x800` let go first |
+
+Elsewhere: the air move pulled uses `grapple_airSpeedMax` (420) and `grapple_airAccel` (650)
+and no air drag; a jump pulled is × `grapple_jumpFrac` (1); a toggle-duck press does nothing
+while attached; a climb start (`0x81bb60`) refuses a wall the rope pulls away from; the
+automantle (`0x811650`) refuses while the hook is out; starting a traversal (`0x8100f0`)
+lets go.
+
+ConVars (the dump's values): `grapple_shootVel` 2000, `grapple_retractVel` 6000,
+`grapple_forcedRetractVel` 3000, `grapple_fallSpeed` 300, `grapple_lift` 25,
+`grapple_gracePeriod` 0.25, `grapple_pullDelay_human` 0.2,
+`grapple_detachExtraAllowedLength` 256, `grapple_speedRampMax_human` 400,
+`grapple_speedRampMin_human` 50, `grapple_initialImpulse_human` 350,
+`grapple_initialSpeedMin_human` 0, `grapple_initialSlowFrac_human` 1,
+`grapple_initialSlowFracVert_human` 0.4, `grapple_initialImpulseOffGround_human` 50,
+`grapple_dontFightGravity` 1, `grapple_letGravityHelpCosAngle` 0.8,
+`grapple_gravityPushUnderContribution` 2, `grapple_around_obstacle_accel` 1000,
+`grapple_jumpFrac` 1, `grapple_autoMantle` 0.25, `grapple_autoMeleePredict` 0,
+`grapple_windowCheckDist` 150. Several are read through a ConVar's parent pointer
+(`obj+0x48`, value at `+0x68`).
+
+Settings: `grapple_detachOnGrappleDebounceTime` `0xa88`, `grapple_swingType` `0xa90`,
+`…swingGravity` `0xa94`, `…swingHoldTime` `0xa98`, `…swingMinLength` `0xa9c`,
+`…attachVerticalBoost` `0xac0`, `…detachVerticalBoost` `0xac4`, `…detachVerticalMaxSpeed`
+`0xac8`, `…detachGravityTime` `0xad0`, `…Scale` `0xad4`, `…Speed` `0xad8`,
+`…detachLengthMin` `0xadc`, `…Max` `0xae0`, `…detachAwaySpeed` `0xae4`,
+`…gravityFracMin` `0xae8`, `…Max` `0xaec`, `…detachSpeedLoss` `0xaf0`, `…Min` `0xaf4`,
+`…detachLowSpeedThreshold` `0xaf8`, `…Time` `0xb04`, `…WallTime` `0xb08`, `…GroundTime`
+`0xb0c`, `…SwingTime` `0xb14`, `…impactVerticalBoost` `0xb18`, `…MaxSpeed` `0xb1c`,
+`…speedRampMin` `0xb20`, `…Max` `0xb24`, `…Time` `0xb28`, `…swingingSpeedRamp*`
+`0xb2c`–`0xb34`, `…accel` `0xb38`, `…decel` `0xb3c`, `…airSpeedMax` `0xb48`, `…airAccel`
+`0xb4c`, `…detachOnGrapple` `0xe14`, `…touchGroundOnAttach` `0xe15`, `…OnDetach` `0xe16`,
+`…swing` `0xe18`, `…swingSticky` `0xe19`, `…lastZiplineCooldown` `0xb50`,
+`grapple_power_regen_delay` `0xb40`, `…rate` `0xb44`, `grapple_rollStrength` `0xaa8`,
+`…rollMax` `0xaac`, `…rollViewAngleMin` `0xab0`, `…Max` `0xab4`, `…rollDistanceMin`
+`0xab8`, `…Max` `0xabc`; `generalClass` `0x7a8` (1 and 3 take the titan ConVars). Names from
+`tools/settings.py`. `grapple_disableWeaponsWhenActive` is set for every legend: the
+weapons go down (`0x7d0dc0`, applied per command by `0x854bc0` through `0x7d1430`) while the
+grapple is active, not reeling in, and its hook is more than 128 from the eye.
+
+Not ported: swinging; window hints (`0x86c740`, `0x9d1760`, the `+0x2801`/`+0x2804`
+branches of `0x80cb20`, `0x9d2c20` and `0x808550`), no-grapple volumes (`0x9d5170`) and
+contents-`0x800` entities that let the hook pass, moving or parented anchors, auto-aim and
+auto-melee targets, jump pads (`0x8095e0`), status effects (`0x89d7c0`), touching the ground
+on attach or detach (both off), the scripted grapple animation (`PlayGrappleAttachedAnimation`,
+`0x9d5460`, `+0x2a50`), the weapon's cooldown (script ammo), and the hook entity's own think
+and effects (`P_grapple_sparks`). The debounce reads `gpGlobals+0x28`, which ours takes as
+curtime. Nothing records a grapple: all of this is ported, not verified.
+
+Player fields: first-person animation state `+0x2a4c` (5: the grapple's; also 1, 3 and 4,
+not identified), scripted flag `+0x2a50`, queued sequences `+0x2a54` and `+0x2a58`; the hook
+entity's `m_grappleZipline` is its `+0x1300`.

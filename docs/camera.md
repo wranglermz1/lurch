@@ -63,6 +63,11 @@ Roll (`0x85ffc0`) adds, for plain movement:
   `ziplineRollStrength` (0.7), at most `ziplineRollMax` (25°). The roll eases to it on a
   critically damped spring at rate 20/3 (`+0x3110`, `+0x3114`). The acos is the platform's,
   not the CRT's.
+- grapple lean (`0x6851f0`, ported as `Player::grapple_roll_target`): while the grapple is
+  active it takes the zipline lean's place on the same spring: the same lean toward the
+  rope's last point, weighted by its distance over `grapple_rollDistanceMin`..`Max` (0..150)
+  and its angle off the view over `grapple_rollViewAngleMin`..`Max` (0..65°), ×
+  `grapple_rollStrength` (1), at most `grapple_rollMax` (20°). Not recorded.
 
 FOV (`0x8610c0`, `0x860f40`, ported as `Player::view_fov`): `cl_fovScale` clamped to
 [1, 1.7] times the `fov` setting (70), rounded, capped at 115, then times the FOV scale and
@@ -81,8 +86,10 @@ behind; and out over `sprintEndDuration` (0.15 s). Each starts from the fraction
 sprinting turned. `update_sprint` stamps those times and fractions (`+0x2608` to `+0x2618`,
 fractions in 1/1023 steps), so they are gated with the movement fields.
 
-Eye (`0x858710`, ported as `Player::eye_position`): origin + the view offset `+0xb8` +
-the pitch offset + the sprint eye drop on z. The view offset is the stance's (+0x18 in the
+Eye (`0x858710`, ported as `Player::eye`; movement's climb arms, use search and end of line
+read it): origin + the view offset `+0xb8` + the pitch offset + the sprint eye drop on z.
+The camera's eye (`Player::eye_position`, `0x869640`) adds the step smoothing below, and on a
+wall climb follows the climbing arms (`docs/feedback.md`, The climb's arms). The view offset is the stance's (+0x18 in the
 stance block: 60 standing, 32 crouched) eased through a duck inside the movement call
 (`0x8214c0`, from `0x821610`): smoothstep of the duck timer, and for a duck begun in the air
 shifted by half the hull difference, as the hull moves instead. It is gated with the

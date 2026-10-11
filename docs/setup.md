@@ -12,6 +12,24 @@ it. It needs the guest up and `bin/redump` built in HAVM. Overrides: `HAVM`, `PR
 `HAVM_DOMAIN`, `HOST_CPUS`. Guest vCPUs own host cores 0-11, so host-side work stays
 pinned to 12-17.
 
+### The Windows build
+
+The game shell's sound runs through the game's own Miles, which exists only for Windows, so
+the shell is built for Windows and run in the guest, against the guest's own R5Reloaded
+install (`docs/assets.md`). The real game is never launched for it. On the workstation:
+
+    rustup target add x86_64-pc-windows-gnu      # once; needs mingw-w64
+    cd game && cargo build --release --target x86_64-pc-windows-gnu
+    x86_64-w64-mingw32-strip -o lurch-game.exe target/x86_64-pc-windows-gnu/release/lurch-game.exe
+    scp -i ~/.ssh/win-analysis_ed25519 lurch-game.exe fz@192.168.8.248:/C:/xfer/lurch/
+
+Over SSH a program runs in session 0, with no desktop: the shell's window cannot open
+there, but `vmshot INSTALL SCRIPT OUTDIR FRAMES` renders a script's frames with the
+viewmodel offscreen (Vulkan on the guest's GPU) and `milescheck INSTALL play NAME...` plays
+sounds through Miles. The window itself is tried from the guest's own desktop.
+`/mnt/guestro` on the host can mount the guest's disk read-only (`qemu-nbd`) to read its
+install without starting the guest's game; unmount it and disconnect the device after.
+
 ## Cloud
 
 A cloud session (claude.ai/code, the apps, `claude --cloud`) starts from a fresh clone.

@@ -142,7 +142,9 @@ impl Move<'_> {
         let was_down = self.p.traversal_state.wrapping_sub(1) < 2;
         let changed = (self.mv.oldbuttons ^ self.mv.buttons) & IN_DUCK != 0;
         if !changed && !self.p.jetpack_active {
-            if self.mv.pressed() & IN_TOGGLE_DUCK != 0 && is_world_up(self.p.up) {
+            let g = &self.s.grapple;
+            let held = self.p.grappling && self.p.grapple_attached && !(g.swing && g.swing_type == 3);
+            if self.mv.pressed() & IN_TOGGLE_DUCK != 0 && is_world_up(self.p.up) && !held {
                 self.p.duck_held = !self.p.duck_held;
             }
         } else {

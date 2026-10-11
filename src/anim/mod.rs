@@ -8,6 +8,10 @@
 //! (`tools/tables.py`): sequences name them, the code compares numbers.
 
 pub mod body;
+pub mod bones;
+pub mod model;
+pub mod proxy;
+pub mod transition;
 pub mod viewmodel;
 
 use crate::sim::cue::{Cue, LandHeight};
@@ -26,11 +30,27 @@ macro_rules! activities {
 }
 
 activities! {
+    VM_DRAW = 449,
+    VM_DRAW_TO_SPRINT = 450,
+    VM_DRAWFIRST = 451,
+    VM_HOLSTER = 453,
+    VM_HOLSTER_FROM_SPRINT = 454,
+    VM_RAISE = 455,
+    VM_RAISE_FROM_SPRINT = 456,
+    VM_RAISE_FROM_MELEE = 457,
+    VM_LOWER = 458,
     VM_IDLE = 468,
     VM_IDLE_ALT1 = 469,
     VM_IDLE_ALT2 = 470,
     VM_IDLE_ALT3 = 471,
     VM_SPRINT = 478,
+    VM_MELEE_ATTACK1 = 493,
+    VM_MELEE_ATTACK2 = 494,
+    VM_MELEE_ATTACK3 = 495,
+    VM_GRAPPLE_START = 554,
+    VM_GRAPPLE_IDLE = 555,
+    VM_GRAPPLE_STOP = 556,
+    VM_WEAPON_INSPECT = 557,
     VM_JUMP = 558,
     VM_DOUBLEJUMP = 559,
     VM_LAND = 560,
@@ -250,6 +270,12 @@ impl PlayerEvent {
 
 /// Sequence events (`AE_*`) movement cares about. Other players' footsteps sound on these;
 /// the local player's own come from the step timer.
+pub const AE_CL_PLAYSOUND: u16 = 35;
+pub const AE_CL_PLAYSOUND_FOR_TYPE: u16 = 36;
+pub const AE_SV_PLAYSOUND: u16 = 39;
+pub const AE_CL_STOPSOUND: u16 = 40;
+pub const AE_WPN_RUMBLE: u16 = 98;
+pub const AE_CL_VSCRIPT_CALLBACK: u16 = 120;
 pub const AE_FOOTSTEP_L: u16 = 125;
 pub const AE_FOOTSTEP_R: u16 = 126;
 pub const AE_GROUND_CONTACT_L: u16 = 127;
@@ -281,8 +307,9 @@ pub struct Sequence(pub u32);
 
 /// A model's sequences, as the game's model files describe them.
 pub trait AnimSet {
-    /// The sequence for `activity` whose modifiers best match `modifiers` (by name).
-    fn select(&self, activity: Activity, modifiers: &[&str]) -> Option<Sequence>;
+    /// The sequence for `activity` whose modifiers best match `modifiers` (by name), given the
+    /// one playing.
+    fn select(&self, activity: Activity, modifiers: &[&str], current: Option<Sequence>) -> Option<Sequence>;
     fn activity(&self, seq: Sequence) -> Option<Activity>;
     /// Seconds at playback rate 1.
     fn duration(&self, seq: Sequence) -> f32;
@@ -298,7 +325,7 @@ pub trait AnimSet {
 pub struct NoAnims;
 
 impl AnimSet for NoAnims {
-    fn select(&self, _: Activity, _: &[&str]) -> Option<Sequence> {
+    fn select(&self, _: Activity, _: &[&str], _: Option<Sequence>) -> Option<Sequence> {
         None
     }
     fn activity(&self, _: Sequence) -> Option<Activity> {

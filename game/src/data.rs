@@ -1,0 +1,171 @@
+//! The game's files the shell plays with, read once from the R5Reloaded install on a thread at
+//! start: the legend's player settings and sounds, the fists' viewmodel and the legend's arms.
+//! The test map's props are read before the simulation starts, since they collide.
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
+
+use bevy::prelude::*;
+use lurch::anim::bones::{Mat, Pose};
+use lurch::anim::model::ModelAnims;
+use lurch::anim::viewmodel::WeaponTimes;
+use lurch::assets::model::{self as amodel, Bone};
+use lurch::assets::settings::Settings;
+use lurch::assets::texture::Texture;
+use lurch::assets::Install;
+use lurch::sim::math::V3;
+use lurch::sound::PlayerSounds;
+use lurch::testmap::{Prop, PROP_PAK};
+use lurch::world::Tri;
+
+use crate::{common, Config};
+
+pub struct Arms {
+    pub bones: Vec<Bone>,
+    /// For each arms bone, the weapon bone of the same name it follows.
+    pub merge: Vec<Option<usize>>,
+    pub meshes: Vec<amodel::Mesh>,
+    /// Each mesh's material textures, in its shader's order (`lurch::assets::texture::material`).
+    pub textures: Vec<Vec<Option<Texture>>>,
+    /// The bind pose of the arms model's own bones, which the first-person proxy plays from.
+    pub defaults: Pose,
+    /// The `ref`, `camera` and `camera_base` attachments: each one's bone and its place on it.
+    pub reference: Option<(usize, Mat)>,
+    pub camera: Option<(usize, Mat)>,
+    pub camera_base: Option<(usize, Mat)>,
+    /// The `grapple_rope` attachment, where the rope leaves the hand while the grapple's
+    /// animation plays (`+0x134c`, `0x9c95ad`).
+    pub grapple_rope: Option<(usize, Mat)>,
+}
+
+pub struct GameData {
+    pub install: PathBuf,
+    pub legend: Settings,
+    pub sounds: PlayerSounds,
+    /// The fists' script times.
+    pub times: WeaponTimes,
+    pub anims: ModelAnims,
+    /// The arms model's own sequences, which the first-person proxy plays.
+    pub arms_anims: ModelAnims,
+    /// The weapon model's bind pose, which a sequence's untouched bones keep.
+    pub defaults: Pose,
+    pub arms: Arms,
+    /// The grapple's hook model and the rope's textures, when the install has them.
+    pub grapple: Option<lurch::assets::Grapple>,
+}
+
+#[derive(Resource, Clone)]
+pub struct Data(pub Arc<GameData>);
+
+#[derive(Resource)]
+struct Loading(Mutex<Receiver<Result<GameData, String>>>);
+
+pub struct DataPlugin;
+
+impl Plugin for DataPlugin {
+    fn build(&self, app: &mut App) {
+        common(app);
+        let cfg = app.world().resource::<Config>().clone();
+        let Some(install) = cfg.r5r.clone() else {
+            warn!("no R5Reloaded install given: no sounds, no viewmodel");
+            return;
+        };
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            let r = load(&install, &cfg.legend);
+            if r.is_ok() {
+                info!("game files read in {:.1} s", t.elapsed().as_secs_f32());
+            }
+            let _ = tx.send(r);
+        });
+        app.insert_resource(Loading(Mutex::new(rx))).add_systems(PreUpdate, finish);
+    }
+}
+
+fn finish(mut commands: Commands, loading: Option<Res<Loading>>) {
+    let Some(loading) = loading else { return };
+    let Ok(result) = loading.0.lock().unwrap().try_recv() else { return };
+    commands.remove_resource::<Loading>();
+    match result {
+        Ok(d) => commands.insert_resource(Data(Arc::new(d))),
+        Err(e) => error!("reading the game's files: {e}"),
+    }
+}
+
+pub fn load(install: &Path, legend: &str) -> Result<GameData, String> {
+    let inst = Install::open(install).map_err(|e| e.to_string())?;
+    if !inst.is_oracle_build() {
+        warn!("r5apex.exe is build {:08x}-{:08x}, not the oracle's 5dba2a2f-02ae8471: names and settings may differ", inst.build.0, inst.build.1);
+    }
+    let l = lurch::assets::loadout(install, legend)?;
+    let wb = l.weapon.studio.bones();
+    let mut defaults = Pose::new(wb.len());
+    for (i, b) in wb.iter().enumerate() {
+        (defaults.pos[i], defaults.q[i], defaults.scale[i], defaults.rot[i]) = (b.pos, b.quat, b.scale, b.rot);
+    }
+    let ab = l.arms.studio.bones();
+    let merge = ab.iter().map(|b| wb.iter().position(|w| w.name.eq_ignore_ascii_case(&b.name))).collect();
+    let mut arms_defaults = Pose::new(ab.len());
+    for (i, b) in ab.iter().enumerate() {
+        (arms_defaults.pos[i], arms_defaults.q[i], arms_defaults.scale[i], arms_defaults.rot[i]) = (b.pos, b.quat, b.scale, b.rot);
+    }
+    let attachments = l.arms.studio.attachments();
+    let attachment = |name: &str| attachments.iter().find(|a| a.name.eq_ignore_ascii_case(name)).map(|a| (a.bone as usize, a.local));
+    let (reference, camera, camera_base) = (attachment("ref"), attachment("camera"), attachment("camera_base"));
+    let grapple_rope = attachment("grapple_rope");
+    let grapple = lurch::assets::grapple(install).inspect_err(|e| warn!("the grapple's hook and rope: {e}")).ok();
+    Ok(GameData {
+        install: install.to_path_buf(),
+        sounds: PlayerSounds::from_settings(&l.legend),
+        times: WeaponTimes::from_script(|k| l.weapon_script.get(k)?.parse().ok()),
+        legend: l.legend,
+        anims: ModelAnims::new(&l.weapon),
+        arms_anims: ModelAnims::new(&l.arms),
+        defaults,
+        arms: Arms { bones: ab, merge, meshes: l.arms.meshes, textures: l.arms_textures, defaults: arms_defaults, reference, camera, camera_base, grapple_rope },
+        grapple,
+    })
+}
+
+/// One mesh of a test map prop, placed in the map.
+pub struct PropMesh {
+    pub positions: Vec<V3>,
+    pub normals: Vec<V3>,
+    pub uvs: Vec<[f32; 2]>,
+    pub colors: Vec<[u8; 4]>,
+    pub indices: Vec<u16>,
+    pub albedo: Option<Texture>,
+}
+
+/// The test map's props. Their drawn triangles are also their collision, not the models' own
+/// collision.
+#[derive(Resource)]
+pub struct Props(pub Vec<PropMesh>);
+
+impl Props {
+    pub fn tris(&self) -> impl Iterator<Item = Tri> + '_ {
+        self.0.iter().flat_map(|m| m.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| m.positions[i as usize])))
+    }
+}
+
+pub fn load_props(install: &Path, props: &[Prop]) -> Result<Props, String> {
+    let inst = Install::open(install).map_err(|e| e.to_string())?;
+    let pak = inst.pak(PROP_PAK).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for p in props {
+        let m = amodel::load(&pak, install, p.model).map_err(|e| e.to_string())?;
+        for (mesh, textures) in m.meshes.iter().zip(lurch::assets::mesh_textures(&pak, install, &m)) {
+            out.push(PropMesh {
+                positions: mesh.positions.iter().map(|&v| p.place(v)).collect(),
+                normals: mesh.normals.iter().map(|&n| p.turn(n)).collect(),
+                uvs: mesh.uvs.clone(),
+                colors: mesh.colors.clone(),
+                indices: mesh.indices.clone(),
+                albedo: textures.into_iter().next().flatten(),
+            });
+        }
+    }
+    Ok(Props(out))
+}

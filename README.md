@@ -24,7 +24,7 @@ the sources.
 ## Fidelity reached
 
 `cargo test` replays every recording two ways, and both must be bit-exact on origin,
-velocity and all 113 modelled player fields:
+velocity and all 136 modelled player fields:
 
 - call by call, each call starting from the oracle's state;
 - chained, the simulation carrying its own state from call to call for whole recordings.
@@ -45,26 +45,40 @@ crouch jump, air duck, slide, slide hop, slide jump, mantles (sprinting at a che
 wall, and at the end of a wall climb); and seeded random input (`tools/fuzz.py`). The
 camera's lag behind a step up or ground snap is ported and exact. Out of the mantle
 animation's root motion, only types 3 and 5 are recorded (`src/sim/rootmotion.rs`).
-Ziplines are ported from the image but not recorded, so unverified.
+Ziplines are ported from the image but not recorded, so unverified. So is Pathfinder's
+grapple (`docs/oracle.md`, Grapple): its state is among the fields, so the gates will hold it
+to a grapple recording once there is one. That includes the hook catching a zipline and the
+grab it leads to, the first-person animation state it sets (`+0x2a4c`, a gated field), the
+suit power's refill and the view's roll toward the rope; the grapple's sounds, its arms
+animation, the rope's shape and the crosshair's in-range answer are ported from the image too
+(`docs/feedback.md`, Grapple), none of it recorded.
 
 Camera: what the movement call keeps for the view (sprint tilt, view punch springs, fall
 speed, sprint transition times, eye height through a duck) is among those fields, and so
-is what the view setup updates once a frame between calls (slide tilt, FOV ease), checked
-from each call's output to the next call's input. View kicks draw from the command's
+is what the view setup updates once a frame between calls (slide tilt, FOV ease, the blend
+onto the climbing arms), checked from each call's output to the next call's input. View kicks draw from the command's
 random seed, which the recordings lack; the replay checks the kick lands on the same call
 and takes the oracle's punch. `docs/camera.md`.
 
 Sound and animation: the fields include the footstep timer, landing and sprint-blend
-bookkeeping. The cues movement raises (footsteps, jumps, landings, crouch, slide boost)
-must fall on the calls where the oracle acted. The sound and animation layers built on them
-run outside movement and are not checked against the oracle yet; the game's sound events
-and sequences are not loaded (roadmap 4). `docs/feedback.md`.
+bookkeeping, a mantle's gun flag, and the climbing arms with their view-offset entity, whose
+wall ray is matched against each recording's trace log. The cues movement raises
+(footsteps, jumps, landings, crouch, slide boost, sprint end, and the zipline callbacks once a
+zipline is recorded) must fall on the calls where the oracle acted. The layers built on them
+run outside movement and are not checked against the oracle: the sound names, played through
+the game's own Miles, the fists' viewmodel (weapon logic, sequence transitions, overlay
+layers, bone setup in the studio library's float forms), and the first-person proxy's arms
+through a mantle and a wall climb with the view they carry, all read from the user's
+R5Reloaded install at run time with the arms' textures (`docs/assets.md`). The body has no
+sequences loaded yet. `docs/feedback.md`.
 
 Collision: `src/world.rs` sweeps the hull against triangles (in memory, or a HAVM `.mesh`).
 Every mp_rr_arena_empty recording also replays chained with our own collision against its
 floor, exact to `TOL`. No mesh exists for any R5Reloaded map, so collision beyond a flat
 floor is unverified. `tests/testmap.rs` drives a pilot over the test map's steps, ramps,
-walls and hill and holds it to the limits its settings set (no fidelity claim).
+walls and hill and holds it to the limits its settings set (no fidelity claim). The test
+map's props lane (loot bin, cargo containers, the Thunderdome barrier, rocks, a fence) is
+read from the install and collides with its drawn triangles, not the models' own collision.
 
 ## Approach
 
@@ -85,8 +99,12 @@ tap strafe is a press and release inside one command, which is what caps the tap
 The lurch crate stays headless: no renderer, no engine, no window. The game shell in `game/`
 (Bevy) drives it, one command per rendered frame, and makes no fidelity claim of its own.
 
-Not goals: rendering beyond a flat-shaded map and a stand-in viewmodel; weapons,
-abilities, legends; Apex models, animations and other game assets; map loading beyond
+The first-person arms, their animation and the movement sounds are the game's own, read
+from the user's R5Reloaded install when the shell starts; none of it is kept in this
+repository (`docs/assets.md`).
+
+Not goals: rendering beyond a flat-shaded map and the first-person arms; weapons beyond the
+fists, abilities, legends' kits; other Apex models and game assets; map loading beyond
 collision; game modes, menus, anything that is not practising movement. Deferred, not
 refused: multiplayer and our own models (`docs/game-shell-plan.md` section 8).
 
@@ -94,9 +112,11 @@ refused: multiplayer and our own models (`docs/game-shell-plan.md` section 8).
 
     src/              the lurch crate: trace parser, movement step, replay, test map, sound,
                       animation
+    src/assets/       the game's files, read from an R5Reloaded install (docs/assets.md)
     src/sim/          movement, one function per oracle function (docs/oracle.md)
     src/bin/          replay, chain, call, fields, inspect, cues, traces, ltrconv, rootmotion
-                      (mantle root motion out of recordings, into src/sim/rootmotion.rs)
+                      (mantle root motion out of recordings, into src/sim/rootmotion.rs),
+                      assets (what an install holds), unzstd
     tests/oracle.rs   the replay gates; tests/frame.rs and tests/testmap.rs the camera
                       and the test map
     game/             the Bevy game shell; its own workspace, root cargo test never builds it
@@ -109,6 +129,7 @@ refused: multiplayer and our own models (`docs/game-shell-plan.md` section 8).
     tools/            see below
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
     docs/feedback.md  how the oracle answers movement with sound and animation
+    docs/assets.md    the game's files the shell reads from an install, and how
     docs/camera.md    the camera's answer to movement, recovered; what is ported and gated
     docs/game-shell-plan.md  the Bevy game shell plan (roadmap item 2) and its status
     docs/ground-truth.md  where the ground truth comes from

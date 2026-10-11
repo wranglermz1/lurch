@@ -197,7 +197,7 @@ fn view_frames_between_calls_match() {
                 let (t, dt) = lurch::oracle::view_clock(pr);
                 ours.view_frame(&s, lurch::oracle::move_in(&rec).velocity, t, dt);
                 let theirs = lurch::oracle::player(&rec.player_in);
-                let key = |p: &lurch::sim::Player| format!("{:?}", (p.slide_tilt, p.fov_start, p.fov_duration, p.fov_from, p.fov_to));
+                let key = |p: &lurch::sim::Player| format!("{:?}", (p.slide_tilt, p.fov_start, p.fov_duration, p.fov_from, p.fov_to, p.view_entity_blend));
                 frames += 1;
                 if key(&ours) != key(&theirs) {
                     fails += 1;
@@ -265,6 +265,7 @@ fn zipline_snapshots_decode_and_stay_out_of_trace_matching() {
 #[test]
 fn cues_fall_where_the_oracle_acted() {
     use lurch::sim::cue::Cue;
+    use lurch::sim::zipline::RIDING;
     let mut bad = Vec::new();
     for p in recordings() {
         for rec in lurch::ltr::open(p.to_str().unwrap()).unwrap() {
@@ -279,6 +280,10 @@ fn cues_fall_where_the_oracle_acted() {
                 ("footstep", (before.step_side != after.step_side) as usize, count(|c| matches!(c, Cue::Footstep { .. }))),
                 ("land", (before.land_probe.is_none() && after.land_probe.is_some()) as usize, count(|c| matches!(c, Cue::Land { .. }))),
                 ("jump", (before.last_jump_time != after.last_jump_time) as usize, count(|c| matches!(c, Cue::Jump { .. }))),
+                ("sprint end", (before.sprinting && !after.sprinting) as usize, count(|c| matches!(c, Cue::SprintEnd))),
+                ("zipline mount", (before.zipline_start_time != after.zipline_start_time) as usize, count(|c| matches!(c, Cue::ZiplineMount))),
+                ("zipline start", (before.zipline_state != RIDING && after.zipline_state == RIDING) as usize, count(|c| matches!(c, Cue::ZiplineStart))),
+                ("zipline stop", (before.zipline_detach_time != after.zipline_detach_time) as usize, count(|c| matches!(c, Cue::ZiplineStop))),
             ];
             for (what, oracle, ours) in want {
                 if oracle != ours {

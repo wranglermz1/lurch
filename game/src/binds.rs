@@ -33,6 +33,7 @@ impl Default for Binds {
             (Key(KeyCode::KeyC), Action::Bits(IN_TOGGLE_DUCK)),
             (Key(KeyCode::ShiftLeft), Action::Bits(IN_SPEED)),
             (Key(KeyCode::KeyE), Action::Bits(IN_USE)),
+            (Key(KeyCode::KeyQ), Action::Bits(IN_OFFHAND1)),
             (Key(KeyCode::KeyR), Action::Respawn),
             (Key(KeyCode::BracketLeft), Action::PrevSpot),
             (Key(KeyCode::BracketRight), Action::NextSpot),

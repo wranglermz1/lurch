@@ -62,6 +62,9 @@ pub struct Climb {
 }
 
 const CLIMB: u32 = 3;
+/// How long the view takes onto the climbing arms: 0.2 s plus the active weapon's `+0x1e3c`,
+/// which is 0 for the fists in every recording.
+const CLIMB_ARMS_LERP_IN: f32 = 0.2;
 const NO_CLIMB_SURFACE: u32 = 0x10_0000;
 const PROBE_SLACK: f32 = 0.2929;
 
@@ -141,6 +144,9 @@ impl Move<'_> {
         }
         let ceiling = c.ceiling_limit.max(0.0).min(1.0);
         if 0.7 < normal[2] || normal[2] < -ceiling {
+            return 0;
+        }
+        if self.p.grappling && self.p.grapple_attached && self.p.grapple_count > 0 && 0.0 < self.grapple_rope_along(normal) {
             return 0;
         }
         if t.is_some_and(|t| t.startsolid || t.contents & NO_CLIMB_SURFACE != 0) {
@@ -288,6 +294,45 @@ impl Move<'_> {
                 self.p.duck_held = false;
             }
         }
+        if self.climbing() {
+            self.climb_arms();
+        }
+    }
+
+    /// The climbing arms (`0x866880`, with `traversal_anim` 1): while a ray from the eye along
+    /// the wall's normal finds the wall within the allowed distance, the first-person proxy
+    /// plays its climb and is the view-offset entity; once it does not, they stop.
+    pub(super) fn climb_arms(&mut self) {
+        if self.p.traversal_blocked || self.p.first_person_anim == super::grapple::FP_ANIM_GRAPPLE {
+            return;
+        }
+        let eye = self.p.eye(self.s, self.p.abs_origin, self.p.view_angles, self.g.curtime);
+        let (mins, maxs) = self.hull();
+        let allowed = self.s.climb.allowed_wall_distance;
+        let (dy, dx) = (maxs[1] - mins[1], maxs[0] - mins[0]);
+        let dist = (dy * dy + dx * dx + 0.0).sqrt() * 0.5 + allowed;
+        let u = self.p.up;
+        let end = [-(dist * u[0]) + eye[0], -(dist * u[1]) + eye[1], -(dist * u[2]) + eye[2]];
+        let t = self.tr.hull(&HullQuery { start: eye, end, mins: [0.0; 3], maxs: [0.0; 3], mask: self.p.mask });
+        if !(t.fraction * dist <= allowed) {
+            self.stop_climb_arms();
+            return;
+        }
+        if !self.p.climb_arms {
+            self.p.view_entity = true;
+            self.p.view_entity_lerp_in = CLIMB_ARMS_LERP_IN;
+            self.p.view_entity_lerp_out = 0.0;
+            self.p.view_entity_flag = false;
+            self.p.climb_arms = true;
+        }
+    }
+
+    /// `0x866e00`: the arms stop and the view lets go of them.
+    fn stop_climb_arms(&mut self) {
+        if self.p.climb_arms {
+            self.p.climb_arms = false;
+            self.p.view_entity = false;
+        }
     }
 
     /// Turn the up vector toward `n`, at most `rotate_max_rate` radians a second.
@@ -323,6 +368,7 @@ impl Move<'_> {
         self.p.prev_up = self.p.up;
         self.p.hanging = false;
         self.p.push_away_since = 0.0;
+        self.stop_climb_arms();
     }
 
     /// How hard the wall still holds: 0 on the wall just left or high above the floor.
@@ -500,6 +546,7 @@ impl Move<'_> {
         let (g, vmax, vaccel, vdecel, hmax, hmax_back, haccel, hdecel) = if self.climbing() && 0.0 < w[2] {
             let f = (((self.climb_top() + c.height) - self.mv.origin[2]) / c.height).max(0.0).min(1.0);
             let vmax = (1.0 - f) * c.speed_end + f * c.speed_start;
+            self.climb_arms();
             (0.0, vmax, c.accel, c.decel, c.horz_speed, c.horz_speed, c.horz_accel, c.horz_decel)
         } else {
             let g = self.wall_gravity(since);

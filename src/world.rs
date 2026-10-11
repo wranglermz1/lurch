@@ -7,10 +7,11 @@ use crate::sim::zipline::Zipline;
 use crate::sim::{HullQuery, Trace, Tracer};
 use std::fs::File;
 use std::io;
-use std::os::unix::fs::FileExt;
 
 const DIST_EPSILON: f32 = 0.031_25;
 const WORLD_ENTITY: u64 = 1;
+/// What a hit on the world reports: solid, as the recorded maps' brushes do.
+const CONTENTS_SOLID: u32 = 0x1;
 const TAG_WALK: u8 = 1;
 const COARSE_N: usize = 48;
 const HEADER: u64 = 64;
@@ -55,7 +56,7 @@ impl World {
     pub fn open(path: &str) -> io::Result<Self> {
         let f = File::open(path)?;
         let mut h = [0u8; HEADER as usize];
-        f.read_exact_at(&mut h, 0)?;
+        read_exact_at(&f, &mut h, 0)?;
         let u = |o: usize| u32::from_le_bytes(h[o..o + 4].try_into().unwrap());
         let fl = |o: usize| f32::from_le_bytes(h[o..o + 4].try_into().unwrap());
         if &h[..8] != b"HAVMMSH\0" || u(8) != 1 {
@@ -66,7 +67,7 @@ impl World {
         let cells = n[0] * n[1] + 2;
         let starts_at = HEADER + tri_n * 36;
         let mut raw = vec![0u8; cells * 4];
-        f.read_exact_at(&mut raw, starts_at)?;
+        read_exact_at(&f, &mut raw, starts_at)?;
         let starts = raw.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect();
         let cell = fl(20);
         let mut g = Grid {
@@ -138,16 +139,33 @@ impl Grid {
     }
 }
 
+#[cfg(unix)]
+fn read_exact_at(f: &File, buf: &mut [u8], at: u64) -> io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, at)
+}
+
+#[cfg(windows)]
+fn read_exact_at(f: &File, mut buf: &mut [u8], mut at: u64) -> io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match f.seek_read(buf, at)? {
+            0 => return Err(io::ErrorKind::UnexpectedEof.into()),
+            n => (buf, at) = (&mut buf[n..], at + n as u64),
+        }
+    }
+    Ok(())
+}
+
 fn read_index(f: &File, g: &Grid, bucket: usize) -> io::Result<Vec<u32>> {
     let (a, b) = (g.starts[bucket] as u64, g.starts[bucket + 1] as u64);
     let mut raw = vec![0u8; (b.saturating_sub(a) * 4) as usize];
-    f.read_exact_at(&mut raw, g.index_at + a * 4)?;
+    read_exact_at(f, &mut raw, g.index_at + a * 4)?;
     Ok(raw.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect())
 }
 
 fn read_tri(f: &File, t: u32) -> io::Result<Tri> {
     let mut raw = [0u8; 36];
-    f.read_exact_at(&mut raw, HEADER + t as u64 * 36)?;
+    read_exact_at(f, &mut raw, HEADER + t as u64 * 36)?;
     let v = |k: usize| f32::from_le_bytes(raw[k * 4..k * 4 + 4].try_into().unwrap());
     Ok([[v(0), v(1), v(2)], [v(3), v(4), v(5)], [v(6), v(7), v(8)]])
 }
@@ -246,10 +264,12 @@ impl Tracer for World {
                 t.fraction = k.fraction;
                 t.normal = k.normal;
                 t.entity = WORLD_ENTITY;
+                t.contents = CONTENTS_SOLID;
             }
         });
         if t.startsolid {
             t.entity = WORLD_ENTITY;
+            t.contents = CONTENTS_SOLID;
         }
         t.endpos = mad(q.start, d, t.fraction);
         t

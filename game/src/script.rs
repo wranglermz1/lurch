@@ -14,7 +14,7 @@ use crate::{advance_frame, common, config, FrameIndex, Paused, PendingShots, Res
 /// The frametime of `tests/testmap.rs`.
 pub const SCRIPT_FRAMETIME: f32 = 0.004;
 
-pub const KEYS: [(&str, KeyCode); 13] = [
+pub const KEYS: [(&str, KeyCode); 14] = [
     ("KeyW", KeyCode::KeyW),
     ("KeyA", KeyCode::KeyA),
     ("KeyS", KeyCode::KeyS),
@@ -24,6 +24,7 @@ pub const KEYS: [(&str, KeyCode); 13] = [
     ("ShiftLeft", KeyCode::ShiftLeft),
     ("KeyC", KeyCode::KeyC),
     ("KeyE", KeyCode::KeyE),
+    ("KeyQ", KeyCode::KeyQ),
     ("KeyR", KeyCode::KeyR),
     ("BracketLeft", KeyCode::BracketLeft),
     ("BracketRight", KeyCode::BracketRight),

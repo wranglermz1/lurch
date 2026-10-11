@@ -5,13 +5,18 @@ use bevy::render::RenderPlugin;
 use bevy::window::PresentMode;
 use bevy::winit::WinitSettings;
 use lurch_game::script::ScriptPlugin;
-use lurch_game::{args, CmdPlugin, HudPlugin, LimiterPlugin, Paused, SimPlugin, ViewPlugin};
+use lurch_game::{args, install, AudioPlugin, CmdPlugin, DataPlugin, HudPlugin, LimiterPlugin, Paused, SimPlugin, ViewPlugin, ViewmodelPlugin};
 
 fn main() {
-    let cfg = args::parse(std::env::args().skip(1)).unwrap_or_else(|e| {
+    let cfg_path = std::env::current_exe().ok().map(|p| p.with_file_name("lurch.cfg"));
+    let file = cfg_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    let mut cfg = args::parse(args::file_args(&file).into_iter().chain(std::env::args().skip(1))).unwrap_or_else(|e| {
         eprintln!("{e}\n{}", args::USAGE);
         std::process::exit(2);
     });
+    if !cfg.headless {
+        cfg.r5r = install::resolve(cfg.r5r.take(), !cfg.scripted, cfg_path.as_deref());
+    }
     let spots: Vec<String> = lurch::testmap::build().spots.into_iter().map(|s| s.name).collect();
     if !spots.contains(&cfg.spot) {
         eprintln!("no spot {:?}; spots: {}", cfg.spot, spots.join(", "));
@@ -45,7 +50,7 @@ fn main() {
         }
         app.insert_resource(WinitSettings::continuous())
             .add_plugins(plugins)
-            .add_plugins((CmdPlugin, SimPlugin, ViewPlugin::default(), HudPlugin, LimiterPlugin));
+            .add_plugins((CmdPlugin, SimPlugin, ViewPlugin::default(), DataPlugin, ViewmodelPlugin, AudioPlugin, HudPlugin, LimiterPlugin));
     }
     if let Some(script) = cfg.script.clone() {
         app.add_plugins(ScriptPlugin(script));

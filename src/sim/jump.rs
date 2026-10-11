@@ -133,7 +133,10 @@ impl Move<'_> {
         self.set_ground(None);
         self.p.jumped_since_ground = true;
         if world {
-            let speed = ((self.s.sv_gravity + self.s.sv_gravity) * height).sqrt();
+            let mut speed = ((self.s.sv_gravity + self.s.sv_gravity) * height).sqrt();
+            if self.p.grappling && self.p.grapple_pulling {
+                speed *= super::grapple::GRAPPLE_JUMPFRAC;
+            }
             self.p.wall_count = 0;
             self.p.same_wall = false;
             let surface = 1.0;

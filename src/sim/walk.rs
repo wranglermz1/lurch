@@ -22,6 +22,7 @@ impl Move<'_> {
         let g = if self.p.gravity == 0.0 { 1.0 } else { self.p.gravity };
         let k = if self.s.gravity_scale * g != 0.0 { self.s.gravity_scale * g } else { 1.0 };
         let wall = if is_world_up(self.p.up) { 1.0 } else { self.wall_gravity(self.g.curtime - self.p.wall_time) };
+        let wall = self.grapple_gravity_scale(wall);
         let dv = ((k * self.s.sv_gravity) as f64 * 0.5 * t as f64 * wall as f64) as f32;
         let v = self.mv.velocity;
         let mut x = GRAVITY_DIR[0] * dv + v[0];
@@ -59,6 +60,7 @@ impl Move<'_> {
         self.check_velocity();
         self.check_jump();
         self.climb_think();
+        let pulled = self.grapple_pull();
         self.check_velocity();
         let before = self.mv.velocity;
         if self.on_ground() {
@@ -67,10 +69,10 @@ impl Move<'_> {
             if !is_world_up(self.p.up) {
                 self.end_climb();
             }
-            self.air_move(dt);
+            self.air_move(dt, pulled);
         }
         self.wall_impact(before);
-        self.categorize(false);
+        self.categorize(pulled);
         self.half_gravity(dt);
         if self.on_ground() {
             self.mv.velocity = reject(self.mv.velocity, self.p.up);
@@ -306,21 +308,26 @@ impl Move<'_> {
         self.mv.velocity = if cap < l2 { scale(out, (cap / l2).sqrt()) } else { out };
     }
 
-    pub fn air_move(&mut self, dt: f32) {
+    /// `pulled`: the grapple pulled this call, which keeps a blocked move off walkable slopes.
+    pub fn air_move(&mut self, dt: f32, pulled: bool) {
         let wish = self.air_wish();
         let l = len(wish);
         let mag = l.min(1.0);
         let wishdir = scale(wish, 1.0 / l.max(TINY));
-        let air_speed = if self.s.air_strafe_disabled { 0.0 } else { self.p.air_speed };
-        let mag = mag * air_speed;
-        let accel = self.p.air_acceleration;
-        let v = self.mv.velocity;
-        let speed = (v[1] * v[1] + v[0] * v[0] + 0.0).sqrt();
-        if speed > 0.0 {
-            let drop = (speed * self.s.air_drag + self.s.air_drag_constant) * self.ramp() * speed * dt;
-            let k = (speed - drop).max(0.0) / speed;
-            self.mv.velocity = [(v[0] - v[0]) + k * v[0], (v[1] - v[1]) + k * v[1], (v[2] - 0.0) + k * 0.0];
-        }
+        let (mag, accel) = if self.p.grappling && self.p.grapple_pulling {
+            let g = &self.s.grapple;
+            (mag * g.air_speed_max, if self.p.grapple_swinging { 0.0 } else { g.air_accel })
+        } else {
+            let air_speed = if self.s.air_strafe_disabled { 0.0 } else { self.p.air_speed };
+            let v = self.mv.velocity;
+            let speed = (v[1] * v[1] + v[0] * v[0] + 0.0).sqrt();
+            if speed > 0.0 {
+                let drop = (speed * self.s.air_drag + self.s.air_drag_constant) * self.ramp() * speed * dt;
+                let k = (speed - drop).max(0.0) / speed;
+                self.mv.velocity = [(v[0] - v[0]) + k * v[0], (v[1] - v[1]) + k * v[1], (v[2] - 0.0) + k * 0.0];
+            }
+            (mag * air_speed, self.p.air_acceleration)
+        };
         let wishspeed = 1.0 * self.p.speed_scale * mag;
         if !self.p.no_accel {
             self.air_accelerate(wishdir, wishspeed, accel * self.p.accel_scale, dt);
@@ -342,7 +349,7 @@ impl Move<'_> {
             self.mv.origin = t.endpos;
             self.retry_wall(t.endpos, origin);
         } else {
-            self.air_blocked(t, origin[2]);
+            self.air_blocked(t, origin[2], pulled);
         }
         self.p.step_height = step;
     }
@@ -362,7 +369,7 @@ impl Move<'_> {
         }
     }
 
-    fn air_blocked(&mut self, mut t: Trace, start_z: f32) {
+    fn air_blocked(&mut self, mut t: Trace, start_z: f32, pulled: bool) {
         let v = self.mv.velocity;
         let nz = t.normal[2];
         let mut along = self.g.curtime - self.p.last_ground_time <= 0.1
@@ -385,7 +392,7 @@ impl Move<'_> {
                 self.mv.velocity = vel;
             }
         }
-        if along && self.along_slope(&mut t, false, None, false) {
+        if along && self.along_slope(&mut t, false, None, pulled) {
             return;
         }
         let vz = self.mv.velocity[2];

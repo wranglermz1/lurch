@@ -6,6 +6,8 @@ holds triples (type<<32 | field offset, name ptr, global ptr), but the global in
 triple is not the one for that name. A global's name is the record whose field
 offset equals the offset the global holds live. Verified on hull_min/hull_max
 (SetupMove takes their difference) and speed/sprintspeed (picked by the sprint flag).
+Most records sit in LO..HI; the rest (the grapple, zipline and cockpit sway fields
+among them) from REG_LO up. Uppercase names there are other registries' records.
 
   tools/settings.py dumps/current.bin               every global, its offset, its name
   tools/settings.py dumps/current.bin 0x2385c68 ... just these globals
@@ -13,6 +15,7 @@ offset equals the offset the global holds live. Verified on hull_min/hull_max
 import collections, mmap, struct, sys
 
 LO, HI = 0x2380000, 0x2390000
+REG_LO = 0x2300000
 TYPES = {0: 'bool', 1: 'int', 2: 'float', 4: 'vec3', 5: 'string'}
 
 def main(path, want):
@@ -34,9 +37,9 @@ def main(path, want):
         return s.decode() if s and all(32 <= c < 127 for c in s) else None
 
     names, globs = collections.defaultdict(list), set()
-    for a in range(LO, HI, 8):
+    for a in range(REG_LO, HI, 8):
         meta, name, g = q(a), q(a + 8), q(a + 16) - base
-        if LO <= g < HI and meta >> 32 < 16 and (n := cstr(name)):
+        if REG_LO <= g < HI and meta >> 32 < 16 and (n := cstr(name)) and not n[0].isupper():
             names[meta & 0xffffffff].append(f'{n}:{TYPES.get(meta >> 32, meta >> 32)}')
             globs.add(g)
     for g in sorted(want or globs):

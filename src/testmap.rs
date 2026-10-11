@@ -1,7 +1,7 @@
 //! A plain map built in code: a large floor and, in lanes off it, walls, steps and ramps in
 //! sizes either side of the limits the settings set, crates, a long hill to slide down, and
-//! ziplines (down, up onto a ledge, up a tower, a chain of two, a sagging one). Each lane has
-//! a spot to start from, facing its features.
+//! ziplines (down, up onto a ledge, up a tower, a chain of two, a sagging one), and a lane of
+//! the game's own props. Each lane has a spot to start from, facing its features.
 
 use crate::sim::math::V3;
 use crate::sim::zipline::{Zipline, VERTICAL};
@@ -13,10 +13,36 @@ pub struct Spot {
     pub yaw: f32,
 }
 
+/// A static prop of `PROP_PAK`, read from the R5Reloaded install at run time; without one its
+/// lane is empty.
+pub struct Prop {
+    pub model: &'static str,
+    pub origin: V3,
+    pub yaw: f32,
+}
+
+impl Prop {
+    /// A direction in the model's space turned to the prop's yaw.
+    pub fn turn(&self, v: V3) -> V3 {
+        let (s, c) = self.yaw.to_radians().sin_cos();
+        [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]]
+    }
+
+    /// A point in the model's space placed in the map.
+    pub fn place(&self, v: V3) -> V3 {
+        let t = self.turn(v);
+        [self.origin[0] + t[0], self.origin[1] + t[1], self.origin[2] + t[2]]
+    }
+}
+
+/// The Firing Range's pak: it holds loot bins, cargo containers and the Thunderdome's walls.
+pub const PROP_PAK: &str = "mp_rr_canyonlands_staging.rpak";
+
 pub struct TestMap {
     pub tris: Vec<Tri>,
     pub spots: Vec<Spot>,
     pub ziplines: Vec<Zipline>,
+    pub props: Vec<Prop>,
 }
 
 impl TestMap {
@@ -163,5 +189,24 @@ pub fn build() -> TestMap {
     let (y0, _) = next("zipline sag".into(), 0.0, &mut spots);
     let y = y0 + HALF_WIDTH;
     chain(&mut ziplines, &[sagging([FEATURE_X, y, 176.0], [FEATURE_X + 2048.0, y, 176.0])]);
-    TestMap { tris, spots, ziplines }
+    let (y0, _) = next("props".into(), 0.0, &mut spots);
+    let y = y0 + HALF_WIDTH;
+    let prop = |model: &'static str, x: f32, y: f32, z: f32, yaw: f32| Prop { model, origin: [x, y, z], yaw };
+    let blue = "mdl/containers/underbelly_cargo_container_128_blue_02.rmdl";
+    let red = "mdl/containers/underbelly_cargo_container_128_red_02.rmdl";
+    let fence = "mdl/colony/farmland_fence_rusted_01.rmdl";
+    let props = vec![
+        prop("mdl/containers/loot_bin_01_static.rmdl", FEATURE_X + 64.0, y, 0.0, 0.0),
+        prop("mdl/rocks/thunderdome_quarry_block_01_orange.rmdl", FEATURE_X + 128.0, y + 256.0, 49.1, 0.0),
+        prop(fence, FEATURE_X + 128.0, y - 192.0, 0.0, 0.0),
+        prop(fence, FEATURE_X + 128.0, y - 256.0, 0.0, 0.0),
+        prop(blue, FEATURE_X + 640.0, y, 0.0, 0.0),
+        prop(blue, FEATURE_X + 640.0, y - 256.0, 0.0, 0.0),
+        prop(red, FEATURE_X + 640.0, y - 256.0, 96.0, 0.0),
+        prop("mdl/rocks/thunderdome_quarry_block_stairs_01_orange.rmdl", FEATURE_X + 704.0, y + 208.0, 0.0, 0.0),
+        prop(red, FEATURE_X + 640.0, y + 512.0, 0.0, 90.0),
+        prop("mdl/thunderdome/thunderdome_barrier_01.rmdl", FEATURE_X + 1280.0, y + 256.0, 0.0, 90.0),
+        prop("mdl/rocks/rock_white_chalk_modular_wallrun_02.rmdl", FEATURE_X + 1920.0, y - 320.0, 247.3, 0.0),
+    ];
+    TestMap { tris, spots, ziplines, props }
 }

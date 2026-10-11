@@ -9,8 +9,10 @@ use crate::Config;
 
 pub const USAGE: &str = "usage: lurch-game [--spot NAME] [--shot FRAME:PATH] [--script PATH [--frametime SECS] [--headless]]
                   [--sens F] [--fov-scale F] [--fps-max N] [--vsync] [--size WxH]
-                  [--wheel-down A] [--wheel-up A] [--wheel-mode event|notch] [--frame-latency N] [--pipelined]
-  A is forward, jump, duck or none. --fps-max is 1 to 350.";
+                  [--wheel-down A] [--wheel-up A] [--wheel-mode event|notch] [--frame-latency N] [--pipelined] [--autosprint]
+                  [--r5r INSTALL] [--legend NAME]
+  A is forward, jump, duck or none. --fps-max is 1 to 350. INSTALL is an R5Reloaded install folder
+  (the one holding r5apex.exe), asked for on the first run; NAME is a legend (wraith, bangalore, ...).";
 
 /// No frame may be shorter than the retail `usercmd_frametime_min`.
 pub const FPS_MAX_LIMIT: u32 = 350;
@@ -53,6 +55,9 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
                 cfg.frame_latency = Some(v.parse::<NonZeroU32>().map_err(|_| format!("--frame-latency wants a whole number above 0, got {v}"))?);
             }
             "--pipelined" => cfg.pipelined = true,
+            "--autosprint" => cfg.autosprint = true,
+            "--r5r" => cfg.r5r = Some(PathBuf::from(value()?)),
+            "--legend" => cfg.legend = value()?,
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
@@ -66,6 +71,20 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
         cfg.frametime = ft;
     }
     Ok(cfg)
+}
+
+/// Arguments from `lurch.cfg`: whitespace-separated, `#` starts a comment line, and an
+/// `--r5r` line takes the rest of the line as its path, spaces and all.
+pub fn file_args(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.starts_with('#')) {
+        if let Some(path) = line.strip_prefix("--r5r ") {
+            out.extend(["--r5r".to_string(), path.trim().to_string()]);
+        } else {
+            out.extend(line.split_whitespace().map(String::from));
+        }
+    }
+    out
 }
 
 fn shot(v: &str) -> Result<(u64, PathBuf), String> {

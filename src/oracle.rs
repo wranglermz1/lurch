@@ -5,6 +5,7 @@
 use crate::ltr::{f32_at, u32_at, vec3_at, Record};
 use crate::sim::math::{len2, sub, V3};
 use crate::sim::climb::Climb;
+use crate::sim::grapple;
 use crate::sim::jump::{Lurch, Skip};
 use crate::sim::cue::Probe;
 use crate::sim::mantle::Mantle;
@@ -107,6 +108,7 @@ pub const MANTLE_CONVARS: Mantle = Mantle {
     traversal_cooldown: 0.5,
     hand_required_width: 6.0,
     grapple_auto_mantle: 0.25,
+    gun_enable_height: 33.0,
 };
 
 fn byte(b: &[u8], off: usize) -> u8 {
@@ -232,6 +234,56 @@ pub fn settings(blob: &[u8]) -> Settings {
             roll_view_angle_max: f32_at(blob, 0xc60),
             context_action_can_use: byte(blob, 0xe1c) != 0,
         },
+        grapple: grapple::Tuning {
+            swing: byte(blob, 0xe18) != 0,
+            swing_type: u32_at(blob, 0xa90) as i32,
+            swing_gravity: f32_at(blob, 0xa94),
+            swing_hold_time: f32_at(blob, 0xa98),
+            swing_sticky: byte(blob, 0xe19) != 0,
+            attach_vertical_boost: f32_at(blob, 0xac0),
+            detach_vertical_boost: f32_at(blob, 0xac4),
+            detach_vertical_max_speed: f32_at(blob, 0xac8),
+            detach_gravity_time: f32_at(blob, 0xad0),
+            detach_gravity_scale: f32_at(blob, 0xad4),
+            detach_gravity_speed: f32_at(blob, 0xad8),
+            detach_length_min: f32_at(blob, 0xadc),
+            detach_length_max: f32_at(blob, 0xae0),
+            detach_away_speed: f32_at(blob, 0xae4),
+            gravity_frac_min: f32_at(blob, 0xae8),
+            gravity_frac_max: f32_at(blob, 0xaec),
+            detach_speed_loss: f32_at(blob, 0xaf0),
+            detach_speed_loss_min: f32_at(blob, 0xaf4),
+            detach_low_speed_threshold: f32_at(blob, 0xaf8),
+            detach_low_speed_time: f32_at(blob, 0xb04),
+            detach_low_speed_wall_time: f32_at(blob, 0xb08),
+            detach_low_speed_ground_time: f32_at(blob, 0xb0c),
+            detach_low_speed_swing_time: f32_at(blob, 0xb14),
+            impact_vertical_boost: f32_at(blob, 0xb18),
+            impact_vertical_max_speed: f32_at(blob, 0xb1c),
+            speed_ramp_min: f32_at(blob, 0xb20),
+            speed_ramp_max: f32_at(blob, 0xb24),
+            speed_ramp_time: f32_at(blob, 0xb28),
+            swinging_speed_ramp_min: f32_at(blob, 0xb2c),
+            swinging_speed_ramp_max: f32_at(blob, 0xb30),
+            swinging_speed_ramp_time: f32_at(blob, 0xb34),
+            accel: f32_at(blob, 0xb38),
+            decel: f32_at(blob, 0xb3c),
+            air_speed_max: f32_at(blob, 0xb48),
+            air_accel: f32_at(blob, 0xb4c),
+            detach_on_grapple: byte(blob, 0xe14) != 0,
+            detach_on_grapple_debounce_time: f32_at(blob, 0xa88),
+            last_zipline_cooldown: f32_at(blob, 0xb50),
+            roll_max: f32_at(blob, 0xaac),
+            roll_strength: f32_at(blob, 0xaa8),
+            roll_distance_min: f32_at(blob, 0xab8),
+            roll_distance_max: f32_at(blob, 0xabc),
+            roll_view_angle_min: f32_at(blob, 0xab0),
+            roll_view_angle_max: f32_at(blob, 0xab4),
+            power_regen_delay: f32_at(blob, 0xb40),
+            power_regen_rate: f32_at(blob, 0xb44),
+            human: (u32_at(blob, 0x7a8).wrapping_sub(1) & !2) != 0,
+            weapon: grapple::WEAPON,
+        },
         sv_gravity: SV_GRAVITY,
         sv_maxvelocity: SV_MAXVELOCITY,
         extra_air_accel: EXTRA_AIR_ACCEL,
@@ -346,6 +398,13 @@ pub fn player(p: &[u8]) -> Player {
         repel_time: f32_at(p, 0x1bcc),
         repel_count: u32_at(p, 0x1bd0) as i32,
         hanging: byte(p, 0x276d) != 0,
+        climb_arms: byte(p, 0x276c) != 0,
+        first_person_anim: u32_at(p, 0x2a4c),
+        view_entity: u32_at(p, 0x2860) != u32::MAX,
+        view_entity_lerp_in: f32_at(p, 0x2864),
+        view_entity_lerp_out: f32_at(p, 0x2868),
+        view_entity_flag: byte(p, 0x286c) != 0,
+        view_entity_blend: f32_at(p, 0x2870),
         dodge_lock: byte(p, 0x30ee) != 0,
         dodged: byte(p, 0x3094) != 0,
         wall_decel_scale: f32_at(p, 0x26a8),
@@ -370,9 +429,28 @@ pub fn player(p: &[u8]) -> Player {
         view_offset: vec3_at(p, 0xb8),
         step_smoothing: vec3_at(p, 0x2098),
         grapple_time: f32_at(p, 0x27d0),
+        grapple_hook_vel: vec3_at(p, 0x2778),
+        grapple_points: [vec3_at(p, 0x2784), vec3_at(p, 0x2790), vec3_at(p, 0x279c), vec3_at(p, 0x27a8)],
+        grapple_count: u32_at(p, 0x27b4) as i32,
+        grapple_attached: byte(p, 0x27b8) != 0,
+        grapple_pulling: byte(p, 0x27b9) != 0,
+        grapple_swinging: byte(p, 0x27ba) != 0,
+        grapple_retracting: byte(p, 0x27bb) != 0,
+        grapple_forced: byte(p, 0x27bc) != 0,
+        grapple_touched: byte(p, 0x27bd) != 0,
+        grapple_power_used: f32_at(p, 0x27c0),
+        grapple_fire_time: f32_at(p, 0x27c4),
+        grapple_pull_time: f32_at(p, 0x27c8),
+        grapple_attach_time: f32_at(p, 0x27cc),
+        grapple_fast: byte(p, 0x27dc) != 0,
+        grapple_slow_time: f32_at(p, 0x27e0),
+        grapple_swing_length: f32_at(p, 0x27e4),
+        grapple_swing_hold: f32_at(p, 0x27e8),
+        suit_grapple_power: f32_at(p, 0x1a64),
+        grapple_hook_at: [0.0; 3],
+        grapple_zipline: None,
         mantle_blocked: (u32_at(p, 0x2cac) >> 11) & 1 != 0
             || u64_at(p, 0x2ac8) as i64 > 0
-            || (byte(p, 0x2800) != 0 && u32_at(p, 0x27b4) as i32 > 0)
             || matches!(u32_at(p, 0x2a4c), 1 | 3 | 4),
         traversal_kind: u32_at(p, 0x26ec) as i32,
         traversal_type: u32_at(p, 0x26e8) as i32,
@@ -392,6 +470,7 @@ pub fn player(p: &[u8]) -> Player {
         traversal_backoff: byte(p, 0x2761) != 0,
         traversal_push: byte(p, 0x2762) != 0,
         traversal_rest: f32_at(p, 0x2768),
+        traversal_gun: u32_at(p, 0x2764) as i32,
         traversal_cycle: f32_at(p, 0x1eb4),
         context_action: u32_at(p, 0x1764) as i32,
         grappling: byte(p, 0x2800) != 0,
@@ -466,6 +545,7 @@ pub fn move_data(mv: &[u8], command_number: u32) -> MoveData {
         pressed: u32_at(mv, 0x2c),
         view_wish: vec3_at(mv, 0x84),
         random_seed: None,
+        grapple_stash: vec3_at(mv, 0xe4),
         origin: vec3_at(mv, 0x118),
         velocity: vec3_at(mv, 0x124),
     }
@@ -744,6 +824,13 @@ macro_rules! modelled_fields {
         $m!(repel_time);
         $m!(repel_count);
         $m!(hanging);
+        $m!(climb_arms);
+        $m!(first_person_anim);
+        $m!(view_entity);
+        $m!(view_entity_lerp_in);
+        $m!(view_entity_lerp_out);
+        $m!(view_entity_flag);
+        $m!(view_entity_blend);
         $m!(dodge_lock);
         $m!(dodged);
         $m!(sprint_tilt);
@@ -784,8 +871,29 @@ macro_rules! modelled_fields {
         $m!(traversal_backoff);
         $m!(traversal_push);
         $m!(traversal_rest);
+        $m!(traversal_gun);
         $m!(traversal_cycle);
         $m!(context_action);
+        $m!(grappling);
+        $m!(grapple_time);
+        $m!(grapple_hook_vel);
+        $m!(grapple_points);
+        $m!(grapple_count);
+        $m!(grapple_attached);
+        $m!(grapple_pulling);
+        $m!(grapple_swinging);
+        $m!(grapple_retracting);
+        $m!(grapple_forced);
+        $m!(grapple_touched);
+        $m!(grapple_power_used);
+        $m!(grapple_fire_time);
+        $m!(grapple_pull_time);
+        $m!(grapple_attach_time);
+        $m!(grapple_fast);
+        $m!(grapple_slow_time);
+        $m!(grapple_swing_length);
+        $m!(grapple_swing_hold);
+        $m!(suit_grapple_power);
         $m!(zipline);
         $m!(last_zipline);
         $m!(zipline_detach_time);
@@ -862,6 +970,7 @@ pub fn diff_move(ours: &MoveData, theirs: &MoveData) -> Vec<String> {
     field!(velocity);
     field!(oldbuttons);
     field!(maxspeed);
+    field!(grapple_stash);
     out
 }
 

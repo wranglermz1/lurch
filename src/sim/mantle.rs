@@ -45,6 +45,9 @@ pub struct Mantle {
     pub traversal_cooldown: f32,
     pub hand_required_width: f32,
     pub grapple_auto_mantle: f32,
+    /// `automantle_gun_enable_height`: while the eye is further than this below the ledge
+    /// top's share of the path, the gun stays up and holds the first-person hands back.
+    pub gun_enable_height: f32,
 }
 
 /// What the movement takes from animations, which live in model files: the traversal
@@ -214,7 +217,7 @@ impl Move<'_> {
         if 0.25 > now - self.p.last_ground_time && !jump {
             return false;
         }
-        if self.p.traversal_blocked || m.cooldown > now - self.p.traversal_start_time {
+        if (self.p.grappling && self.p.grapple_count > 0) || self.p.traversal_blocked || m.cooldown > now - self.p.traversal_start_time {
             return false;
         }
         let o = self.mv.origin;
@@ -686,6 +689,7 @@ impl Move<'_> {
     #[allow(clippy::too_many_arguments)]
     fn start_traversal(&mut self, forward: V3, entity: u64, begin: V3, mid: V3, end: V3, mid_frac: f32, origin: V3) {
         let now = self.g.curtime;
+        self.p.grapple_anim_end(&mut self.cues);
         let p = &mut *self.p;
         p.traversal_kind = 0;
         p.traversal_type = 0;
@@ -722,6 +726,11 @@ impl Move<'_> {
             self.p.flags |= 1;
         }
         self.mv.velocity = ZERO;
+        if self.p.grappling {
+            let mut v = self.mv.velocity;
+            self.p.grapple_detach(self.s, &mut v, true, now, &mut self.cues);
+            self.mv.velocity = v;
+        }
         self.p.movetype = MOVETYPE_TRAVERSE;
         self.end_climb();
     }
@@ -831,6 +840,12 @@ impl Move<'_> {
         } else {
             target = progress;
         }
+        self.p.traversal_gun = if kind == 0 {
+            let frac = ((m.gun_enable_height - eye_z) + h) / (h + self.mv.hull_half_width);
+            (!(target >= frac) || !(newp >= frac)) as i32
+        } else {
+            0
+        };
         let mut changed = first;
         let mut new_type = base;
         if first && kind == 0 {
@@ -995,6 +1010,7 @@ impl Move<'_> {
     fn end_traversal(&mut self, frame: &Frame) {
         let pos = traversal_pos(self.p, frame);
         self.p.traversal_cycle = 0.0;
+        self.p.traversal_gun = 0;
         self.mv.origin = pos;
         self.p.movetype = MOVETYPE_WALK;
         self.categorize(false);
