@@ -1,0 +1,9 @@
+{
+	"required": true,
+	"package": "lurch.mc.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": ["CameraMixin", "EntityMixin", "MinecraftMixin"],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

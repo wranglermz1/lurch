@@ -1,0 +1,14 @@
+{
+	"schemaVersion": 1,
+	"id": "lurch",
+	"version": "${version}",
+	"name": "lurch",
+	"description": "Apex Legends movement from lurch-bridge, toggled with F7.",
+	"environment": "client",
+	"mixins": ["lurch.mixins.json"],
+	"depends": {
+		"fabricloader": ">=0.20.0",
+		"minecraft": "~26.3",
+		"java": ">=25"
+	}
+}
