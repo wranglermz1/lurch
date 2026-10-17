@@ -70,7 +70,20 @@ public final class Lurch {
 	/** The lightmap's inputs as Minecraft last rendered it, and the last light sent. */
 	private static float skyFactor, blockFactor, nightVision, darkness, bossDarkening, brightness;
 	private static final float[] blockTint = {1, 1, 1}, skyColor = {1, 1, 1}, ambient = new float[3], nightVisionColor = new float[3];
-	private static String lastLight = "";
+	private static String lastLight = "", lastHotbar = "";
+	/**
+	 * The box in the Apex player panel that the armour, hearts and hunger go in, as left, top, right,
+	 * bottom, and how far left the hotbar may reach, in window pixels, as lurch-mc last said; null
+	 * and NaN until it has.
+	 */
+	private static float[] panel;
+	private static float room = Float.NaN;
+	/** The hotbar's half width with the offhand slot beside it (`Hud.extractItemHotbar`), in GUI pixels. */
+	private static final int HOTBAR_HALF = 91 + 29;
+	/** The rows of icons in the player panel, ten sprite pixels apart, and the air row above it. */
+	public static final int AIR = -1, ARMOR = 0, HEARTS = 1, FOOD = 2;
+	/** Three rows of 9-pixel icons ten apart are 29 sprite pixels; the panel takes as many window pixels per sprite pixel as leave a margin. */
+	private static final int ROWS_HEIGHT = 29, PANEL_PER_PIXEL = 32;
 
 	private static MappedByteBuffer shm;
 	private static DynamicTexture overlay;
@@ -171,6 +184,11 @@ public final class Lurch {
 			} else {
 				msg.append(blocks(mc.level, p.blockPosition(), false));
 			}
+			String hotbar = hotbarLine(mc);
+			if (!hotbar.equals(lastHotbar)) {
+				msg.append(hotbar);
+				lastHotbar = hotbar;
+			}
 			String light = light(mc.level, p);
 			if (!light.equals(lastLight)) {
 				msg.append(light);
@@ -182,6 +200,10 @@ public final class Lurch {
 			out.write(msg.toString());
 			out.flush();
 			String line = in.readLine();
+			while (line != null && line.startsWith("hud ")) {
+				layout(line.split(" "));
+				line = in.readLine();
+			}
 			if (line == null) {
 				throw new IOException("lurch-mc closed the connection");
 			}
@@ -209,6 +231,65 @@ public final class Lurch {
 		} catch (IOException | RuntimeException e) {
 			stop(mc, e.toString());
 		}
+	}
+
+	private static void layout(String[] r) {
+		panel = r[1].equals("-") ? null : new float[] {Float.parseFloat(r[1]), Float.parseFloat(r[2]), Float.parseFloat(r[3]), Float.parseFloat(r[4])};
+		room = r[5].equals("-") ? Float.NaN : Float.parseFloat(r[5]);
+	}
+
+	/**
+	 * Where the hotbar goes while lurch has placed the player panel: centred, standing on the panel's
+	 * bottom, at the GUI scale or less, as many window pixels per GUI pixel as leave lurch-mc its
+	 * room. As {window pixels per GUI pixel, centre x, bottom y} in window pixels, or null.
+	 */
+	private static int[] hotbar() {
+		float[] p = panel;
+		if (!on() || p == null) {
+			return null;
+		}
+		var w = Minecraft.getInstance().getWindow();
+		int scale = w.getGuiScale(), centre = w.getWidth() / 2;
+		int k = Float.isNaN(room) ? scale : Mth.clamp((int) ((centre - room) / HOTBAR_HALF), 1, scale);
+		return new int[] {k, centre, Math.round(p[3])};
+	}
+
+	private static String hotbarLine(Minecraft mc) {
+		int[] h = hotbar();
+		return h == null ? "" : "hotbar " + (h[1] - HOTBAR_HALF * h[0]) + "\n";
+	}
+
+	/** Pushes a pose that draws the hotbar and what sits on it where `hotbar` puts them; false, with nothing pushed, when it puts them nowhere. */
+	public static boolean pushHotbar(GuiGraphicsExtractor g) {
+		int[] h = hotbar();
+		if (h == null) {
+			return false;
+		}
+		float scale = Minecraft.getInstance().getWindow().getGuiScale();
+		g.pose().pushMatrix();
+		g.pose().translate((h[1] - h[0] * (g.guiWidth() / 2)) / scale, (h[2] - h[0] * g.guiHeight()) / scale);
+		g.pose().scale(h[0] / scale);
+		return true;
+	}
+
+	/**
+	 * Pushes a pose that draws Minecraft's row of icons whose first icon is at (x, y), in GUI
+	 * pixels, as row `row` of the player panel, at a whole number of window pixels per sprite
+	 * pixel. False, with nothing pushed, while lurch is off or has not placed the panel.
+	 */
+	public static boolean pushPanelRow(GuiGraphicsExtractor g, int row, int x, int y) {
+		float[] p = panel;
+		if (!on() || p == null) {
+			return false;
+		}
+		int scale = Minecraft.getInstance().getWindow().getGuiScale();
+		int px = Math.max(1, (int) ((p[3] - p[1]) / PANEL_PER_PIXEL));
+		int top = Math.round((p[1] + p[3] - ROWS_HEIGHT * px) / 2f);
+		g.pose().pushMatrix();
+		g.pose().translate(Math.round(p[0]) / (float) scale, (top + row * 10 * px) / (float) scale);
+		g.pose().scale(px / (float) scale);
+		g.pose().translate(-x, -y);
+		return true;
 	}
 
 	public static void lightmap(LightmapRenderState s) {
@@ -384,6 +465,9 @@ public final class Lurch {
 			out = new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.US_ASCII);
 			placed = null;
 			lastLight = "";
+			panel = null;
+			room = Float.NaN;
+			lastHotbar = "";
 			shm = null;
 			capturing = false;
 			events.setLength(0);

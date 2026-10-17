@@ -411,8 +411,18 @@ centre, and the use prompt on a zipline, both as the game draws them.
 - [ ] **Tracks.** `RuiTrack*` binds an argument to a game value (`RUI_TRACK_*`); port the
   ones the HUD uses for values lurch has (health, shields, grapple power, ability charge).
 - [ ] **Compass** (`compass_flat`).
-- [ ] **Health and shields.**
-- [ ] **Abilities**: tactical (the grapple's charge), ultimate, passive.
+- [ ] **Health and shields.** The panel is `survival_player_hud_v2` (`SURVIVAL_HUD_PLAYER`,
+  `sh_consts.gnut`), set up by `SURVIVAL_PopulatePlayerInfoRui` (`cl_gamemode_survival.nut`):
+  `playerIcon` is the character's `galleryPortrait`, `shieldFrac` the armour tiers' capacities
+  over 100 with tier 3's (100) as alpha. It runs and draws with no unported step. Its draws
+  come in job order: backdrop, portrait, frame, team-colour edge, then the name's text and the
+  bars. Only the Minecraft host (`rui::HostHud`) draws it, and only up to the name. Seen in
+  `vmshot` (2026-10-17), not explained: with `useShields`, `playerShieldFrac` 0.5 to 1 and
+  `shieldFrac` set as the script does, no shield bar draws.
+- [ ] **Abilities**: tactical (the grapple's charge), ultimate, passive. The ultimate's panel is
+  `ability_hud` (`ultimate_ability_hud` only with the playlist's `hud_ultimate_ready_video`).
+  It draws at the bottom centre, and the tactical's left of it. With `InitOffhandRui`'s
+  arguments both draw with no unported step (`ultimate_ability_hud` stops on job type 3).
 - [ ] **Weapon and ammo panel** for the fists.
 - [ ] **Minimap.** The test map has no overview image; decide what it shows.
 

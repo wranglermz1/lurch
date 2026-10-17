@@ -12,11 +12,18 @@
 //! - `blocks`, lines `f X Y Z MASK` (a full block and which of its faces are open: bits west,
 //!   east, down, up, north, south) and `p X Y Z X0 Y0 Z0 X1 Y1 Z1` (a box of any other shape, in
 //!   the block's coordinates), then `end`: every block near the player.
+//! - `hotbar X`: the left edge of Minecraft's hotbar, its offhand slot included, in window
+//!   pixels. The tactical's panel moves left of it when it would reach it.
 //! - `light R G B NETHER`: the lightmap colour Minecraft's own hand would be multiplied by where
 //!   the player's eye is, gamma-encoded in 0 to 1, and 1 in the Nether's cardinal lighting.
 //! - `frame FRAMETIME W H`: one frame at Minecraft's size, answered with
 //!   `pose X Y Z EX EY EZ PITCH YAW ROLL FOV VPITCH VYAW GROUND`: the feet, the camera, its angles
-//!   and vertical FOV in degrees, and the view angles the player aims with.
+//!   and vertical FOV in degrees, and the view angles the player aims with. When the HUD's
+//!   layout changed, `hud X0 Y0 X1 Y1 ROOM` comes first: the box in the Apex player panel that
+//!   Minecraft's armour, hearts and hunger go in (where the game draws the name and the bars;
+//!   Y1 is the panel's bottom), and how far left the hotbar may reach and leave room for the
+//!   tactical's panel beside the player panel, in window pixels; `-` for each one the shell
+//!   does not draw.
 //!
 //! Positions and angles on the wire are Minecraft's (blocks, y up, its yaw). Each frame's image,
 //! premultiplied RGBA rows `STRIDE` bytes apart, goes to `/dev/shm/lurch-mc` after a 20-byte
@@ -26,6 +33,10 @@
 //! A spawn where the hull would start inside a block moves to the nearest clear place, up to
 //! half a block away. `LURCH_MC_TRACE=1` prints every spawn and every frame's answer, with the
 //! pilot's state, to stderr.
+//!
+//! The shell draws the player panel's frame and portrait where the game puts them, the
+//! ultimate's panel at the right edge as their mirror, and the tactical's panel where the game
+//! puts it or left of the hotbar (`rui::HostHud`).
 //!
 //! Not modelled: sounds, the shell's menus, the test map's respawn binds (dropped here).
 
@@ -60,7 +71,7 @@ use lurch_game::cmd::{clamp_frametime, CmdBuilder, ScriptFrametime};
 use lurch_game::convar::{self, ConVars};
 use lurch_game::convert::vfov;
 use lurch_game::data::{self, Data};
-use lurch_game::rui::Preloaded;
+use lurch_game::rui::{HostBar, HostHud, Preloaded};
 use lurch_game::sim::{CollisionWorld, Map, Pose, Sim, DIST_EPSILON};
 use lurch_game::view::{Target, ViewImage};
 use lurch_game::viewmodel::HostLight;
@@ -277,12 +288,20 @@ fn pose(world: &World, base: Base) -> String {
     format!("pose {x} {y} {z} {ex} {ey} {ez} {} {} {} {fov} {} {} {ground}", a[0], flip_yaw(a[1]), a[2], v[0], flip_yaw(v[1]))
 }
 
+/// The `hud` line for a layout.
+fn hud(h: &HostHud) -> String {
+    let num = |v: Option<f32>| v.map_or("-".to_string(), |v| v.to_string());
+    let panel = h.panel.map_or_else(|| ["-"; 4].join(" "), |p| p.map(|v| v.to_string()).join(" "));
+    format!("hud {panel} {}", num(h.room))
+}
+
 /// Runs one connection's frames until the mod hangs up.
 fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
     let mut out = stream;
     let mut lines = BufReader::new(stream).lines();
     let mut base = Base::default();
     let mut blocks = Vec::new();
+    let mut sent_hud = None;
     let trace = std::env::var_os("LURCH_MC_TRACE").is_some();
     let bound = { let binds = app.world().resource::<Config>().binds.clone(); move |i| binds.get(i) };
     app.world_mut().resource_mut::<CmdBuilder>().release_all();
@@ -307,6 +326,10 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
             Some("w") => drop(world.write_message(MouseWheel { unit: MouseScrollUnit::Line, x: 0.0, y: arg(&mut w)?, window: Entity::PLACEHOLDER, phase: TouchPhase::Moved })),
             Some("l") => drop(world.write_message(MouseMotion { delta: Vec2::new(arg(&mut w)?, arg(&mut w)?) })),
             Some("r") => world.resource_mut::<CmdBuilder>().release_all(),
+            Some("hotbar") => {
+                let left = arg(&mut w)?;
+                world.insert_resource(HostBar(left));
+            }
             Some("light") => {
                 let color = Vec3::new(arg(&mut w)?, arg(&mut w)?, arg(&mut w)?);
                 let nether: u8 = arg(&mut w)?;
@@ -347,6 +370,11 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
                     world.resource_mut::<Overlay>().size = (width, height);
                 }
                 app.update();
+                let layout = *app.world().resource::<HostHud>();
+                if sent_hud != Some(layout) {
+                    writeln!(out, "{}", hud(&layout))?;
+                    sent_hud = Some(layout);
+                }
                 let answer = pose(app.world(), base);
                 if trace {
                     let sim = app.world().resource::<Sim>();
@@ -380,7 +408,7 @@ fn main() -> io::Result<()> {
     let ui = cfg.r5r.as_deref().and_then(|i| lurch::rui::Ui::open(i).map_err(|e| eprintln!("lurch-mc: no UI: {e}")).ok());
     let (w, h) = (854, 480);
     let mut app = App::new();
-    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui))).insert_resource(HostLight { color: Vec3::ONE, dirs: entity_light(false) });
+    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui))).insert_resource(HostLight { color: Vec3::ONE, dirs: entity_light(false) }).init_resource::<HostHud>();
     if let Some(d) = data {
         app.insert_resource(Data(Arc::new(d)));
     }

@@ -29,7 +29,22 @@ shell runs next to it as a second process.
     colours, with the arms' normal maps and no specular. Day and night, caves, torches, the
     Nether, night vision and the darkness effect all reach the arms, and the grapple's rope
     and hook too. All of them take the light at the eye, not where the rope or hook is.
-  - It draws the overlay in place of Minecraft's hand, crosshair and hotbar.
+  - It draws the overlay in place of Minecraft's hand and crosshair, under Minecraft's own HUD.
+    The two HUDs share one bottom row, laid out to be roughly symmetrical (`rui::HostHud`):
+    - Left: the Apex player panel (legend portrait and frame) where the game puts it. Its
+      name and bars are left out. In their place Minecraft draws its armour, hearts and hunger
+      as three rows of its own sprites, at a whole number of window pixels per sprite pixel (as
+      many as fit three rows in the panel's height: 1 below about 1000 pixels high, 2 at
+      1080p, 3 at 1440p). Air bubbles go above the panel.
+    - Middle: Minecraft's hotbar, with the experience bar, the selected item's name and a
+      mount's hearts, centred and standing on the Apex panels' bottom edge. It is drawn at
+      Minecraft's GUI scale or smaller: the largest whole scale that leaves room for the
+      tactical's panel between the hotbar's offhand slot and the player panel (1 at 480p, 3 at
+      1080p, 4 at 1440p with the GUI scale on auto).
+    - The tactical's panel stays where the game puts it unless it would reach the hotbar; then
+      it moves left of the offhand slot.
+    - Right: the ultimate's panel (`ability_hud`, Pathfinder's zipline) at the right edge, as
+      far in as the player panel is on the left. It never charges: no ultimate is modelled.
   - In singleplayer, the integrated server accepts lurch's moves as they are. Apex's mantles
     pass through the corner of a ledge, and the server's movement checks would pull the player
     back. The checks it skips are "moved too quickly", "moved wrongly" and colliding with a new
@@ -69,7 +84,7 @@ shell's kill height out of reach above Minecraft's void.
   - F7 connects.
   - The overlay draws the shell's HUD and the tactical panel. The grapple's cooldown counted
     down after a grapple.
-  - Minecraft's hand and hotbar are gone.
+  - Minecraft's hand is gone.
   - Minecraft held about 70 fps with a shell frame time of about 14 ms.
   - The user played it and confirmed it works.
   - The arms' lighting at noon and at midnight; the user confirmed it matches the world.
@@ -79,6 +94,12 @@ shell's kill height out of reach above Minecraft's void.
     player back mid-mantle, lurch restarted inside the block, and the camera flew in from the
     cut-short mantle. After it, a trace (`LURCH_MC_TRACE`) of four mantles showed one spawn,
     and the player moved after each. The user confirmed it, superglides included.
+- The shared HUD in the same client, by eye, without a test (2026-10-17): at 854x480 and at
+  2560x1440 fullscreen, with damage, a diamond helmet and iron chestplate and a shield in the
+  offhand, the panel showed three rows at 1 and 3 window pixels per sprite pixel. The hotbar
+  was centred at scale 1 and 4, its bottom level with the panels'. The tactical's panel kept
+  its place at 854x480 and moved left of the offhand slot at 2560x1440. The ultimate's panel
+  sat at the right edge.
 - The earlier flat-floor bridge (see git history) checked walking, sprinting, jumping, sliding
   and `/tp` against lurch's own numbers. The host runs the same simulation.
 
@@ -94,6 +115,7 @@ world, and block collision edge cases such as seams and partial blocks.
 - Timing: the overlay is one readback behind the camera.
 - The shell's dev text in the top-left corner, which overlaps Minecraft's F3 screen.
 - Minecraft's items, block breaking and placing while lurch is on. Turn lurch off for them.
+- Absorption and extra health: more than one row of hearts grows upward over the armour row.
 - Water, ladders, ice, soul sand and other Minecraft-only surfaces. Every collision box is
   solid ground.
 - Fall damage: the server still counts falls, so use Creative.
