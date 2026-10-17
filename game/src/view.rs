@@ -16,7 +16,7 @@ use lurch::world::Tri;
 use crate::convert::{dir, pos, rot, vfov, INCH};
 use crate::data::Props;
 use crate::sim::{Pose, Sim};
-use crate::viewmodel::gpu_image;
+use crate::viewmodel::{gpu_image, host_lit, HostLight, ViewmodelMaterial};
 use crate::{advance_frame, common, Config, Frame, FrameIndex, Paused, PendingShots};
 
 pub const SKY: Color = Color::srgb(0.55, 0.70, 0.85);
@@ -254,14 +254,27 @@ fn sync_body(sim: Res<Sim>, mut bodies: Query<&mut Transform, With<Body>>) {
 /// The rope from the hand through its bends to the hook, while the hook is out.
 /// The rope drawn with the game's `cable/grapple` textures and the hook with its own model,
 /// once the install's files are read.
-fn grapple_look(mut commands: Commands, data: Res<crate::data::Data>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>, ropes: Query<&MeshMaterial3d<StandardMaterial>, With<GrappleRope>>) {
+/// Over another game's world (`HostLight`), both take that game's light, as the arms do.
+#[allow(clippy::too_many_arguments)] // Bevy's system parameters
+fn grapple_look(
+    mut commands: Commands,
+    data: Res<crate::data::Data>,
+    host: Option<Res<HostLight>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut host_materials: ResMut<Assets<ViewmodelMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    ropes: Query<Entity, With<GrappleRope>>,
+) {
     let Some(g) = &data.0.grapple else { return };
+    let mut material = |e: &mut EntityCommands, m: StandardMaterial| match host {
+        Some(_) => drop(e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(host_materials.add(host_lit(m))))),
+        None => drop(e.insert(MeshMaterial3d(materials.add(m)))),
+    };
     let albedo = g.rope.first().and_then(|t| t.as_ref()).and_then(gpu_image).map(|i| images.add(i));
     let normal = g.rope.get(1).and_then(|t| t.as_ref()).and_then(gpu_image).map(|i| images.add(i));
-    for m in &ropes {
-        if let Some(mut mat) = materials.get_mut(&m.0) {
-            *mat = StandardMaterial { base_color_texture: albedo.clone(), normal_map_texture: normal.clone(), flip_normal_map_y: true, perceptual_roughness: 0.6, ..default() };
-        }
+    for e in &ropes {
+        material(&mut commands.entity(e), StandardMaterial { base_color_texture: albedo.clone(), normal_map_texture: normal.clone(), flip_normal_map_y: true, perceptual_roughness: 0.6, ..default() });
     }
     for (m, textures) in g.hook.meshes.iter().zip(&g.hook_textures) {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
@@ -271,8 +284,8 @@ fn grapple_look(mut commands: Commands, data: Res<crate::data::Data>, mut meshes
             .with_inserted_indices(Indices::U16(m.indices.chunks(3).flat_map(|t| [t[0], t[2], t[1]]).collect()));
         let _ = mesh.generate_tangents();
         let base_color_texture = textures.first().and_then(|t| t.as_ref()).and_then(gpu_image).map(|i| images.add(i));
-        let material = materials.add(StandardMaterial { base_color_texture, perceptual_roughness: 0.5, ..default() });
-        commands.spawn((GrappleHook, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material), NotShadowCaster, Visibility::Hidden, Transform::default()));
+        let mut hook = commands.spawn((GrappleHook, Mesh3d(meshes.add(mesh)), NotShadowCaster, Visibility::Hidden, Transform::default()));
+        material(&mut hook, StandardMaterial { base_color_texture, perceptual_roughness: 0.5, ..default() });
     }
 }
 

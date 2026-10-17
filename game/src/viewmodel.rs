@@ -623,6 +623,12 @@ fn joint(m: &Mat) -> Affine3A {
 }
 
 /// `c_gameTime` for the emissive's scroll: the view's clock.
+/// A plain material that the host's light shades like the arms when there is a `HostLight`;
+/// with none it is lit as the arms are in the shell.
+pub fn host_lit(base: StandardMaterial) -> ViewmodelMaterial {
+    ExtendedMaterial { base, extension: GameShading::default() }
+}
+
 fn host_light(light: Res<HostLight>, mut materials: ResMut<Assets<ViewmodelMaterial>>) {
     for (_, m) in materials.iter_mut() {
         let c = &mut m.extension.constants;

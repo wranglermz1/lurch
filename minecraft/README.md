@@ -27,7 +27,8 @@ shell runs next to it as a second process.
     then shades the arms as Minecraft shades its hand, in place of the shell's sun and sky:
     two fixed diffuse lights at 0.6 plus 0.4 ambient, times that colour, on gamma-encoded
     colours, with the arms' normal maps and no specular. Day and night, caves, torches, the
-    Nether, night vision and the darkness effect all reach the arms.
+    Nether, night vision and the darkness effect all reach the arms, and the grapple's rope
+    and hook too. All of them take the light at the eye, not where the rope or hook is.
   - It draws the overlay in place of Minecraft's hand, crosshair and hotbar.
   - In singleplayer, the integrated server accepts lurch's moves as they are. Apex's mantles
     pass through the corner of a ledge, and the server's movement checks would pull the player
@@ -72,6 +73,8 @@ shell's kill height out of reach above Minecraft's void.
   - Minecraft held about 70 fps with a shell frame time of about 14 ms.
   - The user played it and confirmed it works.
   - The arms' lighting at noon and at midnight; the user confirmed it matches the world.
+  - A grapple through the host under full and under dim night light: the rope and hook darken
+    with the arms.
   - A mantle onto a block beside a 2-block wall: before the server fix, the server pulled the
     player back mid-mantle, lurch restarted inside the block, and the camera flew in from the
     cut-short mantle. After it, a trace (`LURCH_MC_TRACE`) of four mantles showed one spawn,
@@ -86,7 +89,6 @@ world, and block collision edge cases such as seams and partial blocks.
 
 - Sounds. The shell plays them through the game's Miles, which exists only for Windows, and
   this dev client has no audio device.
-- The grapple's rope and hook keep the shell's own lighting; only the arms take Minecraft's.
 - Depth between the overlay and Minecraft's world. The grapple rope draws over blocks in front
   of it.
 - Timing: the overlay is one readback behind the camera.

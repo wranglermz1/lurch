@@ -380,7 +380,7 @@ fn main() -> io::Result<()> {
     let ui = cfg.r5r.as_deref().and_then(|i| lurch::rui::Ui::open(i).map_err(|e| eprintln!("lurch-mc: no UI: {e}")).ok());
     let (w, h) = (854, 480);
     let mut app = App::new();
-    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui)));
+    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui))).insert_resource(HostLight { color: Vec3::ONE, dirs: entity_light(false) });
     if let Some(d) = data {
         app.insert_resource(Data(Arc::new(d)));
     }
