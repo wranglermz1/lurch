@@ -805,9 +805,9 @@ impl Move<'_> {
         }
     }
 
-    /// The use target, when it is a zipline: the search's pick, if its point lies anywhere but
-    /// straight behind the view.
-    fn use_target(&mut self) -> Option<Zipline> {
+    /// The use target, when it is a zipline, and the point on it the search found: the
+    /// search's pick, if its point lies anywhere but straight behind the view.
+    pub(crate) fn use_target(&mut self) -> Option<(Zipline, V3)> {
         if (self.p.context_action != 0 && !self.on_vine()) || self.p.grappling {
             return None;
         }
@@ -818,7 +818,7 @@ impl Move<'_> {
         let d = sub(point, eye);
         let l = ((d[1] * d[1] + d[0] * d[0]) + d[2] * d[2]).sqrt();
         let inv = 1.0 / if l > TINY { l } else { TINY };
-        (-1.0 < (d[1] * inv * fwd[1] + d[0] * inv * fwd[0]) + d[2] * inv * fwd[2]).then_some(z)
+        (-1.0 < (d[1] * inv * fwd[1] + d[0] * inv * fwd[0]) + d[2] * inv * fwd[2]).then_some((z, point))
     }
 
     /// Grabs the zipline the search finds: the mount starts next movement call.

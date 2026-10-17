@@ -1,5 +1,5 @@
 //! Renders a script's frames offscreen with the viewmodel and saves some as PNG:
-//! `vmshot INSTALL SCRIPT OUTDIR FRAME[,FRAME...] [LEGEND]`.
+//! `vmshot INSTALL SCRIPT OUTDIR FRAME[,FRAME...] [LEGEND [HEIRLOOM]]`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +14,9 @@ use bevy::winit::WinitPlugin;
 use lurch_game::data::{self, Data};
 use lurch_game::script::{self, ScriptPlugin};
 use lurch_game::view::{Target, ViewImage};
-use lurch_game::{CmdPlugin, Config, HudPlugin, SimPlugin, ViewPlugin, ViewmodelPlugin};
+use lurch_game::convar::ConVars;
+use lurch_game::rui::Preloaded;
+use lurch_game::{CmdPlugin, Config, HudPlugin, RuiPlugin, SimPlugin, ViewPlugin, ViewmodelPlugin};
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
@@ -24,12 +26,14 @@ fn main() {
     let frames: Vec<u64> = a[4].split(',').map(|f| f.parse().unwrap()).collect();
     let legend = a.get(5).cloned().unwrap_or_else(|| "wraith".into());
     let t = std::time::Instant::now();
-    let d = data::load(&install, &legend).unwrap();
+    let heirloom = a.get(6).and_then(|h| lurch::assets::HEIRLOOMS.iter().find(|x| x.name == h));
+    let d = data::load(&install, &legend, heirloom).unwrap();
     eprintln!("data in {:?}", t.elapsed());
+    let ui = lurch::rui::Ui::open(&install).map_err(|e| eprintln!("no UI: {e}")).ok();
     let last = *frames.iter().max().unwrap();
     let mut app = App::new();
-    let cfg = Config { scripted: true, script: Some(script.clone()), r5r: Some(install), legend, ..Default::default() };
-    app.insert_resource(cfg).insert_resource(Data(Arc::new(d))).add_plugins((
+    let cfg = Config { scripted: true, script: Some(script.clone()), r5r: Some(install), legend, heirloom, ..Default::default() };
+    app.insert_resource(cfg).insert_resource(Data(Arc::new(d))).insert_resource(Preloaded(std::sync::Mutex::new(ui))).add_plugins((
         DefaultPlugins
             .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
@@ -39,8 +43,11 @@ fn main() {
         ViewPlugin { target: Target::Image { w: 960, h: 540 } },
         ViewmodelPlugin,
         HudPlugin,
+        RuiPlugin,
         ScriptPlugin(script),
     ));
+    // The image's defaults, for the settings menu to show; nothing acts on them here.
+    app.init_resource::<ConVars>();
     while app.plugins_state() == PluginsState::Adding {
         tick_global_task_pools_on_main_thread();
     }

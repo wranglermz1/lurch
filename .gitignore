@@ -5,3 +5,4 @@ maps/
 dumps/current.bin
 __pycache__/
 /game/target
+/game/target-st

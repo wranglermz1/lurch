@@ -202,8 +202,9 @@ The player's animation state, updated per client frame (`0x920940`):
 
 ## Viewmodel
 
-The fists (`mp_weapon_melee_survival`, model `ptpov_emptyhand`) are the weapon the viewmodel
-plays; `src/anim/viewmodel.rs`. Weapon code runs per command, in movement's order:
+The fists (`mp_weapon_melee_survival`, model `ptpov_emptyhand`), or an heirloom in their place
+(`docs/assets.md`), are the weapon the viewmodel plays; `src/anim/viewmodel.rs`. Weapon code
+runs per command, in movement's order:
 
 - Deploy (`0xa43b60`), when the weapon is drawn: nothing if already deploying (state 1).
   Otherwise WeaponIdle first, then `ACT_VM_DRAW_TO_SPRINT` if the owner sprints (none:
@@ -212,17 +213,41 @@ plays; `src/anim/viewmodel.rs`. Weapon code runs per command, in movement's orde
   `ACT_VM_SPRINT` sequence (`0x5fa240`, no modifiers), state 8, and unless sprint is
   already the activity, send `ACT_VM_SPRINT` and set the next idle to now. Otherwise once
   the next idle time has come: state 0, and if the weapon idles or is inspecting, send
-  `ACT_VM_IDLE` (or an alternate). The fists never idle: they hold the end of what they
-  last played.
+  `ACT_VM_IDLE` (or an alternate). A weapon idles (`+0x16ac`, set at `0xa3c702`) when ConVar
+  `weapon_doIdleForSurvivalMelee` (image value 0) is set or its class is not
+  `mp_weapon_melee_survival` (the string at `0x14b9a08`): the fists never idle, they hold the
+  end of what they last played; the kunai idles.
 - StopSprint (`0x8653c0`) raises (`0xa44520`, from sprint) every weapon in state 8: state 3,
   then with `weapon_sprint_raise_delay` `ACT_VM_RAISE_FROM_SPRINT`, else `ACT_VM_RAISE`,
   else `ACT_VM_IDLE`; next idle after the sequence's length.
-- SendWeaponAnim (`0xa58440`, `0xa35d40`): picks the sequence (below); the same idle
-  sequence again is left playing. The weapon's length for it (`0xa4c820`) is the script's
-  time for its activity (`deploy_time` for draw, `deployfirst_time`, `raise_time`,
+- SendWeaponAnim (`0xa58440`, `0xa35d40`): picks the sequence (below), or returns false
+  when there is none. The weapon keeps the activity playing (`+0x132c`) and the ideal
+  activity and sequence (`+0x1328`, `+0x1324`). The ideal sequence again, when the ideal
+  activity is an idle (`ACT_VM_IDLE` to `_ALT3`) and no transition plays, is left playing.
+  While a transition plays (activity `ACT_TRANSITION`, 6) and has not finished (`0xa393d0`:
+  the viewmodel's `m_bSequenceFinished`; true when the activity is 0 or −1), the ideal
+  sequence again is left alone, and a sequence the transition's exit node enters at
+  (`0x33dee0` against `0x33de70`) only becomes the ideal. Otherwise the new sequence becomes
+  the ideal, and FindTransitionSequence (`0x5f9d40` → `0xb41910`, forward only) gives what
+  plays from the sequence playing. A transition plays as `ACT_TRANSITION` unless the
+  activity is a draw (`ACT_VM_DRAW` to `_DRAWCATCH`, `ACT_VM_ONEHANDED_DRAW`,
+  `_DRAWFIRST`) or the viewmodel is not drawn (`0xa50fe0`: its `EF_NODRAW`); else the ideal
+  plays under its own activity. The weapon's length for what plays (`0xa4c820`) is the
+  script's time for its activity (`deploy_time` for draw, `deployfirst_time`, `raise_time`,
   `raise_from_sprint_time`, `sprintcycle_time` for either sprint) when above 0, else the
   sequence's own (Studio_Duration `0x1d6100`, 1 / cycles per second). The playback rate is
-  own length / weapon length, at most 12. Next idle = now + weapon length.
+  own length / weapon length, at most 12 (a weapon setting at `+0x260` for the attack
+  activities 484 to 491 and 593 to 600). Next idle = now + weapon length, + 0 for
+  `ACT_VM_CHARGE` to `_VER4`.
+- FindTransitionSequence (`0xb41910`): from the playing sequence's exit node to the new one's
+  entry node (each through the rig's node remap, +1; a 0 node is replaced by studio `+0x108`,
+  0 in the rigs read). Equal nodes, or either 0, give the new sequence. Otherwise, both nodes
+  in the same rig, the rig's node table (studio `+0x10c`: per node an offset from the header
+  to a count and that many `short` pairs, target node and rig sequence) gives the transition
+  to the target, else the new sequence. The kunai's table: 1→2 `regrip_to_crouch`, 1→3
+  `idle_to_sprint`, 2→1 `regrip_to_idle`, 2→3 `crouch_to_sprint`, 3→1 `sprint_to_idle`,
+  3→2 `sprint_to_crouch`, 4→3 `draw_to_sprint`, 5→1, 5→2, 5→3 and 6→3 the one-handed ones;
+  the fists' sequences have no nodes.
 - On the viewmodel (`0x7e3530`): a delta sequence (`STUDIO_DELTA`) plays on overlay layer 0
   at weight 1 from cycle 0; any other becomes the main sequence from cycle 0, and layer 0's
   weight goes to 0.
@@ -237,10 +262,31 @@ current sequence stays if it has the activity and a negative weight. Otherwise e
 of the activity scores (`0xb40550`) one point per modifier it lists, less 1001 for each it
 wants that the weapon lacks and each it rules out that the weapon has; the best wins, ties
 drawn by weight from the entity's random stream. With no modifiers all are drawn by weight.
-The fists' modifiers are the legend's `classActivityModifier` and the player's flags
-(`0x854bc0`: crouch, sprinting, air, airsprint, sliding), which no movement sequence of the
-fists names. A change of those flags sends idle again (state 0), or activity `0x222` (state
-17) or `0x1d8` (state 5).
+
+A weapon's modifiers (`0xa396c0`) are the player's flags, one byte per modifier number from
+`+0x32b0` (35, numbered by the name table at `0x131ae50`, ids at `0x2371a50`), then `althand`
+when the weapon's `+0x29c0` is 1, then the class modifier (`+0x3ebc` when `+0x3ebe`, the
+legend's `classActivityModifier`). `0x854bc0` sets the flags each command, after movement:
+
+| Byte | Modifier | Set from |
+|---|---|---|
+| `+0x32b0` | `ads` | `+0x1881` (zoomed) |
+| `+0x32b1` | `crouch` | duck state `+0x262c` is 1 or 2 (going down, down) |
+| `+0x32c4` | `wallrun` | `+0x2680` (z of the up vector at `+0x2678`) below 1 |
+| `+0x32c5` | `wallhang` | `+0x276d` |
+| `+0x32c6` | `sprinting` | `+0x2604` |
+| `+0x32c8` | `air` | no ground entity (`+0x3dc`) |
+| `+0x32c9` | `airfast` | no ground entity and `+0x2a48` (not identified) |
+| `+0x32ca` | `sliding` | `+0x2815` |
+| `+0x32ce` | `grapple` | `+0x2800` |
+| `+0x32d0` | `airsprint` | no ground entity and \|`m_sprintEndedTime` − left-ground time (`+0x30bc`)\| ≤ 0.05 |
+
+When any of them changes (or the one-handed state `+0x1bf1`, from `0x86b040`), each weapon
+in state 0 gets next idle 0, so WeaponIdle sends idle again with the new modifiers, one in
+state 17 sends activity `0x222`, one in state 5 `0x1d8`. The fists' movement sequences name
+none of these modifiers; the kunai's name `crouch` (crouched idle), `airsprint` (draw, idle,
+land, raise in the air after a sprint), `sprinting`, `air` and `sliding` (the raise into a
+slide).
 
 Client, per frame:
 
@@ -253,11 +299,20 @@ Client, per frame:
   has passed, with every one older. Weights (`0x899600`), newest first: `s = 1 − (now −
   time) / fade`, clamped to [0, 1] in double, then `(3 − 2s) s²`; each weight is the product
   of its own and every newer one's.
+  On the viewmodel (whose class answers true at vtable `+0x140`; the first-person proxy's
+  answers false) overlay layers 0 and 1 keep transitions of their own too (`+0x16e0`, `0x1b8`
+  apart), from the layer's sequence (`+0x14c0`) and parity (`+0x1a50`, which a player event
+  steps, so the same sequence sent again also counts as a change). UpdateCurrent records the
+  layer's cycle (`+0x1598`), rate and weight; a layer not active (`+0x1424`) records nothing.
+  So a landing cut into a jump fades the jump out over the landing's fade-in (0.05 s on the
+  kunai) instead of dropping it.
 - StandardBlendingRules (`0x5edc60`): the main sequence; then the kept ones newest first
   (MaintainSequenceTransitions `0x899720`, ConVar `anim_transitionsequences`), each at
   `ClampCycle((now − time) × cycles per second × rate + cycle)`, skipped when the one older
   than it is at full weight or its own weight is 0; then the overlay layers in order
-  (AccumulateLayers `0x7bfe80`).
+  (AccumulateLayers `0x7bfe80`), on the viewmodel each of layers 0 and 1 followed by its own
+  kept ones (`0x7c0744`) while the layer's weight is above 0. A kept layer sequence blends at
+  its transition weight alone, not times the layer's fades.
 - A viewmodel layer's weight (`0x7bfe80`): its weight capped at 1; a non-looping layer with
   fades is ramped linearly in over the first `fade_in / length` of its cycle and out over the
   last `fade_out / length`, its cycle held in [0, 0.999].
@@ -274,10 +329,15 @@ Client, per frame:
 
 Not ported: firing, reloading, switching, holstering, melee, inspecting, one-handed and
 alternate activities (`0xa582a0`); the random draw among ties (the first is taken); the
-player's flag modifiers; the client's own frame advance (cycles run from the time a sequence
-was sent, as the transitions' do); sway, bob and the camera bone (`0x62a940`, `0x626110`,
-`0x62a100`); the oracle's bone concatenation. Nothing records the viewmodel, so none of this
-is gated.
+modifiers `airfast`, `althand` and `onehand_was_sprinting`; the client's own frame advance
+(cycles run from the time a sequence was sent, as the transitions' do, and a transition
+counts as finished when its cycle reaches 1 at a command); the node table itself (ours finds
+a transition among the sequences without an activity by their nodes, which gives the
+kunai's table above); the viewmodel's place and its sway and bob (CalcViewModelView
+`0x62a940`, which sets the viewmodel's pose parameters through `0x628f20` and calls the
+client mode's `+0x40` on `0x22e3280`, not followed yet), the sprint shake (`0x626110`) and
+the camera bone (`0x62a100`); the oracle's bone concatenation. Nothing records the
+viewmodel, so none of this is gated.
 
 ## First-person proxy
 

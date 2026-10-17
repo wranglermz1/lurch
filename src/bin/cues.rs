@@ -64,7 +64,7 @@ fn main() {
     };
     let mut fists = None;
     if let Some(dir) = install {
-        let l = lurch::assets::loadout(std::path::Path::new(&dir), &legend).unwrap();
+        let l = lurch::assets::loadout(std::path::Path::new(&dir), &legend, None).unwrap();
         sounds = PlayerSounds::from_settings(&l.legend);
         let class = l.legend.str("classActivityModifier").filter(|m| !m.is_empty()).map(str::to_string);
         let vm = Viewmodel::new(class.into_iter().collect(), WeaponTimes::from_script(|k| l.weapon_script.get(k)?.parse().ok()));
@@ -120,7 +120,7 @@ fn main() {
                 if (traversing || p.climb_arms) && !was {
                     vm.holster(set, g.curtime);
                 }
-                vm.command(set, &step.cues, p.sprinting, g.curtime);
+                vm.command(set, &step.cues, p.sprinting, lurch::anim::viewmodel::player_modifiers(&p), g.curtime);
                 for (ev, options) in vm.frame(set, g.curtime + g.frametime).1 {
                     sfx.anim_event(ev, &options, mv.origin, &mut Print(&mut out));
                 }

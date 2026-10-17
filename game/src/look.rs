@@ -10,17 +10,20 @@ pub struct Look {
     pub yaw: f32,
     pub pitch: f32,
     pub sens: f32,
+    /// `m_invert_pitch`.
+    pub invert: bool,
 }
 
 impl Look {
     pub fn new(sens: f32) -> Self {
-        Look { yaw: 0.0, pitch: 0.0, sens }
+        Look { yaw: 0.0, pitch: 0.0, sens, invert: false }
     }
 
     /// `dx`, `dy` are raw counts: right and down are positive.
     pub fn apply(&mut self, dx: f32, dy: f32) {
         self.yaw = wrap(self.yaw - dx * self.sens * DEG_PER_COUNT);
-        self.pitch = (self.pitch + dy * self.sens * DEG_PER_COUNT).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        let k = if self.invert { -DEG_PER_COUNT } else { DEG_PER_COUNT };
+        self.pitch = (self.pitch + dy * self.sens * k).clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
 
     pub fn angles(&self) -> V3 {

@@ -4,6 +4,12 @@ The goal: an offline game for practising Apex movement, where movement and camer
 as the game's do, proven by replaying recordings from the real engine. Pick work from the
 top. Each item names how it is checked.
 
+## UI
+
+The game's own HUD, crosshairs and settings menu, run from the install's RUI assets and
+`ui.dll`. Its task list, progress notes and recovered formats are in `docs/ui.md`; a session
+asked to work on the UI takes the first unticked task there.
+
 ## 1. Movement still to port
 
 - **Mantle animation types.** The mantle is ported and exact on its recordings

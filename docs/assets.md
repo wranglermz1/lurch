@@ -20,11 +20,25 @@ build loads with a warning, and its RTech paks do not load (below).
 | The legend's player settings | `settings/player/mp/pilot_survival_*` whose `footstep_type` is the legend's name, in `common.rpak`, else `common_sdk.rpak` | sound names, `armsModel`, `viewmodelfov`, `classActivityModifier` |
 | The fists' script | `platform/scripts/weapons/mp_weapon_melee_survival.txt` and its `#base` | `viewmodel`, the `*_time` keys |
 | The fists' viewmodel | the script's `viewmodel` (`ptpov_emptyhand.rmdl`), its rigs and sequences, from `common.rpak` | viewmodel animation |
+| An heirloom, with `--heirloom` or the dev menu (F2) | `lurch::assets::HEIRLOOMS`: each one's weapon script (`#base` the fists'), its first-person model and rig and its material's textures, from the pak it names. `common.rpak`: `wraith_kunai` (`mp_weapon_wraith_kunai_primary`, `kunai/ptpov_kunai_wraith`), `bloodhound_axe` (`mp_weapon_bloodhound_axe_primary`, model `bloodhound_axe/ptpov_bloodhound_axe`, rig `ptpov_axe_bloodhound`), `lifeline_baton` (`mp_weapon_lifeline_baton_primary`, `drumstick/ptpov_baton_lifeline`). `common_sdk.rpak`: `octane_knife` (`mp_weapon_macks_knife_primary`, model `octane_knife/ptpov_macks_knife`, rig `ptpov_knife_octane`), whose materials use `common.rpak`'s shader sets and some of its textures | the viewmodel in the fists' place, its own mesh drawn on its bones |
 | The legend's arms | `armsModel`, from `common.rpak`, vertex data from its starpak | the drawn arms |
-| The arms' materials | each mesh's material through skin family 0, its textures from `common.rpak` and `pc_all.starpak` | albedo, normal map, ambient occlusion |
+| The arms' and the heirloom's materials | each mesh's material through skin family 0, its textures from `common.rpak` and `pc_all.starpak`, its shader constants | the shading below |
 | The grapple's look | `lurch::assets::GRAPPLE_HOOK` (`projectile_grapple_hook_anchor_bolt`) from `common.rpak`, its material (`grapple_gun`) there too; the rope's material `cable/grapple` from `common_early.rpak` | the hook entity and the rope (`docs/feedback.md`, Grapple) |
 | The test map's props | `testmap::PROP_PAK` (the Firing Range's `mp_rr_canyonlands_staging.rpak`), the models `testmap::build` places, their albedo and vertex colours | the props lane, drawn and colliding |
 | Sound | `mileswin64.dll`, `binkawin64.dll`, `audio/ship/audio.mprj`, bank `general`, language `english` | every sound |
+
+R5Reloaded's kunai, axe and baton scripts name the fists' viewmodel, and those models list no
+rig, so lurch names both itself: the pak's only first-person model of each and the rig beside
+it. The kunai's holds 77 sequences (draw, idle, sprint, land, melee, the regrips between them
+and others) and their node table (`docs/feedback.md`, Viewmodel); the axe's 79, the baton's
+83. Octane's knife model lists its own rig (69 sequences, no `ACT_VM_DRAWFIRST`, so Deploy
+draws with `ACT_VM_DRAW`). That the game pairs them is unverified. The fists' own meshes (the
+data knife) are not drawn.
+
+Not offered: Pathfinder's gloves (`common_sdk.rpak` has the model and its rig, but the rig
+lists no sequences) and Mirage's statue (its rig and sequences are in `common_sdk.rpak`, no
+first-person model). The patch paks (`common(01).rpak`, `common(02).rpak`) may hold more;
+lurch does not read patch paks.
 
 ## Paks
 
@@ -67,7 +81,30 @@ names a `matl`. A material (version 15, header `0x100`) holds its texture GUIDs 
 how many is its shader set's (`shds`, GUID at `+0x58`) count at `+0x18`. Their meaning is the
 pixel shader's resource order; for the arms' skinned shader (`_sknp`) it is
 `albedoTexture`, `normalTexture`, `glossTexture`, `specTexture`, `emissiveTexture`,
-`aoTexture`, `cavityTexture`, read from the shader's own resource names.
+`aoTexture`, `cavityTexture`, read from the shader's own resource names (the DXBC `RDEF` of
+the shader set's pixel shader, `shds` `+0x38`). The kunai's skinned shader has twelve slots:
+those seven, then `emissiveMultiplyTexture` at 10 and `uvDistortionTexture` at 11.
+
+A material's CPU data holds a pointer to its pixel shader's constants (`CBufUberStatic`), their
+size (0x220) and a version (3); the constants follow the header in the materials read. Their
+layout is the shader's reflection data; those the shell uses: `c_uv1RotScaleX` `0x00`,
+`c_uv1RotScaleY` `0x08`, `c_uv1Translate` `0x10`, `c_uv2RotScaleX` `0x18`, `c_uv2RotScaleY`
+`0x20`, `c_uv2Translate` `0x28`, `c_uvDistortionIntensity` `0x78`, `c_L0_albedoTint` `0x164`,
+`c_L0_emissiveTint` `0x174`. The kunai's: uv1 translate (0.05, 0), uv2 translate (−0.025, 0),
+distortion intensity (0.1, 0.1), albedo tint 1, emissive tint (12.75, 17.06, 50). Wraith's
+arms have emissive tint 1, Pathfinder's 0.
+
+How the kunai's pixel shader (`0xc7def6275a775b00`, disassembled with `D3DDisassemble`) uses
+them, before its own lighting: albedo × `c_L0_albedoTint`; the normal from the BC5's two
+channels as `x × 2.867661 − 1.439453` along the tangent and bitangent plus the vertex normal,
+normalized; roughness `max(1 − gloss, 0.04)`, squared for GGX; the specular texture as F0
+(Schlick); cavity times all specular, direct and from the environment; ambient occlusion
+times the ambient diffuse only; and, added unlit, emissive × `c_L0_emissiveTint` ×
+`emissiveMultiplyTexture` sampled at `uv · c_uv1RotScale + c_uv1Translate × c_gameTime`
+plus a distortion: `uvDistortionTexture` at `uv · c_uv2RotScale + c_uv2Translate ×
+c_gameTime`, × 2 − 1, × `c_uvDistortionIntensity`, × the uv1 scale's diagonal. The game
+shell feeds these inputs to Bevy's lighting (`game/src/viewmodel.wgsl`); the game's own
+lights, exposure and fog are not ported.
 
 A texture (version 8, header `0x38`): width and height `+0x10`, `+0x12`, format `+0x16`,
 array size `+0x1e` (1, or 0 in the Season 3 paks such as `common_early`, read as 1), and
@@ -89,6 +126,31 @@ A settings asset is values at offsets; its layout names them. Weapon scripts are
 the `#base` file first, then the file's own top-level `WeaponData` keys, case ignored. Keys
 the script leaves out take the registered default, 0 for every `*_time` lurch reads
 (registry at `0x120620`).
+
+## The UI
+
+The UI is being brought in (`docs/ui.md` holds its plan and the formats as they are
+recovered). It is in these places in the install:
+
+- `ui.rpak` (RTech stream) holds 1405 RUI assets (`ui`, version 39, header `0x68`, name
+  pointer at `+0`, such as `crosshair_grapple`), 5 `uimg` atlases (version 10), 2 `font`
+  assets (version 7), and the UI's own `txtr`, `matl`, `shds` and `shdr`. `ui_mp.rpak`,
+  `ui_mainmenu.rpak` and `ui_sdk.rpak` hold only `uimg` atlases and their textures.
+- `platform/resource` holds the `.vfont` fonts, the schemes (`clientscheme.res`), the HUD
+  layouts (`hudlayout.res`, `ui/*.res`) and the menus (`ui/menus`).
+- `platform/scripts/vscripts` holds the Squirrel scripts that set each RUI's arguments
+  (`client/rui/cl_hud.gnut`, `client/cl_main_hud.nut` and others).
+- A weapon script names its crosshairs. `mp_ability_grapple.txt` has `Crosshair_1`,
+  `ui/crosshair_grapple_charge` (`isFiring`, `chargeStartTime`, `chargeMaxTime` from
+  `weapon_is_firing`, `weapon_script_time_0`, `eWeaponVar.custom_float_0`), and
+  `Crosshair_2`, `ui/crosshair_grapple` (`ammoFrac`, `isGrappleInRange`,
+  `grappleInRangeTime`, `grappleOutOfRangeTime`, `weaponIsDisabled` from
+  `progress_weapon_clip_ammo_frac`, `grapple_in_range`, `grapple_in_range_time`,
+  `grapple_out_of_range_time`, `weapon_is_disabled`).
+
+- `paks/Win64/ui.dll` (the oracle's build) exports one compiled function per RUI asset,
+  looked up by the asset's name when the pak loads. The engine's side of the RUI runtime
+  (the callbacks those functions call, text layout, drawing) is in the executable.
 
 ## Sound
 

@@ -44,6 +44,12 @@ impl Settings {
             _ => None,
         }
     }
+    pub fn float3(&self, key: &str) -> Option<[f32; 3]> {
+        match self.values.get(key)? {
+            Value::Float3(v) => Some(*v),
+            _ => None,
+        }
+    }
     pub fn bool(&self, key: &str) -> Option<bool> {
         match self.values.get(key)? {
             Value::Bool(b) => Some(*b),

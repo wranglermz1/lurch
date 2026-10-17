@@ -1,7 +1,8 @@
 //! Movement sound through the game's own Miles (`crate::miles`): each command's cues and the
 //! state it left, and the viewmodel's sequence events, go through the sound layer
 //! (`lurch::sound::Sfx`), which names what plays; the listener follows the camera, as the
-//! oracle's 0x956720 sets it from the view each frame.
+//! oracle's 0x956720 sets it from the view each frame. The menus' sounds (`MenuSound`) play by
+//! name.
 //!
 //! Not modelled: the oracle's per-event controllers, occlusion and DSP environments
 //! (0x954c60), muting while the window is out of focus (0x959500, 0x5beb30), `AmmoClipPct`
@@ -21,15 +22,14 @@ use crate::data::Data;
 use crate::miles::Miles;
 use crate::sim::{FrameCues, Map, Pose as EyePose};
 use crate::viewmodel::{Animate, VmEvents};
-use crate::{common, Config, Frame};
+use crate::{common, Config, Frame, MenuSound};
 
-/// ConVar `sound_volume` (image value).
-pub const SOUND_VOLUME: f32 = 1.0;
-/// The global controllers the client's sound frame sets that hold still here: the volume
-/// ConVars `sound_volume_voice`, `sound_volume_music_lobby`, `sound_volume_music_game`,
-/// `sound_volume_dialogue` and `sound_volume_sfx` (image values 1) times 100 (0x5beb30), and a
-/// pilot's `IsTitan`, `LowHealth` and `TitanHealth` (0x5bec80). Without `SfxVolume` the
-/// movement sounds play silent.
+/// The global controllers the client's sound frame sets (`0x5beb30`): the volume ConVars
+/// `sound_volume_voice`, `sound_volume_music_lobby`, `sound_volume_music_game`,
+/// `sound_volume_dialogue` and `sound_volume_sfx` times 100 (`Config::volumes`), and a
+/// pilot's `IsTitan`, `LowHealth` and `TitanHealth` (0x5bec80), here with the values they
+/// hold still at. Without `SfxVolume` the movement sounds play silent. Not modelled: the
+/// frame's muting of the voice while the window is out of focus (`sound_without_focus`).
 pub const CONTROLLERS: [(&CStr, f32); 8] = [
     (c"VoiceCommVolume", 100.0),
     (c"LobbyMusicVolume", 100.0),
@@ -64,7 +64,7 @@ impl Plugin for AudioPlugin {
         std::thread::spawn(move || {
             let _ = tx.send(Miles::open(&install));
         });
-        app.insert_resource(Opening(Mutex::new(rx))).add_systems(Update, (opened, play.run_if(resource_exists::<Audio>)).chain().after(Animate).in_set(Frame::View));
+        app.insert_resource(Opening(Mutex::new(rx))).add_systems(Update, (opened, (volumes, play).run_if(resource_exists::<Audio>)).chain().after(Animate).in_set(Frame::View));
     }
 }
 
@@ -80,9 +80,8 @@ fn opened(mut commands: Commands, opening: Option<Res<Opening>>) {
         }
     };
     info!("sound: {} events", miles.events.len());
-    miles.set_master_volume(SOUND_VOLUME);
-    for (name, value) in CONTROLLERS {
-        miles.controller(name, value);
+    for (name, value) in &CONTROLLERS[5..] {
+        miles.controller(name, *value);
     }
     let service = miles.clone();
     std::thread::spawn(move || loop {
@@ -91,6 +90,18 @@ fn opened(mut commands: Commands, opening: Option<Res<Opening>>) {
         }
     });
     commands.insert_resource(Audio { miles, sfx: None, playing: HashMap::new(), speed: None });
+}
+
+/// `sound_volume` as the master volume and the other five times 100 as their controllers,
+/// whenever the settings change (and once the driver is open).
+fn volumes(audio: Res<Audio>, cfg: Res<Config>) {
+    if !cfg.is_changed() && !audio.is_added() {
+        return;
+    }
+    audio.miles.set_master_volume(cfg.volumes[0]);
+    for ((name, _), v) in CONTROLLERS.iter().zip(&cfg.volumes[1..]) {
+        audio.miles.controller(name, v * 100.0);
+    }
 }
 
 /// The test map's surfaces: all `default`.
@@ -135,7 +146,8 @@ fn forward_up(a: V3) -> (V3, V3) {
     ([cp * cy, cp * sy, -sp], [cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp])
 }
 
-fn play(mut audio: ResMut<Audio>, data: Option<Res<Data>>, steps: Res<FrameCues>, eye: Res<EyePose>, vm: Option<ResMut<VmEvents>>, mut map: ResMut<Map>) {
+#[allow(clippy::too_many_arguments)] // Bevy's system parameters
+fn play(mut audio: ResMut<Audio>, data: Option<Res<Data>>, steps: Res<FrameCues>, eye: Res<EyePose>, vm: Option<ResMut<VmEvents>>, mut map: ResMut<Map>, mut menu: MessageReader<MenuSound>) {
     let audio = &mut *audio;
     if audio.sfx.is_none() {
         let Some(data) = data else { return };
@@ -161,6 +173,11 @@ fn play(mut audio: ResMut<Audio>, data: Option<Res<Data>>, steps: Res<FrameCues>
     }
     for (ev, options) in vm.map(|mut v| std::mem::take(&mut v.0)).unwrap_or_default() {
         sfx.anim_event(ev, &options, eye.0.origin, &mut out);
+    }
+    // The client's PlaySound (`0x5c2b20`) queues the name with position type 2, at the emitter
+    // `0x255e292a` names (not read further); lurch plays it at the camera, where the listener is.
+    for MenuSound(name) in menu.read() {
+        out.play(name, eye.0.origin);
     }
     audio.miles.submit();
 }

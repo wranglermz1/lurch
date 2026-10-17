@@ -273,6 +273,11 @@ fn rig(pak: &Pak, a: &Asset) -> io::Result<Rig> {
     Ok(Rig { name: pak.name(a, 8).unwrap_or("").to_string(), studio, seqs })
 }
 
+/// Loads a rig by path (`animrig/...rrig`) with its sequences.
+pub fn load_rig(pak: &Pak, name: &str) -> io::Result<Rig> {
+    rig(pak, pak.find(b"arig", 8, name).ok_or_else(|| bad(format!("{name} not in {}", pak.path.display())))?)
+}
+
 /// Loads a model by path (`mdl/...rmdl`) with its rigs, sequences and level-0 meshes.
 pub fn load(pak: &Pak, install: &Path, name: &str) -> io::Result<Model> {
     let a = pak.find(b"mdl_", 0x10, name).ok_or_else(|| bad(format!("{name} not in {}", pak.path.display())))?;

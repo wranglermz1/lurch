@@ -1,5 +1,6 @@
-//! The game's files the shell plays with, read once from the R5Reloaded install on a thread at
-//! start: the legend's player settings and sounds, the fists' viewmodel and the legend's arms.
+//! The game's files the shell plays with, read from the R5Reloaded install on a thread at start,
+//! and again when the dev menu picks another heirloom: the legend's player settings and sounds,
+//! the fists' or the heirloom's viewmodel and the legend's arms.
 //! The test map's props are read before the simulation starts, since they collide.
 
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use lurch::anim::viewmodel::WeaponTimes;
 use lurch::assets::model::{self as amodel, Bone};
 use lurch::assets::settings::Settings;
 use lurch::assets::texture::Texture;
-use lurch::assets::Install;
+use lurch::assets::{Heirloom, Install};
 use lurch::sim::math::V3;
 use lurch::sound::PlayerSounds;
 use lurch::testmap::{Prop, PROP_PAK};
@@ -28,6 +29,8 @@ pub struct Arms {
     pub meshes: Vec<amodel::Mesh>,
     /// Each mesh's material textures, in its shader's order (`lurch::assets::texture::material`).
     pub textures: Vec<Vec<Option<Texture>>>,
+    /// Each mesh's material constants (`lurch::assets::texture::uber_static`).
+    pub constants: Vec<Option<Vec<u8>>>,
     /// The bind pose of the arms model's own bones, which the first-person proxy plays from.
     pub defaults: Pose,
     /// The `ref`, `camera` and `camera_base` attachments: each one's bone and its place on it.
@@ -42,8 +45,11 @@ pub struct Arms {
 pub struct GameData {
     pub install: PathBuf,
     pub legend: Settings,
+    /// The legend's character item flavour, for its HUD colours.
+    pub character: Option<Settings>,
     pub sounds: PlayerSounds,
-    /// The fists' script times.
+    /// The weapon's class (its script's name) and script times.
+    pub weapon_class: &'static str,
     pub times: WeaponTimes,
     pub anims: ModelAnims,
     /// The arms model's own sequences, which the first-person proxy plays.
@@ -51,6 +57,11 @@ pub struct GameData {
     /// The weapon model's bind pose, which a sequence's untouched bones keep.
     pub defaults: Pose,
     pub arms: Arms,
+    /// The weapon model's bones and the meshes drawn on them: the heirloom's, none for the fists.
+    pub weapon_bones: Vec<Bone>,
+    pub weapon_meshes: Vec<amodel::Mesh>,
+    pub weapon_textures: Vec<Vec<Option<Texture>>>,
+    pub weapon_constants: Vec<Option<Vec<u8>>>,
     /// The grapple's hook model and the rope's textures, when the install has them.
     pub grapple: Option<lurch::assets::Grapple>,
 }
@@ -58,8 +69,9 @@ pub struct GameData {
 #[derive(Resource, Clone)]
 pub struct Data(pub Arc<GameData>);
 
+/// The game's files being read.
 #[derive(Resource)]
-struct Loading(Mutex<Receiver<Result<GameData, String>>>);
+pub struct Loading(Mutex<Receiver<Result<GameData, String>>>);
 
 pub struct DataPlugin;
 
@@ -71,16 +83,33 @@ impl Plugin for DataPlugin {
             warn!("no R5Reloaded install given: no sounds, no viewmodel");
             return;
         };
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            let t = std::time::Instant::now();
-            let r = load(&install, &cfg.legend);
-            if r.is_ok() {
-                info!("game files read in {:.1} s", t.elapsed().as_secs_f32());
-            }
-            let _ = tx.send(r);
-        });
-        app.insert_resource(Loading(Mutex::new(rx))).add_systems(PreUpdate, finish);
+        app.insert_resource(start(install, cfg.legend, cfg.heirloom)).add_systems(PreUpdate, (reload, finish).chain());
+    }
+}
+
+fn start(install: PathBuf, legend: String, heirloom: Option<&'static Heirloom>) -> Loading {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let t = std::time::Instant::now();
+        let r = load(&install, &legend, heirloom);
+        if r.is_ok() {
+            info!("game files read in {:.1} s", t.elapsed().as_secs_f32());
+        }
+        let _ = tx.send(r);
+    });
+    Loading(Mutex::new(rx))
+}
+
+/// Another heirloom picked (`crate::dev`): the files are read again for it once the reading
+/// under way ends.
+fn reload(mut commands: Commands, cfg: Res<Config>, loading: Option<Res<Loading>>, mut asked: Local<Option<Option<&'static Heirloom>>>) {
+    let asked = asked.get_or_insert(cfg.heirloom);
+    if loading.is_some() || *asked == cfg.heirloom {
+        return;
+    }
+    *asked = cfg.heirloom;
+    if let Some(install) = cfg.r5r.clone() {
+        commands.insert_resource(start(install, cfg.legend.clone(), cfg.heirloom));
     }
 }
 
@@ -94,12 +123,12 @@ fn finish(mut commands: Commands, loading: Option<Res<Loading>>) {
     }
 }
 
-pub fn load(install: &Path, legend: &str) -> Result<GameData, String> {
+pub fn load(install: &Path, legend: &str, heirloom: Option<&Heirloom>) -> Result<GameData, String> {
     let inst = Install::open(install).map_err(|e| e.to_string())?;
     if !inst.is_oracle_build() {
         warn!("r5apex.exe is build {:08x}-{:08x}, not the oracle's 5dba2a2f-02ae8471: names and settings may differ", inst.build.0, inst.build.1);
     }
-    let l = lurch::assets::loadout(install, legend)?;
+    let l = lurch::assets::loadout(install, legend, heirloom)?;
     let wb = l.weapon.studio.bones();
     let mut defaults = Pose::new(wb.len());
     for (i, b) in wb.iter().enumerate() {
@@ -119,13 +148,19 @@ pub fn load(install: &Path, legend: &str) -> Result<GameData, String> {
     Ok(GameData {
         install: install.to_path_buf(),
         sounds: PlayerSounds::from_settings(&l.legend),
+        weapon_class: heirloom.map_or(lurch::assets::FISTS, |h| h.weapon),
         times: WeaponTimes::from_script(|k| l.weapon_script.get(k)?.parse().ok()),
         legend: l.legend,
+        character: l.character,
         anims: ModelAnims::new(&l.weapon),
         arms_anims: ModelAnims::new(&l.arms),
         defaults,
-        arms: Arms { bones: ab, merge, meshes: l.arms.meshes, textures: l.arms_textures, defaults: arms_defaults, reference, camera, camera_base, grapple_rope },
+        arms: Arms { bones: ab, merge, meshes: l.arms.meshes, textures: l.arms_textures, constants: l.arms_constants, defaults: arms_defaults, reference, camera, camera_base, grapple_rope },
         grapple,
+        weapon_bones: wb,
+        weapon_meshes: l.weapon.meshes,
+        weapon_textures: l.weapon_textures,
+        weapon_constants: l.weapon_constants,
     })
 }
 
@@ -156,7 +191,7 @@ pub fn load_props(install: &Path, props: &[Prop]) -> Result<Props, String> {
     let mut out = Vec::new();
     for p in props {
         let m = amodel::load(&pak, install, p.model).map_err(|e| e.to_string())?;
-        for (mesh, textures) in m.meshes.iter().zip(lurch::assets::mesh_textures(&pak, install, &m)) {
+        for (mesh, textures) in m.meshes.iter().zip(lurch::assets::mesh_textures(&pak, &pak, install, &m)) {
             out.push(PropMesh {
                 positions: mesh.positions.iter().map(|&v| p.place(v)).collect(),
                 normals: mesh.normals.iter().map(|&n| p.turn(n)).collect(),

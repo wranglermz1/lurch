@@ -429,6 +429,20 @@ impl Pilot {
         m.grapple_in_range(self.velocity)
     }
 
+    /// Where the use prompt points, asked with the view as it stands: the point on the
+    /// zipline the use search finds, as the client's prompt runs that search each frame
+    /// (`0x681aa0`, docs/ui.md). None when it finds no zipline.
+    pub fn use_point(&self, s: &Settings, curtime: f32, world: &mut dyn Tracer) -> Option<V3> {
+        let mut mv = MoveData { origin: self.origin, velocity: self.velocity, ..Default::default() };
+        let mut player = self.player.clone();
+        let p = &mut player;
+        p.abs_origin = self.origin;
+        let surface = |_: u32| SURFACE_FRICTION;
+        let g = Globals { curtime, frametime: 0.0 };
+        let mut m = Move { p, mv: &mut mv, s, g, tr: world, surface: &surface, scratch: Scratch::default(), stance_index: None, root: &mantle::RECOVERED, cues: Vec::new() };
+        m.use_target().map(|(_, point)| point)
+    }
+
     /// The view setup's once-a-frame update at game time `curtime`, after the frame's
     /// commands: the player's own (slide tilt, FOV ease) and the lean a zipline asks for.
     pub fn view_frame(&mut self, s: &Settings, curtime: f32, frametime: f32) {

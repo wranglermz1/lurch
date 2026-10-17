@@ -103,10 +103,15 @@ The first-person arms, their animation and the movement sounds are the game's ow
 from the user's R5Reloaded install when the shell starts; none of it is kept in this
 repository (`docs/assets.md`).
 
-Not goals: rendering beyond a flat-shaded map and the first-person arms; weapons beyond the
-fists, abilities, legends' kits; other Apex models and game assets; map loading beyond
-collision; game modes, menus, anything that is not practising movement. Deferred, not
-refused: multiplayer and our own models (`docs/game-shell-plan.md` section 8).
+The game's own UI is being brought in the same way: the HUD, the crosshairs and the
+settings menu, run from the install's RUI assets and the compiled RUI code in `ui.dll`
+(`docs/ui.md` holds the plan and its progress).
+
+Not goals: rendering beyond a flat-shaded map, the first-person arms, the heirloom melee
+viewmodels (`--heirloom`, `docs/assets.md`) and the UI; weapons beyond the fists, abilities, legends' kits; other Apex models and game assets; map loading
+beyond collision; game modes, menus other than settings, anything that is not practising
+movement. Deferred, not refused: multiplayer and our own models
+(`docs/game-shell-plan.md` section 8).
 
 ## Layout
 

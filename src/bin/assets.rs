@@ -1,5 +1,5 @@
 //! Lists what the game's files hold for the viewmodel: `assets INSTALL [MODEL...]`, or
-//! `--models PAK [FILTER]` (model names), `--seqs MODEL` (each sequence; `LURCH_SEQDESC=1` adds its blend grid and first animation),
+//! `--models PAK [FILTER]` (model names), `--seqs MODEL` (each sequence, an heirloom's with its rig; `LURCH_SEQDESC=1` adds its blend grid and first animation),
 //! `--pose MODEL SEQUENCE CYCLE`, `--settings KEYS FILTER` (`*` for every key), `--decode PAK...`,
 //! `--names PAK MAGIC NAME_AT FILTER` (assets of a type whose name, at `NAME_AT` in the header,
 //! contains `FILTER`), `--material PAK NAME` (a material's textures and whether each loads).
@@ -79,14 +79,17 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("--material") {
         let p = inst.pak(&args[2]).unwrap();
         let m = p.find(b"matl", 0x18, &args[3]).expect("no such material");
-        for g in lurch::assets::texture::material(&p, m.guid).unwrap() {
+        for g in lurch::assets::texture::material(&p, &p, m.guid).unwrap() {
             let t = lurch::assets::texture::load(&p, install, g);
             println!("{g:#018x} {}", t.map_or_else(|e| e.to_string(), |t| format!("{}x{} format {} mips {}", t.width, t.height, t.format, t.mips.len())));
         }
         return;
     }
     if args.get(1).map(String::as_str) == Some("--seqs") {
-        let m = model::load(pak, install, &args[2]).unwrap();
+        let mut m = model::load(pak, install, &args[2]).unwrap();
+        if let Some(h) = lurch::assets::HEIRLOOMS.iter().find(|h| h.viewmodel.eq_ignore_ascii_case(&args[2])) {
+            m.rigs.push(model::load_rig(pak, h.rig).unwrap());
+        }
         let anims = lurch::anim::model::ModelAnims::new(&m);
         for (i, s) in anims.seqs.iter().enumerate() {
             let ev: Vec<String> = s.named_events.iter().map(|(c, n, o)| format!("{c:.3} {n} {o}")).collect();

@@ -30,9 +30,11 @@ macro_rules! activities {
 }
 
 activities! {
+    TRANSITION = 6,
     VM_DRAW = 449,
     VM_DRAW_TO_SPRINT = 450,
     VM_DRAWFIRST = 451,
+    VM_DRAWCATCH = 452,
     VM_HOLSTER = 453,
     VM_HOLSTER_FROM_SPRINT = 454,
     VM_RAISE = 455,
@@ -43,6 +45,8 @@ activities! {
     VM_IDLE_ALT1 = 469,
     VM_IDLE_ALT2 = 470,
     VM_IDLE_ALT3 = 471,
+    VM_CHARGE = 472,
+    VM_CHARGE_VER4 = 476,
     VM_SPRINT = 478,
     VM_MELEE_ATTACK1 = 493,
     VM_MELEE_ATTACK2 = 494,
@@ -68,6 +72,8 @@ activities! {
     VM_MANTLE_IDLE = 577,
     VM_MANTLE_JUMPOFF = 578,
     VM_ONEHANDED_SPRINT = 592,
+    VM_ONEHANDED_DRAW = 632,
+    VM_ONEHANDED_DRAWFIRST = 633,
     MP_STAND_IDLE = 649,
     MP_CROUCH_IDLE = 650,
     MP_CROUCH_DEPLOYED_IDLE = 651,

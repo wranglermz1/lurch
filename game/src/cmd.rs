@@ -4,14 +4,14 @@ use bevy::input::keyboard::{KeyboardFocusLost, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseButtonInput, MouseWheel};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
-use bevy::window::WindowFocused;
+use bevy::window::{PrimaryWindow, WindowFocused};
 use lurch::sim::input::Keys;
 use lurch::sim::setup::{command_seed, UserCmd};
 
 use crate::binds::{Action, Held, Input, Wheel};
 use crate::look::Look;
 use crate::sim::Sim;
-use crate::{common, config, Config, Frame, FrameIndex, HudVisible, LookReset, Paused, Respawn};
+use crate::{common, config, Config, DevMenu, Frame, FrameIndex, HudVisible, KeyTrap, LookReset, MenuOpen, Paused, Respawn};
 
 /// The retail `usercmd_frametime_min`/`_max` ConVars. The oracle's own clamp lives in
 /// R5Reloaded's SDK, outside the image (docs/oracle.md), and these bound every recording.
@@ -73,7 +73,7 @@ impl Plugin for CmdPlugin {
         let cfg = config(app);
         app.insert_resource(CmdBuilder::new(cfg.sens))
             .init_resource::<CmdQueue>()
-            .add_systems(PreUpdate, read_input.in_set(Frame::Read))
+            .add_systems(PreUpdate, (look_settings, read_input).chain().in_set(Frame::Read))
             .add_systems(Update, (apply_look_reset, make_cmd).chain().in_set(Frame::Make));
         if !cfg.scripted {
             app.add_systems(PreUpdate, pause_input.in_set(Frame::Pause));
@@ -81,12 +81,37 @@ impl Plugin for CmdPlugin {
     }
 }
 
-fn pause_input(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, mut focus: MessageReader<WindowFocused>, mut paused: ResMut<Paused>, mut b: ResMut<CmdBuilder>) {
+/// Escape opens the in-match menu (`MenuOpen::toggle`), which pauses, and closes whichever menu
+/// is open, but while the key bind list captures a key. Opening puts the cursor at the
+/// screen's centre (`UpdateSystemPanel`). Losing the focus pauses without the menu, and a click
+/// then resumes, unless the dev menu is open.
+#[allow(clippy::too_many_arguments)] // Bevy's system parameters
+pub fn pause_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut focus: MessageReader<WindowFocused>,
+    mut paused: ResMut<Paused>,
+    mut menu: ResMut<MenuOpen>,
+    mut b: ResMut<CmdBuilder>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    trap: Res<KeyTrap>,
+    dev: Res<DevMenu>,
+) {
     let lost = focus.read().fold(false, |lost, f| lost | !f.focused);
-    if keys.just_pressed(KeyCode::Escape) || lost {
+    if keys.just_pressed(KeyCode::Escape) && !trap.0 {
+        menu.toggle();
+        paused.set_if_neq(Paused(menu.0.is_some()));
+        if menu.0.is_some() {
+            b.release_all();
+            for mut w in &mut windows {
+                let centre = Vec2::new(w.width(), w.height()) * 0.5;
+                w.set_cursor_position(Some(centre));
+            }
+        }
+    } else if lost {
         paused.set_if_neq(Paused(true));
         b.release_all();
-    } else if paused.0 && mouse.just_pressed(MouseButton::Left) {
+    } else if paused.0 && menu.0.is_none() && !dev.0 && mouse.just_pressed(MouseButton::Left) {
         paused.0 = false;
     }
 }
@@ -131,8 +156,15 @@ fn read_input(
             Action::PrevSpot => drop(respawn.write(Respawn::Spot(-1))),
             Action::NextSpot => drop(respawn.write(Respawn::Spot(1))),
             Action::ToggleHud => hud.0 = !hud.0,
-            Action::Bits(_) => {}
+            Action::Bits(_) | Action::Ping | Action::DevMenu => {}
         }
+    }
+}
+
+/// The mouse settings, taken again when they change.
+fn look_settings(cfg: Res<Config>, mut b: ResMut<CmdBuilder>) {
+    if cfg.is_changed() {
+        (b.look.sens, b.look.invert) = (cfg.sens, cfg.invert_pitch);
     }
 }
 

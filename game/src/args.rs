@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
+use lurch::assets::{Heirloom, HEIRLOOMS};
 use lurch::sim::buttons::{IN_DUCK, IN_FORWARD, IN_JUMP};
 
 use crate::binds::WheelMode;
@@ -8,11 +9,12 @@ use crate::script::{self, parse_frametime};
 use crate::Config;
 
 pub const USAGE: &str = "usage: lurch-game [--spot NAME] [--shot FRAME:PATH] [--script PATH [--frametime SECS] [--headless]]
-                  [--sens F] [--fov-scale F] [--fps-max N] [--vsync] [--size WxH]
+                  [--sens F] [--fov-scale F] [--fps-max N] [--vsync] [--no-shadows] [--size WxH]
                   [--wheel-down A] [--wheel-up A] [--wheel-mode event|notch] [--frame-latency N] [--pipelined] [--autosprint]
-                  [--r5r INSTALL] [--legend NAME]
-  A is forward, jump, duck or none. --fps-max is 1 to 350. INSTALL is an R5Reloaded install folder
-  (the one holding r5apex.exe), asked for on the first run; NAME is a legend (wraith, bangalore, ...).";
+                  [--r5r INSTALL] [--legend NAME] [--heirloom H]
+  A is forward, jump, duck or none. --fps-max is 1 to 350, or 0 for no cap: above 350 fps each
+  command still counts 1/350 s, so movement runs fast. INSTALL is an R5Reloaded install folder
+  (the one holding r5apex.exe), asked for on the first run; NAME is a legend (wraith, bangalore, ...); H is none or wraith_kunai.";
 
 /// No frame may be shorter than the retail `usercmd_frametime_min`.
 pub const FPS_MAX_LIMIT: u32 = 350;
@@ -37,9 +39,10 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
             "--fov-scale" => cfg.fov_scale = positive(&flag, &value()?)?,
             "--fps-max" => {
                 let v = value()?;
-                cfg.fps_max = v.parse().ok().filter(|n| (1..=FPS_MAX_LIMIT).contains(n)).ok_or_else(|| format!("--fps-max wants 1 to {FPS_MAX_LIMIT}, got {v}"))?;
+                cfg.fps_max = v.parse().ok().filter(|n| (0..=FPS_MAX_LIMIT).contains(n)).ok_or_else(|| format!("--fps-max wants 0 to {FPS_MAX_LIMIT}, got {v}"))?;
             }
             "--vsync" => cfg.vsync = true,
+            "--no-shadows" => cfg.shadows = false,
             "--size" => cfg.size = size(&value()?)?,
             "--wheel-down" => cfg.wheel_down = wheel_action(&value()?)?,
             "--wheel-up" => cfg.wheel_up = wheel_action(&value()?)?,
@@ -58,6 +61,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
             "--autosprint" => cfg.autosprint = true,
             "--r5r" => cfg.r5r = Some(PathBuf::from(value()?)),
             "--legend" => cfg.legend = value()?,
+            "--heirloom" => cfg.heirloom = heirloom(&value()?)?,
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
@@ -107,6 +111,14 @@ fn size(v: &str) -> Result<(u32, u32), String> {
         (Ok(w), Ok(h)) if w > 0 && h > 0 => Ok((w, h)),
         _ => Err(bad()),
     }
+}
+
+fn heirloom(v: &str) -> Result<Option<&'static Heirloom>, String> {
+    if v == "none" {
+        return Ok(None);
+    }
+    let names: Vec<&str> = HEIRLOOMS.iter().map(|h| h.name).collect();
+    HEIRLOOMS.iter().find(|h| h.name == v).map(Some).ok_or_else(|| format!("--heirloom wants none or {}, got {v}", names.join(", ")))
 }
 
 fn wheel_action(v: &str) -> Result<Option<u32>, String> {

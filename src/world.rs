@@ -30,8 +30,69 @@ struct Grid {
     coarse_cell: [f32; 2],
 }
 
+/// The columns an in-memory world's triangles stand in, so a trace tests only those near it.
+/// A triangle wider than `MEM_BIG` columns goes in `big`, which every trace tests.
+struct MemGrid {
+    min: [f32; 2],
+    n: [usize; 2],
+    cells: Vec<Vec<u32>>,
+    big: Vec<u32>,
+}
+
+const MEM_CELL: f32 = 256.0;
+const MEM_MAX_N: usize = 512;
+const MEM_BIG: usize = 64;
+
+impl MemGrid {
+    fn new(tris: &[Tri]) -> Self {
+        let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for v in tris.iter().flatten() {
+            for i in 0..2 {
+                min[i] = min[i].min(v[i]);
+                max[i] = max[i].max(v[i]);
+            }
+        }
+        let n = [0, 1].map(|i| if min[i] <= max[i] { (((max[i] - min[i]) / MEM_CELL) as usize + 1).min(MEM_MAX_N) } else { 1 });
+        let mut g = MemGrid { min, n, cells: vec![Vec::new(); n[0] * n[1]], big: Vec::new() };
+        for (k, t) in tris.iter().enumerate() {
+            let lo = [0, 1].map(|i| t[0][i].min(t[1][i]).min(t[2][i]));
+            let hi = [0, 1].map(|i| t[0][i].max(t[1][i]).max(t[2][i]));
+            let (x0, y0, x1, y1) = g.span(lo, hi);
+            if (x1 - x0 + 1) * (y1 - y0 + 1) > MEM_BIG {
+                g.big.push(k as u32);
+                continue;
+            }
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    g.cells[y * n[0] + x].push(k as u32);
+                }
+            }
+        }
+        g
+    }
+
+    fn span(&self, lo: [f32; 2], hi: [f32; 2]) -> (usize, usize, usize, usize) {
+        let col = |v: f32, i: usize| ((((v - self.min[i]) / MEM_CELL).floor()) as i64).clamp(0, self.n[i] as i64 - 1) as usize;
+        (col(lo[0], 0), col(lo[1], 1), col(hi[0], 0), col(hi[1], 1))
+    }
+
+    /// The triangles in the columns `lo`–`hi` crosses, each once, in the world's order.
+    fn near(&self, lo: V3, hi: V3) -> Vec<u32> {
+        let (x0, y0, x1, y1) = self.span([lo[0], lo[1]], [hi[0], hi[1]]);
+        let mut out = self.big.clone();
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                out.extend(&self.cells[y * self.n[0] + x]);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
 enum Source {
-    Mem(Vec<Tri>),
+    Mem(Vec<Tri>, MemGrid),
     // ponytail: one pread per candidate triangle; mmap or a page cache if traces get slow.
     File(File, Grid, Option<Vec<u8>>),
 }
@@ -43,7 +104,8 @@ pub struct World {
 
 impl World {
     pub fn from_tris(tris: Vec<Tri>) -> Self {
-        World { src: Source::Mem(tris), ziplines: Vec::new() }
+        let grid = MemGrid::new(&tris);
+        World { src: Source::Mem(tris, grid), ziplines: Vec::new() }
     }
 
     /// A flat floor at height `z`, wide enough for any arena.
@@ -98,8 +160,10 @@ impl World {
     /// Every triangle that might meet the box `lo`–`hi`; a triangle may come more than once.
     fn candidates(&self, lo: V3, hi: V3, mut each: impl FnMut(&Tri)) {
         match &self.src {
-            Source::Mem(tris) => tris
-                .iter()
+            Source::Mem(tris, grid) => grid
+                .near(lo, hi)
+                .into_iter()
+                .map(|k| &tris[k as usize])
                 .filter(|t| (0..3).all(|i| t.iter().any(|v| v[i] >= lo[i]) && t.iter().any(|v| v[i] <= hi[i])))
                 .for_each(each),
             Source::File(f, g, tags) => {
@@ -273,5 +337,35 @@ impl Tracer for World {
         }
         t.endpos = mad(q.start, d, t.fraction);
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The grid hands a trace the same triangles, in the same order, as testing every one.
+    #[test]
+    fn the_grid_keeps_every_triangle_a_trace_would_test() {
+        let mut tris = crate::testmap::build().tris;
+        let mut s = 0x9e37_79b9u32;
+        let mut next = |r: f32| {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (s >> 8) as f32 / (1u32 << 24) as f32 * 2.0 * r - r
+        };
+        for _ in 0..3000 {
+            let a = [next(8000.0), next(8000.0), next(500.0)];
+            tris.push([a, [a[0] + next(300.0), a[1] + next(300.0), a[2] + next(300.0)], [a[0] + next(300.0), a[1] + next(300.0), a[2]]]);
+        }
+        let grid = MemGrid::new(&tris);
+        let overlaps = |t: &Tri, lo: V3, hi: V3| (0..3).all(|i| t.iter().any(|v| v[i] >= lo[i]) && t.iter().any(|v| v[i] <= hi[i]));
+        for _ in 0..5000 {
+            let c = [next(9000.0), next(9000.0), next(600.0)];
+            let r = [next(400.0).abs() + 1.0, next(400.0).abs() + 1.0, next(100.0).abs() + 1.0];
+            let (lo, hi) = (std::array::from_fn(|i| c[i] - r[i]), std::array::from_fn(|i| c[i] + r[i]));
+            let all: Vec<usize> = (0..tris.len()).filter(|&k| overlaps(&tris[k], lo, hi)).collect();
+            let near: Vec<usize> = grid.near(lo, hi).into_iter().map(|k| k as usize).filter(|&k| overlaps(&tris[k], lo, hi)).collect();
+            assert_eq!(near, all, "box {lo:?} {hi:?}");
+        }
     }
 }

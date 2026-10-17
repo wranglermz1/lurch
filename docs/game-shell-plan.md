@@ -611,6 +611,7 @@ These are the Apex PC defaults as commonly documented. They are unverified again
 | Left click | unpause and grab (in `pause_input`) | Ours |
 | Escape | pause and release (in `pause_input`) | Ours |
 | R, `[`, `]`, F1 | respawn, previous spot, next spot, HUD | Ours |
+| F2 | the dev menu (`dev.rs`): pauses; a number key or a click picks the heirloom, read again from the install; F2 or Escape closes it | Ours |
 
 IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and keyboard turning is client-side only.
 
@@ -627,8 +628,9 @@ IN_WALK, IN_LEFT and IN_RIGHT are unbound. IN_WALK has never been recorded, and 
 | `--headless` | Requires `--script`. No window or renderer | M6 |
 | `--sens F` | `mouse_sensitivity`, 5 | M8 |
 | `--fov-scale F` | `cl_fovScale`, 1.27216 (the retail default; copy yours from Apex) | M8 |
-| `--fps-max N` | 240, at most 350 so no frame is shorter than the retail minimum | M8 |
+| `--fps-max N` | 240, at most 350 so no frame is shorter than the retail minimum; 0 for no cap, where above 350 fps each command still counts 1/350 s and movement runs fast | M8 |
 | `--vsync` | `PresentMode::Fifo` instead of `AutoNoVsync` | M8 |
+| `--no-shadows` | The sun casts no shadows (about 0.9 ms a frame in the guest, 2026-10-13) | |
 | `--size WxH` | 1600x900 | M8 |
 | `--wheel-down A`, `--wheel-up A` | `forward`, `jump`, `duck` or `none` | M8 |
 | `--wheel-mode event\|notch` | `event` | M8 |

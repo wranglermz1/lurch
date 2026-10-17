@@ -21,9 +21,9 @@ pub struct HudText;
 #[derive(Component)]
 pub struct Crosshair;
 
-/// Pathfinder's grapple indicator (`hud_grapple_indicator`, the RUI `ui/crosshair_grapple`): a
-/// ring on the crosshair that turns blue while the grapple is in range. Ours, drawn after the
-/// wiki's description; the game's RUI asset is not read.
+/// Pathfinder's grapple indicator when the game's UI is not loaded: a ring on the crosshair that
+/// turns blue while the grapple is in range, drawn after the wiki's description. With the
+/// install's UI, `rui.rs` draws the game's own `ui/crosshair_grapple` instead.
 #[derive(Component)]
 pub struct GrappleRing;
 
@@ -33,11 +33,17 @@ const RING_EASE: f32 = 0.1;
 /// The client's in-range answer, a frame late as the game's queued ray is, and when it last
 /// turned in and out of range (the RUI's `grapple_in_range_time`, `grapple_out_of_range_time`).
 #[derive(Resource, Default)]
-struct GrappleRange {
+pub struct GrappleRange {
     queued: bool,
-    shown: bool,
+    pub shown: bool,
     since: f32,
+    pub in_time: f32,
+    pub out_time: f32,
 }
+
+/// Where this frame's `GrappleRange` is settled.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GrappleRangeSet;
 
 /// Frames and real time since the fps figure was last refreshed.
 #[derive(Resource, Clone, Copy, Debug, Default)]
@@ -70,7 +76,7 @@ impl Plugin for HudPlugin {
             .init_resource::<DisplayInfo>()
             .init_resource::<GrappleRange>()
             .add_systems(Startup, spawn_hud)
-            .add_systems(Update, (hud, grapple_ring).in_set(Frame::View));
+            .add_systems(Update, (hud, grapple_ring.in_set(GrappleRangeSet)).in_set(Frame::View));
     }
 }
 
@@ -98,7 +104,14 @@ fn spawn_hud(mut commands: Commands) {
     ));
 }
 
-fn grapple_ring(sim: Res<Sim>, mut map: ResMut<Map>, visible: Res<HudVisible>, mut range: ResMut<GrappleRange>, mut rings: Query<(&mut BorderColor, &mut Visibility), With<GrappleRing>>) {
+fn grapple_ring(
+    sim: Res<Sim>,
+    mut map: ResMut<Map>,
+    visible: Res<HudVisible>,
+    rui: Option<Res<crate::rui::Runtime>>,
+    mut range: ResMut<GrappleRange>,
+    mut rings: Query<(&mut BorderColor, &mut Visibility), With<GrappleRing>>,
+) {
     let now = sim.view_now;
     let p = &sim.pilot.player;
     let ready = p.may_grapple(&sim.settings);
@@ -107,13 +120,18 @@ fn grapple_ring(sim: Res<Sim>, mut map: ResMut<Map>, visible: Res<HudVisible>, m
     range.queued = sim.pilot.grapple_in_range(&sim.settings, now, &mut map.0);
     if range.shown != was {
         range.since = now;
+        if range.shown {
+            range.in_time = now;
+        } else {
+            range.out_time = now;
+        }
     }
     let k = ((now - range.since) / RING_EASE).clamp(0.0, 1.0);
     let k = if range.shown { k } else { 1.0 - k };
     let out = Color::srgba(1.0, 1.0, 1.0, if ready { 0.55 } else { 0.2 });
     let color = out.mix(&Color::srgb(0.25, 0.66, 1.0), k);
     for (mut border, mut vis) in &mut rings {
-        *vis = if visible.0 { Visibility::Inherited } else { Visibility::Hidden };
+        *vis = if visible.0 && rui.is_none() { Visibility::Inherited } else { Visibility::Hidden };
         *border = BorderColor::all(color);
     }
 }
@@ -176,17 +194,27 @@ struct HudState<'w> {
     visible: Res<'w, HudVisible>,
 }
 
-fn hud(time: Res<Time<Real>>, mut fps: ResMut<FpsMeter>, st: HudState, mut text: Query<(&mut Text, &mut Visibility), With<HudText>>, mut cross: Query<&mut Visibility, (With<Crosshair>, Without<HudText>)>) {
+fn hud(
+    time: Res<Time<Real>>,
+    mut fps: ResMut<FpsMeter>,
+    st: HudState,
+    rui: Option<Res<crate::rui::Runtime>>,
+    mut text: Query<(&mut Text, &mut Visibility), With<HudText>>,
+    mut cross: Query<&mut Visibility, (With<Crosshair>, Without<HudText>)>,
+) {
     fps.tick(time.delta_secs_f64());
     let shown = if st.visible.0 { Visibility::Inherited } else { Visibility::Hidden };
     for (mut t, mut vis) in &mut text {
-        *vis = shown;
+        vis.set_if_neq(shown);
         if st.visible.0 {
             let view = HudView { sim: &st.sim, pose: &st.pose, builder: &st.builder, cfg: &st.cfg, spots: &st.spots, fps: &fps, display: &st.display, paused: st.paused.0 };
-            t.0 = hud_text(&view);
+            let s = hud_text(&view);
+            if t.0 != s {
+                t.0 = s;
+            }
         }
     }
     for mut vis in &mut cross {
-        *vis = shown;
+        vis.set_if_neq(if rui.is_some() { Visibility::Hidden } else { shown });
     }
 }

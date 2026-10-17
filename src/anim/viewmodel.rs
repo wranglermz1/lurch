@@ -3,26 +3,63 @@
 //!
 //! Per command, the weapon's code: Deploy (`0xa43b60`), WeaponIdle (`0xa439b0`), RaiseWeapon
 //! from StopSprint (`0xa44520`), SendWeaponAnim (`0xa58440`, `0xa35d40`) with the weapon's
-//! sequence lengths (`0xa4c820`), the viewmodel's SendViewModelMatchingSequence (`0x7e3530`),
-//! and the player's events reaching the viewmodel (`0x7e84e0`). Per frame, the client's: the
-//! sequence transitions (`super::transition`), the overlay layers' weights (AccumulateLayers,
+//! sequence lengths (`0xa4c820`) and the node graph's transitions (`0x5f9d40`), the
+//! viewmodel's SendViewModelMatchingSequence (`0x7e3530`), the player's activity modifiers
+//! (`0x854bc0`, `0xa396c0`) and the player's events reaching the viewmodel (`0x7e84e0`). Per frame, the client's: the
+//! sequence transitions (`super::transition`) of the main sequence and of overlay layers 0 and
+//! 1, the overlay layers' weights (AccumulateLayers,
 //! `0x7bfe80`) and the client events crossed (`0x601a50`, `0x5f1750`).
 //!
 //! A mantle puts the weapon away (`holster`) and raises it after (`unholster`).
 //!
 //! Not modelled: firing, reloading, switching, melee and inspecting; the weapon's
-//! one-handed and alternate activities (`0xa582a0`); the player's own activity modifiers
-//! (crouch, air, sliding: no movement sequence of the fists names one); the draw among equally
-//! good sequences; the lockout a melee leaves on the weapon's sequence lengths; the client's
-//! frame advance (cycles run from when a sequence was sent, as the transitions' do).
+//! one-handed and alternate activities (`0xa582a0`); the modifiers `airfast`, `althand` and
+//! `onehand_was_sprinting`; the draw among equally good sequences; the lockout a melee leaves on
+//! the weapon's sequence lengths; the client's frame advance (cycles run from when a sequence
+//! was sent, as the transitions' do, and a transition ends when its cycle reaches 1 at a
+//! command).
 
 use super::bones::{clamp_cycle, STUDIO_DELTA, STUDIO_LOOPING};
 use super::model::{event_number, ModelAnims};
 use super::transition::Transitioner;
 use super::*;
+use crate::sim::Player;
 
 /// ConVar `weapon_sprint_raise_delay` (image value).
 pub const WEAPON_SPRINT_RAISE_DELAY: bool = true;
+/// ConVar `weapon_doIdleForSurvivalMelee` (image value).
+pub const WEAPON_DO_IDLE_FOR_SURVIVAL_MELEE: bool = false;
+
+/// Whether a weapon goes to idle once its activity has run (`+0x16ac`, set at `0xa3c702`): every
+/// weapon but the fists, whose class is `mp_weapon_melee_survival`.
+pub fn idles(class: &str) -> bool {
+    WEAPON_DO_IDLE_FOR_SURVIVAL_MELEE || class != crate::assets::FISTS
+}
+
+/// The player's activity modifiers, bit n for number n of `MODIFIERS`, as `0x854bc0` keeps them
+/// each command (a byte each from `+0x32b0`).
+pub type Modifiers = u64;
+
+/// `0x854bc0`'s modifiers from the player after movement: `ads` while zoomed (`+0x1881`),
+/// `crouch` while the duck is going down or down, `wallrun` while the player's up is tilted,
+/// `wallhang`, `sprinting`, `air` off the ground, `sliding`, `grapple` while it is active, and
+/// `airsprint` in the air when the sprint ended within 0.05 s of leaving the ground.
+pub fn player_modifiers(p: &Player) -> Modifiers {
+    let air = p.ground.is_none();
+    [
+        (0, p.sprint_toggle_lock),
+        (MOD_CROUCH, p.traversal_state.wrapping_sub(1) < 2),
+        (20, p.prev_up[2] <= 1.0 && 1.0 != p.prev_up[2]),
+        (21, p.hanging),
+        (MOD_SPRINTING, p.sprinting),
+        (MOD_AIR, air),
+        (MOD_SLIDING, p.sliding),
+        (30, p.grappling),
+        (32, air && !(0.05 < (p.sprint_end_time - p.left_ground_time).abs())),
+    ]
+    .into_iter()
+    .fold(0, |m, (n, on)| m | (on as u64) << n)
+}
 /// The most a sequence is sped up to fit the time the weapon script gives it.
 const MAX_RATE: f32 = 12.0;
 /// Where a new main sequence's events are read from, so those at 0 fire.
@@ -119,7 +156,8 @@ impl Layer {
     }
 }
 
-/// What to blend this frame, in order: the main sequence, the sequences it left, the layers.
+/// What to blend this frame, in order: the main sequence, the sequences it left, then each layer
+/// followed by the sequences it left.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Blends {
     pub main: Option<(usize, f32)>,
@@ -129,13 +167,19 @@ pub struct Blends {
 
 #[derive(Clone, Debug, Default)]
 pub struct Viewmodel {
-    /// The weapon's activity modifiers: the legend's class, for the fists.
+    /// The weapon's own activity modifiers: the legend's class.
     pub modifiers: Vec<String>,
+    /// The player's, as the last command left them.
+    pub player: Modifiers,
     pub times: WeaponTimes,
-    /// Whether the weapon goes to idle once its activity has run; the fists hold their pose.
+    /// Whether the weapon goes to idle once its activity has run (`idles`); the fists hold
+    /// their pose.
     pub idles: bool,
     pub state: WeaponState,
+    /// The activity playing (`+0x132c`): `TRANSITION` while a node transition leads to the ideal.
     pub activity: Option<Activity>,
+    /// The activity and sequence asked for (`+0x1328`, `+0x1324`).
+    ideal_activity: Option<Activity>,
     ideal: Option<Sequence>,
     deployed: bool,
     next_idle: f32,
@@ -145,6 +189,9 @@ pub struct Viewmodel {
     /// Layer 0 takes the weapon's delta sequences, layer 1 the player's jumps and landings.
     pub layers: [Layer; 2],
     pub transitions: Transitioner,
+    /// Layers 0 and 1 keep their own transitions: the viewmodel's class answers true at vtable
+    /// `+0x140`, so `0x5fc3f0` runs them and AccumulateLayers blends them (`0x7c0744`).
+    pub layer_transitions: [Transitioner; 2],
 }
 
 impl Viewmodel {
@@ -153,8 +200,20 @@ impl Viewmodel {
         Viewmodel { modifiers, times, ..Viewmodel::default() }
     }
 
+    /// The modifiers a sequence is chosen with (`0xa396c0`): the player's, then the weapon's.
     fn mods(&self) -> Vec<&str> {
-        self.modifiers.iter().map(String::as_str).collect()
+        let player = MODIFIERS.iter().enumerate().filter(|(n, _)| self.player >> n & 1 != 0).map(|(_, m)| *m);
+        player.chain(self.modifiers.iter().map(String::as_str)).collect()
+    }
+
+    /// `0xa393d0`: whether the transition the weapon plays has run out (the viewmodel's
+    /// sequence finished); true when no activity plays.
+    fn transition_done(&self, set: &ModelAnims, now: f32) -> bool {
+        if self.activity.is_none_or(|a| a.0 == 0) {
+            return true;
+        }
+        let Some(info) = self.main.seq.and_then(|s| set.seqs.get(s.0 as usize)) else { return true };
+        info.flags & STUDIO_LOOPING == 0 && 1.0 <= self.main.from + (now - self.main.start) * info.rate * self.main.rate
     }
 
     /// The weapon's length for a sequence (`0xa4c820`): the script's time for its activity, or
@@ -175,19 +234,46 @@ impl Viewmodel {
     }
 
     /// SendWeaponAnim (`0xa35d40`): false when the weapon has no sequence for the activity.
-    /// The sequence is sped up to fit the script's time, and the weapon goes idle after it.
+    /// The same idle again is left playing, and while a transition plays toward the ideal
+    /// sequence, a new one it also leads to only becomes the ideal. Otherwise, unless it is a
+    /// draw or the viewmodel is not drawn, the node graph's transition from the sequence
+    /// playing plays first, as `TRANSITION`. What plays is sped up to fit the script's time,
+    /// and the weapon goes idle after it.
     fn send_weapon_anim(&mut self, set: &ModelAnims, act: Activity, now: f32) -> bool {
         let Some(seq) = set.select(act, &self.mods(), self.main.seq) else { return false };
-        let idling = self.activity.is_some_and(|a| (Activity::VM_IDLE.0..Activity::VM_IDLE.0 + 4).contains(&a.0));
-        if Some(seq) == self.ideal && idling {
+        let idle = self.ideal_activity.is_some_and(|a| (Activity::VM_IDLE.0..Activity::VM_IDLE.0 + 4).contains(&a.0));
+        if Some(seq) == self.ideal && idle && self.activity != Some(Activity::TRANSITION) {
             return true;
         }
-        self.activity = Some(act);
-        self.ideal = Some(seq);
-        let t = self.sequence_duration(set, seq);
-        let r = if 0.0 < t { set.seqs[seq.0 as usize].duration / t } else { 1.0 };
-        self.send_viewmodel(set, seq, if r <= MAX_RATE { r } else { MAX_RATE }, now);
-        self.next_idle = now + t;
+        let current = self.main.seq;
+        if self.activity == Some(Activity::TRANSITION) && !self.transition_done(set, now) {
+            if Some(seq) == self.ideal {
+                return true;
+            }
+            if current.map(|c| set.seqs[c.0 as usize].exit_node) == Some(set.seqs[seq.0 as usize].entry_node) {
+                (self.ideal_activity, self.ideal) = (Some(act), Some(seq));
+                return true;
+            }
+        }
+        (self.ideal_activity, self.ideal) = (Some(act), Some(seq));
+        let via = match current {
+            Some(c) if c != seq => set.transition(c, seq).unwrap_or(seq),
+            _ => seq,
+        };
+        let draw = (Activity::VM_DRAW.0..=Activity::VM_DRAWCATCH.0).contains(&act.0)
+            || (Activity::VM_ONEHANDED_DRAW.0..=Activity::VM_ONEHANDED_DRAWFIRST.0).contains(&act.0);
+        let play = if !draw && !self.hidden(now) && via != seq {
+            self.activity = Some(Activity::TRANSITION);
+            via
+        } else {
+            self.activity = Some(act);
+            seq
+        };
+        let t = self.sequence_duration(set, play);
+        let r = if 0.0 < t { set.seqs[play.0 as usize].duration / t } else { 1.0 };
+        self.send_viewmodel(set, play, if r <= MAX_RATE { r } else { MAX_RATE }, now);
+        let charging = self.activity.is_some_and(|a| (Activity::VM_CHARGE.0..=Activity::VM_CHARGE_VER4.0).contains(&a.0));
+        self.next_idle = now + if charging { 0.0 } else { t };
         true
     }
 
@@ -308,8 +394,19 @@ impl Viewmodel {
         self.holstered.is_some_and(|t| t <= now)
     }
 
-    /// One command's cues and the sprint state it left.
-    pub fn command(&mut self, set: &ModelAnims, cues: &[Cue], sprinting: bool, now: f32) {
+    /// `0x854bc0` with the player's modifiers after a command: when any changed, an idle
+    /// weapon idles again at once, so the idle that suits them is chosen.
+    pub fn set_player_modifiers(&mut self, m: Modifiers) {
+        if m != self.player {
+            self.player = m;
+            if self.state == WeaponState::Idle {
+                self.next_idle = 0.0;
+            }
+        }
+    }
+
+    /// One command's cues and the state it left: the sprint and the player's modifiers.
+    pub fn command(&mut self, set: &ModelAnims, cues: &[Cue], sprinting: bool, modifiers: Modifiers, now: f32) {
         if self.holstered.is_some() {
             return;
         }
@@ -320,6 +417,7 @@ impl Viewmodel {
                 self.event(ev, set, now);
             }
         }
+        self.set_player_modifiers(modifiers);
         self.weapon_idle(set, sprinting, now);
     }
 
@@ -357,14 +455,20 @@ impl Viewmodel {
             blends.main = Some((seq.0 as usize, cycle));
             blends.transitions = self.transitions.maintain(&set.seqs, now);
         }
-        for l in &mut self.layers {
-            let Some(seq) = l.seq.filter(|_| l.weight != 0.0) else { continue };
+        for (l, t) in self.layers.iter_mut().zip(&mut self.layer_transitions) {
+            let Some(seq) = l.seq else { continue };
             let cycle = l.cycle(set, now);
+            t.check_for_sequence_change(&set.seqs, seq.0 as i32, l.parity);
+            t.update_current(now, seq.0 as i32, cycle, l.rate, l.parity);
+            if l.weight == 0.0 {
+                continue;
+            }
             events.extend(l.events(set, cycle, NEW_LAYER_CYCLE));
             let w = Self::layer_weight(set, l, cycle);
             if 0.0 < w {
                 blends.layers.push((seq.0 as usize, cycle, w));
             }
+            blends.layers.extend(t.maintain(&set.seqs, now));
         }
         (blends, events)
     }
@@ -393,6 +497,8 @@ mod tests {
         let mut land = seq(Activity::VM_LAND_MEDIUM, STUDIO_DELTA, 0.667, &[]);
         land.named_events = vec![(0.0, "AE_CL_PLAYSOUND_FOR_TYPE".into(), "effort_land_1p".into())];
         (land.fade_in, land.fade_out) = (0.05, 0.35);
+        let mut jump = seq(Activity::VM_JUMP, STUDIO_DELTA, 1.0, &[]);
+        jump.fade_out = 0.35;
         ModelAnims::from_seqs(vec![
             SeqInfo::default(),
             seq(Activity::VM_DRAWFIRST, 0, 0.333, &[]),
@@ -401,6 +507,7 @@ mod tests {
             seq(Activity::VM_SPRINT, STUDIO_LOOPING, 0.714, &[]),
             seq(Activity::VM_RAISE_FROM_SPRINT, 0, 0.333, &[]),
             land,
+            jump,
         ])
     }
 
@@ -412,16 +519,72 @@ mod tests {
         vm.deploy(&set, false, 1.0);
         assert_eq!((vm.activity, vm.main.seq, vm.state), (Some(Activity::VM_DRAWFIRST), Some(Sequence(1)), WeaponState::Deploying));
         assert!((vm.main.rate - 0.333 / 1.25).abs() < 1e-6, "slowed to the script's deployfirst_time");
-        vm.command(&set, &[], false, 2.0);
+        vm.command(&set, &[], false, Modifiers::default(), 2.0);
         assert_eq!((vm.state, vm.activity), (WeaponState::Deploying, Some(Activity::VM_DRAWFIRST)), "still drawing");
-        vm.command(&set, &[], true, 2.3);
+        vm.command(&set, &[], true, Modifiers::default(), 2.3);
         assert_eq!((vm.state, vm.main.seq), (WeaponState::Sprinting, Some(Sequence(4))), "the gunner's sprint rules out the first");
-        vm.command(&set, &[Cue::SprintEnd], false, 3.0);
+        vm.command(&set, &[Cue::SprintEnd], false, Modifiers::default(), 3.0);
         assert_eq!(vm.activity, Some(Activity::VM_RAISE_FROM_SPRINT));
-        vm.command(&set, &[], false, 3.5);
+        vm.command(&set, &[], false, Modifiers::default(), 3.5);
         assert_eq!((vm.state, vm.activity), (WeaponState::Idle, Some(Activity::VM_RAISE_FROM_SPRINT)), "the fists never idle");
         let (b, _) = vm.frame(&set, 3.5);
         assert_eq!(b.main.map(|(s, c)| (s, c > 0.99)), Some((5, true)), "holding the raise's last frame");
+    }
+
+    /// The kunai's graph: idle at node 1, its crouched idle at 2, the sprint at 3, and the
+    /// transitions between them, which have no activity.
+    fn kunai() -> ModelAnims {
+        let node = |mut s: SeqInfo, entry, exit| {
+            (s.entry_node, s.exit_node) = (entry, exit);
+            s
+        };
+        let trans = |duration| SeqInfo { activity: None, ..seq(Activity::VM_IDLE, 0, duration, &[]) };
+        ModelAnims::from_seqs(vec![
+            SeqInfo::default(),
+            node(seq(Activity::VM_DRAWFIRST, 0, 0.5, &[]), 0, 1),
+            node(seq(Activity::VM_IDLE, STUDIO_LOOPING, 1.567, &[]), 1, 1),
+            node(seq(Activity::VM_IDLE, STUDIO_LOOPING, 1.567, &[("crouch", false)]), 2, 2),
+            node(seq(Activity::VM_SPRINT, STUDIO_LOOPING, 0.476, &[]), 3, 3),
+            node(trans(0.525), 1, 3),
+            node(trans(0.933), 1, 2),
+            node(seq(Activity::VM_RAISE_FROM_SPRINT, 0, 0.556, &[]), 3, 1),
+        ])
+    }
+
+    #[test]
+    fn a_weapon_that_idles_regrips_through_its_transitions() {
+        let set = kunai();
+        let mut vm = Viewmodel { idles: idles("mp_weapon_wraith_kunai_primary"), ..Viewmodel::default() };
+        assert!(vm.idles && !idles(crate::assets::FISTS));
+        let none = Modifiers::default();
+        vm.deploy(&set, false, 0.0);
+        vm.command(&set, &[], false, none, 0.6);
+        assert_eq!((vm.activity, vm.main.seq), (Some(Activity::VM_IDLE), Some(Sequence(2))), "idles after the draw");
+        vm.command(&set, &[], true, none, 1.0);
+        assert_eq!((vm.activity, vm.main.seq), (Some(Activity::TRANSITION), Some(Sequence(5))), "idle to sprint first");
+        vm.command(&set, &[], true, none, 1.3);
+        assert_eq!(vm.main.seq, Some(Sequence(5)), "the transition keeps playing");
+        vm.command(&set, &[], true, none, 1.6);
+        assert_eq!((vm.activity, vm.main.seq), (Some(Activity::VM_SPRINT), Some(Sequence(4))), "then the sprint");
+        vm.command(&set, &[Cue::SprintEnd], false, none, 2.0);
+        assert_eq!((vm.activity, vm.main.seq), (Some(Activity::VM_RAISE_FROM_SPRINT), Some(Sequence(7))), "the raise leads to node 1 itself");
+        vm.command(&set, &[], false, none, 2.6);
+        assert_eq!(vm.main.seq, Some(Sequence(2)));
+        vm.command(&set, &[], false, 1 << MOD_CROUCH, 3.0);
+        assert_eq!((vm.activity, vm.main.seq), (Some(Activity::TRANSITION), Some(Sequence(6))), "crouching regrips");
+        vm.command(&set, &[], false, 1 << MOD_CROUCH, 4.0);
+        assert_eq!((vm.activity, vm.main.seq), (Some(Activity::VM_IDLE), Some(Sequence(3))), "into the crouched idle");
+    }
+
+    #[test]
+    fn modifiers_follow_the_player() {
+        let mut p = Player { ground: None, sprint_end_time: 2.0, left_ground_time: 2.04, traversal_state: 2, prev_up: [0.0, 0.0, 1.0], ..Player::default() };
+        let m = player_modifiers(&p);
+        assert_eq!(m, 1 << MOD_CROUCH | 1 << MOD_AIR | 1 << 32, "crouched, in the air, sprint ended on leaving the ground");
+        p.left_ground_time = 2.1;
+        p.ground = Some(0);
+        p.sprinting = true;
+        assert_eq!(player_modifiers(&p), 1 << MOD_CROUCH | 1 << MOD_SPRINTING);
     }
 
     #[test]
@@ -438,5 +601,23 @@ mod tests {
         assert!(ev.is_empty() && b.layers[0].0 == 6 && b.layers[0].2 > 0.0);
         let (b, _) = vm.frame(&set, 1.7);
         assert!(b.layers.is_empty() || b.layers[0].2 < 0.01, "faded out by its end");
+    }
+
+    #[test]
+    fn a_landing_cut_into_a_jump_fades_the_jump_out() {
+        let set = fists();
+        let mut vm = Viewmodel::default();
+        vm.deploy(&set, false, 0.0);
+        vm.event(PlayerEvent::Jump, &set, 1.0);
+        vm.frame(&set, 1.0);
+        vm.frame(&set, 1.5);
+        vm.event(PlayerEvent::LandMedium, &set, 1.5);
+        let jump = |b: &Blends| b.layers.iter().find(|l| l.0 == 7).map(|l| l.2);
+        let (b, _) = vm.frame(&set, 1.5);
+        assert_eq!(jump(&b), Some(1.0), "the jump kept at full weight as the landing starts");
+        let (b, _) = vm.frame(&set, 1.525);
+        assert!(jump(&b).is_some_and(|w| 0.0 < w && w < 1.0), "over the landing's 0.05 s fade-in");
+        let (b, _) = vm.frame(&set, 1.56);
+        assert_eq!(jump(&b), None);
     }
 }

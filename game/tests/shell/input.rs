@@ -12,7 +12,7 @@ use lurch::sim::input::{key_state, DOWN, IMPULSE_DOWN, IMPULSE_UP};
 use lurch::sim::setup::{command_seed, UserCmd};
 use lurch_game::binds::{Action, Input, WheelMode};
 use lurch_game::cmd::{clamp_frametime, CmdBuilder, CmdLog, CmdPlugin};
-use lurch_game::{Config, Paused, Respawn};
+use lurch_game::{Config, GameMenu, MenuOpen, Paused, Respawn};
 
 pub const DT: f64 = 0.004;
 
@@ -248,18 +248,39 @@ fn focus_loss_releases_mouse_bound_bits_without_a_mouse_release() {
 }
 
 #[test]
-fn escape_pauses_and_no_commands_are_made() {
+fn escape_opens_the_menu_which_pauses_until_escape_closes_it() {
     let mut a = ready();
     down(&mut a, KeyCode::Escape);
     assert!(step(&mut a).is_none());
     assert!(a.world().resource::<Paused>().0);
+    assert_eq!(a.world().resource::<MenuOpen>().0, Some(GameMenu::System));
     up(&mut a, KeyCode::Escape);
     for _ in 0..3 {
         assert!(step(&mut a).is_none());
     }
     mouse(&mut a, MouseButton::Left, ButtonState::Pressed);
+    assert!(step(&mut a).is_none(), "a click off the menu's buttons does not resume");
+    mouse(&mut a, MouseButton::Left, ButtonState::Released);
+    down(&mut a, KeyCode::Escape);
     assert!(step(&mut a).is_some());
-    assert!(!a.world().resource::<Paused>().0);
+    assert!(!a.world().resource::<Paused>().0 && a.world().resource::<MenuOpen>().0.is_none());
+    up(&mut a, KeyCode::Escape);
+    step(&mut a);
+    a.world_mut().resource_mut::<MenuOpen>().0 = Some(GameMenu::Misc);
+    a.world_mut().resource_mut::<Paused>().0 = true;
+    down(&mut a, KeyCode::Escape);
+    assert!(step(&mut a).is_some(), "Escape closes the settings menu back to the game");
+    assert!(a.world().resource::<MenuOpen>().0.is_none());
+}
+
+#[test]
+fn a_click_resumes_after_focus_loss_without_the_menu() {
+    let mut a = ready();
+    a.world_mut().write_message(WindowFocused { window: Entity::PLACEHOLDER, focused: false });
+    step(&mut a);
+    assert!(a.world().resource::<MenuOpen>().0.is_none());
+    mouse(&mut a, MouseButton::Left, ButtonState::Pressed);
+    assert!(step(&mut a).is_some());
 }
 
 #[test]
@@ -278,7 +299,7 @@ fn a_key_pressed_while_paused_is_not_held_after_resuming() {
     up(&mut a, KeyCode::Escape);
     down(&mut a, KeyCode::KeyW);
     step(&mut a);
-    mouse(&mut a, MouseButton::Left, ButtonState::Pressed);
+    down(&mut a, KeyCode::Escape);
     let c = step(&mut a).unwrap();
     assert_eq!(c.buttons & IN_FORWARD, 0);
     assert_eq!(c.forward, 0.0);

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
-use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
+use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::input::touch::TouchPhase;
 use bevy::input::{ButtonState, InputSystems};
 use bevy::prelude::*;
@@ -9,7 +9,7 @@ use bevy::time::TimeUpdateStrategy;
 
 use crate::cmd::{CmdBuilder, CmdLog, ScriptFrametime};
 use crate::sim::Sim;
-use crate::{advance_frame, common, config, FrameIndex, Paused, PendingShots, Respawn};
+use crate::{advance_frame, common, config, FrameIndex, MenuCursor, MenuOpen, Paused, PendingShots, Respawn};
 
 /// The frametime of `tests/testmap.rs`.
 pub const SCRIPT_FRAMETIME: f32 = 0.004;
@@ -39,6 +39,12 @@ pub enum Step {
     Wheel(f32),
     Look(f32, f32),
     Spot(String),
+    /// Escape as the menus take it: the in-match menu opens, or closes.
+    Menu,
+    /// The cursor over the menus, in the target's pixels.
+    Cursor(f32, f32),
+    /// The left mouse button pressed and released.
+    Click,
     Exit,
 }
 
@@ -76,6 +82,9 @@ pub fn parse(text: &str) -> Result<Script, String> {
             ("wheel", [n]) => Step::Wheel(number(n).map_err(at)?),
             ("look", [dx, dy]) => Step::Look(number(dx).map_err(at)?, number(dy).map_err(at)?),
             ("spot", name) if !name.is_empty() => Step::Spot(name.join(" ")),
+            ("menu", []) => Step::Menu,
+            ("cursor", [x, y]) => Step::Cursor(number(x).map_err(at)?, number(y).map_err(at)?),
+            ("click", []) => Step::Click,
             ("exit", []) => Step::Exit,
             _ => return Err(at(format!("bad action: {line}"))),
         };
@@ -126,7 +135,17 @@ fn press(key_code: KeyCode, state: ButtonState) -> KeyboardInput {
     KeyboardInput { key_code, logical_key: Key::Unidentified(NativeKey::Unidentified), state, text: None, repeat: false, window: Entity::PLACEHOLDER }
 }
 
-fn inject_script(frame: Res<FrameIndex>, mut run: ResMut<Running>, mut keys: MessageWriter<KeyboardInput>, mut wheel: MessageWriter<MouseWheel>, mut motion: MessageWriter<MouseMotion>, mut respawn: MessageWriter<Respawn>) {
+#[allow(clippy::too_many_arguments)] // Bevy's system parameters
+fn inject_script(
+    frame: Res<FrameIndex>,
+    mut run: ResMut<Running>,
+    mut keys: MessageWriter<KeyboardInput>,
+    mut wheel: MessageWriter<MouseWheel>,
+    mut motion: MessageWriter<MouseMotion>,
+    mut buttons: MessageWriter<MouseButtonInput>,
+    mut respawn: MessageWriter<Respawn>,
+    (mut menu, mut paused, mut cursor): (ResMut<MenuOpen>, ResMut<Paused>, ResMut<MenuCursor>),
+) {
     while let Some((f, step)) = run.script.0.get(run.next).cloned() {
         if f > frame.0 {
             break;
@@ -145,6 +164,16 @@ fn inject_script(frame: Res<FrameIndex>, mut run: ResMut<Running>, mut keys: Mes
             Step::Wheel(y) => drop(wheel.write(MouseWheel { unit: MouseScrollUnit::Line, x: 0.0, y, window: Entity::PLACEHOLDER, phase: TouchPhase::Moved })),
             Step::Look(dx, dy) => drop(motion.write(MouseMotion { delta: Vec2::new(dx, dy) })),
             Step::Spot(name) => drop(respawn.write(Respawn::Named(name))),
+            Step::Menu => {
+                menu.toggle();
+                paused.0 = menu.0.is_some();
+            }
+            Step::Cursor(x, y) => cursor.0 = Some((x, y)),
+            Step::Click => {
+                for state in [ButtonState::Pressed, ButtonState::Released] {
+                    buttons.write(MouseButtonInput { button: MouseButton::Left, state, window: Entity::PLACEHOLDER });
+                }
+            }
             Step::Exit => {}
         }
     }

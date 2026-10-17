@@ -10,6 +10,7 @@ use lurch::testmap::{self, Spot};
 pub use lurch::world::World as CollisionWorld;
 
 use crate::cmd::CmdQueue;
+use crate::cooldown::GrappleClip;
 use crate::{common, config, Config, Frame, LookReset, Respawn};
 
 pub const KILL_Z: f32 = -2048.0;
@@ -23,6 +24,7 @@ pub struct Sim {
     pub settings: Settings,
     /// The clock the last view frame ran at: after its commands' advance.
     pub view_now: f32,
+    pub grapple_clip: GrappleClip,
 }
 
 /// Mutable only because a trace takes `&mut self`.
@@ -82,6 +84,8 @@ pub struct Step {
     /// The grapple would put the weapons down (`0x7d0dc0`, with `grapple_disableWeaponsWhenActive`):
     /// the hook is out, not reeling in, and more than 128 from the eye.
     pub grapple_down: bool,
+    /// The player's activity modifiers after the command.
+    pub modifiers: lurch::anim::viewmodel::Modifiers,
     pub frametime: f32,
 }
 
@@ -153,7 +157,7 @@ impl Plugin for SimPlugin {
         let pilot = spawn_pilot(origin, yaw, 0);
         let clock = Clock::default();
         let pose = Pose(pilot.eye(&settings, cfg.fov_scale, clock.now()));
-        app.insert_resource(Sim { pilot, clock, settings, view_now: clock.now() })
+        app.insert_resource(Sim { pilot, clock, settings, view_now: clock.now(), grapple_clip: GrappleClip::default() })
             .insert_resource(Map(map.world()))
             .insert_resource(Spots { list: map.spots, current })
             .init_resource::<History>()
@@ -188,6 +192,7 @@ fn apply_respawn(mut respawns: MessageReader<Respawn>, mut sim: ResMut<Sim>, mut
     };
     let old = sim.pilot.oldbuttons();
     sim.pilot = spawn_pilot(origin, yaw, old);
+    sim.grapple_clip = GrappleClip::default();
     sim.clock = Clock::default();
     sim.view_now = sim.clock.now();
     history.0.clear();
@@ -204,7 +209,7 @@ fn run_cmds(
     mut respawn: MessageWriter<Respawn>,
     over: Option<ResMut<crate::viewmodel::GrappleAnimOver>>,
 ) {
-    let Sim { pilot, clock, settings, view_now } = &mut *sim;
+    let Sim { pilot, clock, settings, view_now, grapple_clip } = &mut *sim;
     let mut last = None;
     cues.0.clear();
     if let Some(mut over) = over.filter(|o| o.0) {
@@ -216,9 +221,10 @@ fn run_cmds(
         let rising = pilot.velocity[2] > f32::EPSILON;
         let old = pilot.oldbuttons();
         pilot.step(settings, &cmd, now, &mut map.0);
-        if cmd.buttons & !old & IN_OFFHAND1 != 0 {
+        if cmd.buttons & !old & IN_OFFHAND1 != 0 && (pilot.player.grappling || grapple_clip.ready()) {
             pilot.grapple(settings, now);
         }
+        grapple_clip.think(now, cmd.frametime, pilot);
         let p = &pilot.player;
         let traversal = (p.movetype == lurch::sim::mantle::MOVETYPE_TRAVERSE).then_some(lurch::anim::proxy::Traversal {
             ty: p.traversal_type,
@@ -235,7 +241,7 @@ fn run_cmds(
         let h = p.grapple_hook_at;
         let (dx, dy, dz) = (h[0] - eye[0], h[1] - eye[1], h[2] - eye[2]);
         let grapple_down = p.grappling && !p.grapple_retracting && GRAPPLE_WEAPONS_DOWN2 < dy * dy + dx * dx + dz * dz;
-        cues.0.push(Step { cues: pilot.cues.clone(), sound: sound_frame(pilot, now), sprinting: p.sprinting, traversal, climb, grapple_down, frametime: cmd.frametime });
+        cues.0.push(Step { cues: pilot.cues.clone(), sound: sound_frame(pilot, now), sprinting: p.sprinting, traversal, climb, grapple_down, modifiers: lurch::anim::viewmodel::player_modifiers(p), frametime: cmd.frametime });
         clock.advance(cmd.frametime);
         history.push(Snapshot { cmd, pilot: pilot.clone(), clock: *clock });
         if pilot.origin[2] < KILL_Z {

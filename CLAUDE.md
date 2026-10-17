@@ -10,19 +10,24 @@ files.
 
 - Take work from the top of `docs/roadmap.md` unless the user names something else.
 - Build only what practising movement needs. Never build rendering beyond a flat-shaded
-  map, the test map's props, the first-person arms and the grapple's rope; weapons beyond
-  the fists, abilities other than Pathfinder's grapple, legends' kits; other Apex models or
-  game assets; map loading beyond collision; menus or game modes.
-- The arms, their animation, the movement sounds and the test map's props are read from the
-  user's R5Reloaded install at run time (`docs/assets.md`). Never commit anything taken
-  from the install.
+  map, the test map's props, the first-person arms, heirloom melee viewmodels in the fists'
+  place (`--heirloom`), the grapple's rope and the game's own UI
+  (HUD, crosshairs, the settings menu and the pause menu that opens it; `docs/ui.md`);
+  weapons beyond the fists, abilities other than Pathfinder's grapple, legends' kits; other
+  Apex models or game assets; map loading beyond collision; other menus or game modes.
+- The arms, their animation, the heirlooms, the movement sounds, the test map's props and the UI (RUI
+  assets, the compiled RUI code in `ui.dll`, fonts, atlases, layouts) are read from the
+  user's R5Reloaded install at run time (`docs/assets.md`, `docs/ui.md`). Never commit
+  anything taken from the install.
 - Multiplayer and our own models are deferred, not refused (`docs/game-shell-plan.md`
   section 8). Ask before starting them.
 
 ## Evidence
 
 - The authority is the game's code: `dumps/current.bin`, R5Reloaded build
-  5dba2a2f-02ae8471. Not footage, not what you remember of the game, not the Source SDK.
+  5dba2a2f-02ae8471, and for the UI the same build's `paks/Win64/ui.dll` in the install
+  (addresses as `ui.dll+RVA`). Not footage, not what you remember of the game, not the
+  Source SDK.
   Only the base layer (trace and clip, bump loop, step-up, 2-unit ground snap) follows
   published Source behaviour.
 - Claim fidelity only for what a replay gate checks. Every report says what is verified and
@@ -54,7 +59,7 @@ files.
 - No comments by default. Write one only for a "why" the code cannot show. If a comment is
   needed to say what code does, rename instead.
 - Mirror the oracle's call tree: one function per oracle function, its RVA in
-  `docs/oracle.md`, names ours.
+  `docs/oracle.md` (`docs/ui.md` for the UI), names ours.
 - f32 in the oracle's evaluation order. Keep forms like `(a - a) + k * a` and `!(a < b)`:
   they keep the oracle's signed zeros and NaN answers.
 - One movement step per usercmd, dt from that usercmd's frametime. Input is per-command
@@ -78,8 +83,8 @@ files.
 - Write what you recover into `docs/` as behaviour: conditions, order, constants, the names
   of settings and ConVars. Never paste decompiler output into docs or source.
 - A recovered offset, setting or function goes in `docs/oracle.md`, or `docs/feedback.md`
-  for sound and animation. A change in what the gates cover goes in README.md's
-  "Fidelity reached".
+  for sound and animation, or `docs/ui.md` for the UI. A change in what the gates cover
+  goes in README.md's "Fidelity reached".
 - Keep this file to rules for Claude and under 200 lines. Put facts in README.md or `docs/`.
 
 ## Plugins

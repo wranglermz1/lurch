@@ -17,7 +17,7 @@ fn bad(what: impl Into<String>) -> io::Error {
 pub struct Texture {
     /// The pak's format index, which the oracle turns into a DXGI format through the table at
     /// `0x130a760`: 0 and 1 BC1 (1 sRGB), 2 to 5 BC2 and BC3, 6 and 7 BC4, 8 and 9 BC5, 10
-    /// and 11 BC6H, 12 and 13 BC7 (13 sRGB). Only these block formats are read.
+    /// and 11 BC6H, 12 and 13 BC7 (13 sRGB), 53 R8 (the UI's font atlases). Only these are read.
     pub format: u16,
     /// The size of `mips[0]`.
     pub width: u32,
@@ -26,11 +26,12 @@ pub struct Texture {
     pub mips: Vec<Vec<u8>>,
 }
 
-/// Bytes per 4×4 block of a pak format.
-fn block_bytes(format: u16) -> Option<usize> {
+/// The texels on a side of a pak format's block, and the bytes per block.
+fn block(format: u16) -> Option<(usize, usize)> {
     match format {
-        0 | 1 | 6 | 7 => Some(8),
-        2..=5 | 8..=13 => Some(16),
+        0 | 1 | 6 | 7 => Some((4, 8)),
+        2..=5 | 8..=13 => Some((4, 16)),
+        53 => Some((1, 1)),
         _ => None,
     }
 }
@@ -43,12 +44,12 @@ pub fn load(pak: &Pak, install: &Path, guid: u64) -> io::Result<Texture> {
     }
     let h = a.head;
     let (width, height, format) = (pak.u16(h + 0x10) as usize, pak.u16(h + 0x12) as usize, pak.u16(h + 0x16));
-    let bpb = block_bytes(format).ok_or_else(|| bad(format!("{guid:#x}: format {format} is not a block format")))?;
+    let (side, bpb) = block(format).ok_or_else(|| bad(format!("{guid:#x}: format {format} is not read")))?;
     if pak.u8(h + 0x1e) > 1 {
         return Err(bad(format!("{guid:#x}: texture arrays are not read")));
     }
     let (optional, permanent, streamed) = (pak.u8(h + 0x1d) as usize, pak.u8(h + 0x21) as usize, pak.u8(h + 0x22) as usize);
-    let size = |mip: usize| (width >> mip).max(1).div_ceil(4) * (height >> mip).max(1).div_ceil(4) * bpb;
+    let size = |mip: usize| (width >> mip).max(1).div_ceil(side) * (height >> mip).max(1).div_ceil(side) * bpb;
     let split = |data: &[u8], mips: std::ops::Range<usize>| -> io::Result<Vec<Vec<u8>>> {
         let mut out = Vec::new();
         let mut at = 0;
@@ -80,13 +81,25 @@ pub fn load(pak: &Pak, install: &Path, guid: u64) -> io::Result<Texture> {
 /// A material's textures in its shader's binding order. The arms' skinned shader binds
 /// `albedoTexture`, `normalTexture`, `glossTexture`, `specTexture`, `emissiveTexture`,
 /// `aoTexture`, `cavityTexture` (its pixel shader's resource names).
-pub fn material(pak: &Pak, guid: u64) -> io::Result<Vec<u64>> {
+/// A material's `CBufUberStatic`, the pixel shader's constants: its CPU data points at them
+/// and gives their size (0x220) and version (3).
+pub fn uber_static(pak: &Pak, guid: u64) -> Option<Vec<u8>> {
+    let a = pak.asset(guid).filter(|a| &a.magic == b"matl" && a.version == 15)?;
+    let cpu = a.cpu?;
+    let (at, size) = (pak.ptr(cpu)?, pak.u32(cpu + 8) as usize);
+    pak.data().get(at..at + size).map(<[u8]>::to_vec)
+}
+
+/// `shaders` is where the shader set is when `pak` lacks it: `common.rpak`, whose shader sets
+/// the SDK pak's materials use.
+pub fn material(pak: &Pak, shaders: &Pak, guid: u64) -> io::Result<Vec<u64>> {
     let a = pak.asset(guid).ok_or_else(|| bad(format!("material {guid:#x} not in {}", pak.path.display())))?;
     if &a.magic != b"matl" || a.version != 15 {
         return Err(bad(format!("{guid:#x}: {} version {} (matl 15 expected)", String::from_utf8_lossy(&a.magic), a.version)));
     }
-    let shader = pak.asset(pak.u64(a.head + 0x58)).filter(|s| &s.magic == b"shds").ok_or_else(|| bad(format!("{guid:#x}: no shader set")))?;
-    let n = pak.u16(shader.head + 0x18) as usize;
+    let set = pak.u64(a.head + 0x58);
+    let shds = |p: &'_ Pak| p.asset(set).filter(|s| &s.magic == b"shds").map(|s| p.u16(s.head + 0x18) as usize);
+    let n = shds(pak).or_else(|| shds(shaders)).ok_or_else(|| bad(format!("{guid:#x}: no shader set")))?;
     let Some(table) = pak.ptr(a.head + 0x60) else { return Ok(Vec::new()) };
     Ok((0..n).map(|i| pak.u64(table + 8 * i)).collect())
 }

@@ -1,4 +1,7 @@
+mod blur;
+mod convar;
 mod convert;
+mod cooldown;
 mod input;
 mod play;
 mod render;

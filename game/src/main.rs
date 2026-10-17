@@ -4,8 +4,9 @@ use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::render::RenderPlugin;
 use bevy::window::PresentMode;
 use bevy::winit::WinitSettings;
+use lurch_game::convar::{self, ConVarPlugin, ConVars};
 use lurch_game::script::ScriptPlugin;
-use lurch_game::{args, install, AudioPlugin, CmdPlugin, DataPlugin, HudPlugin, LimiterPlugin, Paused, SimPlugin, ViewPlugin, ViewmodelPlugin};
+use lurch_game::{args, install, AudioPlugin, CmdPlugin, DataPlugin, DevPlugin, HudPlugin, LimiterPlugin, Paused, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
 
 fn main() {
     let cfg_path = std::env::current_exe().ok().map(|p| p.with_file_name("lurch.cfg"));
@@ -14,6 +15,10 @@ fn main() {
         eprintln!("{e}\n{}", args::USAGE);
         std::process::exit(2);
     });
+    cfg.cli = std::env::args().skip(1).filter(|a| a.starts_with("--")).collect();
+    if cfg.fps_max == 0 && cfg.cli.iter().any(|f| f == "--fps-max") {
+        eprintln!("--fps-max 0: no fps cap; above 350 fps each command still counts 1/350 s, so movement runs fast");
+    }
     if !cfg.headless {
         cfg.r5r = install::resolve(cfg.r5r.take(), !cfg.scripted, cfg_path.as_deref());
     }
@@ -28,7 +33,7 @@ fn main() {
         if cfg.shot.is_some() {
             eprintln!("--shot is ignored with --headless");
         }
-        app.add_plugins((MinimalPlugins, InputPlugin, CmdPlugin, SimPlugin, LimiterPlugin));
+        app.add_plugins((MinimalPlugins, InputPlugin, CmdPlugin, SimPlugin, LimiterPlugin, SingleThreadedPlugin));
     } else {
         let window = Window {
             title: "lurch".into(),
@@ -48,9 +53,14 @@ fn main() {
         if !cfg.scripted {
             app.insert_resource(Paused(true));
         }
+        if let Some(dir) = cfg_path.as_ref().and_then(|p| p.parent()).filter(|_| !cfg.scripted) {
+            let convars = ConVars::load(dir.to_path_buf(), convar::game_dir());
+            convars.apply(&mut cfg);
+            app.insert_resource(convars).insert_resource(cfg.clone());
+        }
         app.insert_resource(WinitSettings::continuous())
             .add_plugins(plugins)
-            .add_plugins((CmdPlugin, SimPlugin, ViewPlugin::default(), DataPlugin, ViewmodelPlugin, AudioPlugin, HudPlugin, LimiterPlugin));
+            .add_plugins((CmdPlugin, SimPlugin, ViewPlugin::default(), DataPlugin, ViewmodelPlugin, AudioPlugin, HudPlugin, RuiPlugin, LimiterPlugin, DevPlugin, SingleThreadedPlugin, ConVarPlugin));
     }
     if let Some(script) = cfg.script.clone() {
         app.add_plugins(ScriptPlugin(script));

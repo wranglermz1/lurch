@@ -34,14 +34,63 @@ pub struct Pak {
     pub path: PathBuf,
     d: Vec<u8>,
     pages: Vec<usize>,
+    /// Where the pak's pointers are (its pointer descriptors, each a page and an offset), the
+    /// fields the engine relocates when it loads the pak; sorted.
+    pointers: Vec<usize>,
     pub assets: Vec<Asset>,
     by_guid: HashMap<u64, usize>,
     starpaks: Vec<String>,
     opt_starpaks: Vec<String>,
 }
 
+fn u32_at_d(d: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(d[at..at + 4].try_into().unwrap())
+}
+
 fn bad(what: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what.into())
+}
+
+/// The engine's hash of an asset name (`0x46cd80`), which is the asset's GUID: four bytes at a
+/// time, case folded, `\` read as `/`, ending at the NUL. RUI images are found by this hash of
+/// their name too.
+pub fn guid(name: &str) -> u64 {
+    let bytes = name.as_bytes();
+    let word = |at: usize| u32::from_le_bytes(std::array::from_fn(|i| bytes.get(at + i).copied().unwrap_or(0)));
+    let (mut h, mut n, mut at) = (0u64, 0u32, 0);
+    loop {
+        let w = word(at);
+        let zero = w.wrapping_sub(0x0101_0101) & !w & 0x8080_8080;
+        let keep = zero.wrapping_sub(1) ^ zero;
+        let s = w & keep;
+        let x = s ^ 0x5c5c_5c5c;
+        let slashes = x.wrapping_sub(0x0101_0101) & !x & 0x8080_8080;
+        let mut lowest = slashes & slashes.wrapping_neg();
+        if slashes != lowest {
+            let mut m = 0xff00_0000u32;
+            loop {
+                if x & m == 0 {
+                    lowest |= m & 0x8080_8080;
+                }
+                let prev = m;
+                m >>= 8;
+                if prev < 0x100 {
+                    break;
+                }
+            }
+        }
+        let v = ((s.wrapping_sub((lowest >> 7).wrapping_mul(0x2d)) as u64) & 0xdfdf_dfdf).wrapping_mul(0xfb8_c4d9_6501) >> 24;
+        let mixed = h.wrapping_mul(0x633_d5f1);
+        if zero != 0 {
+            let top = 31 - keep.leading_zeros() as i32;
+            let len = ((top + ((top >> 31) & 7)) >> 3).wrapping_add(n as i32) as u32;
+            return (len as u64).wrapping_mul(0xff51_afd7_ed55_8ccd).wrapping_add(mixed).wrapping_add(v);
+        }
+        h = mixed.wrapping_add(v);
+        h ^= h >> 61;
+        at += 4;
+        n += 4;
+    }
 }
 
 fn strings(b: &[u8]) -> Vec<String> {
@@ -92,6 +141,7 @@ impl Pak {
         o += nvseg * 16;
         let page_sizes: Vec<usize> = (0..npage).map(|i| u32::from_le_bytes(d[o + i * 12 + 8..o + i * 12 + 12].try_into().unwrap()) as usize).collect();
         o += npage * 12;
+        let descriptors = o;
         o += ndesc * 8;
         let entries = o;
         o += nasset * ENTRY + nguid * 8 + nrel * 4;
@@ -106,6 +156,8 @@ impl Pak {
             at += s;
         }
         let at = |page: i32, off: i32| (page >= 0).then(|| pages.get(page as usize).map(|p| p + off as usize)).flatten();
+        let mut pointers: Vec<usize> = (0..ndesc).filter_map(|i| at(u32_at_d(&d, descriptors + 8 * i) as i32, u32_at_d(&d, descriptors + 8 * i + 4) as i32)).collect();
+        pointers.sort_unstable();
         let mut assets = Vec::with_capacity(nasset);
         for i in 0..nasset {
             let e = &d[entries + i * ENTRY..entries + (i + 1) * ENTRY];
@@ -126,7 +178,7 @@ impl Pak {
             });
         }
         let by_guid = assets.iter().enumerate().map(|(i, a)| (a.guid, i)).collect();
-        Ok(Pak { path: path.to_path_buf(), d, pages, assets, by_guid, starpaks, opt_starpaks })
+        Ok(Pak { path: path.to_path_buf(), d, pages, pointers, assets, by_guid, starpaks, opt_starpaks })
     }
 
     pub fn data(&self) -> &[u8] {
@@ -163,6 +215,13 @@ impl Pak {
     }
     pub fn f32(&self, at: usize) -> f32 {
         f32::from_bits(self.u32(at))
+    }
+
+    /// The pointer fields in `at..at + len`, the ones the engine relocates on load.
+    pub fn pointers_in(&self, at: usize, len: usize) -> &[usize] {
+        let lo = self.pointers.partition_point(|&p| p < at);
+        let hi = self.pointers.partition_point(|&p| p < at + len);
+        &self.pointers[lo..hi]
     }
 
     /// A pointer field: (page, offset), or None when null or out of the pak.

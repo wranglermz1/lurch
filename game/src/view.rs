@@ -1,6 +1,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
+use bevy::light::cluster::ClusterConfig;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -179,17 +180,20 @@ pub fn map_mesh() -> Mesh {
         .with_computed_flat_normals()
 }
 
-fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>, target: Res<ViewTarget>, pose: Res<Pose>) {
+#[allow(clippy::too_many_arguments)] // Bevy's system parameters
+fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>, target: Res<ViewTarget>, pose: Res<Pose>, cfg: Res<Config>) {
     let material = StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 1.0, cull_mode: None, double_sided: true, ..default() };
     commands.spawn((Mesh3d(meshes.add(map_mesh())), MeshMaterial3d(materials.add(material))));
     commands.spawn((
-        DirectionalLight { shadow_maps_enabled: true, ..default() },
+        DirectionalLight { shadow_maps_enabled: cfg.shadows, ..default() },
         Transform::default().looking_to(Vec3::new(0.55, -0.65, -0.52), Vec3::Y),
         RenderLayers::from_layers(&[0, 1, BODY_LAYER]),
     ));
     let projection = Projection::Perspective(PerspectiveProjection { near: 0.05, far: 2000.0, fov: vfov(pose.0.fov), ..default() });
     let transform = Transform::from_translation(pos(pose.0.origin)).with_rotation(rot(pose.0.angles));
-    let mut camera = commands.spawn((Camera3d::default(), MainCamera, IsDefaultUiCamera, projection, transform, sky_light(&mut images)));
+    // One light cluster: the scene has no point or spot lights to sort into more, and each
+    // cluster costs the frame.
+    let mut camera = commands.spawn((Camera3d::default(), MainCamera, IsDefaultUiCamera, projection, transform, sky_light(&mut images), ClusterConfig::Single));
     if let Target::Image { w, h } = target.0 {
         let mut image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
         image.texture_descriptor.usage |= TextureUsages::COPY_SRC;

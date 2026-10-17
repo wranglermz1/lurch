@@ -1,8 +1,10 @@
-//! The first-person viewmodel: the fists (`lurch::anim::viewmodel`) play their sequences, and
-//! the legend's arms follow the weapon's bones, both read from the R5Reloaded install when the
-//! game starts. Each frame blends the main sequence, the sequences it is leaving and the
-//! overlay layers, in StandardBlendingRules' order. The arms are skinned on the CPU with every
-//! weight a vertex has, and a second camera draws them over the world with the viewmodel's FOV,
+//! The first-person viewmodel: the fists or an heirloom (`lurch::anim::viewmodel`) play their
+//! sequences, and the legend's arms follow the weapon's bones, both read from the R5Reloaded
+//! install when the game starts, and drawn again from scratch when the dev menu picks another
+//! heirloom. An heirloom's own meshes are drawn on its bones. Each frame blends the main sequence, the sequences it is leaving and the
+//! overlay layers, in StandardBlendingRules' order. The arms are skinned with every weight a
+//! vertex has: on the GPU (Bevy's skinning, four weights) for a mesh none of whose vertices has
+//! more, else on the CPU. A second camera draws them over the world with the viewmodel's FOV,
 //! and the HUD over them: drawn by the first camera, the HUD would be painted over.
 //!
 //! Through a mantle or a wall climb the arms are the first-person proxy instead
@@ -10,12 +12,16 @@
 //! the world on the ledge or at the wall, and the fists are put away for it (lowered, then
 //! not drawn) and raised after.
 //!
-//! The arms' materials give the albedo, the normal map (DirectX's green, flipped for Bevy) and
-//! ambient occlusion; tangents are generated at the bind pose and skinned with the normals.
+//! The materials are shaded with the game's pixel shader's inputs (`viewmodel.wgsl`): albedo
+//! times its tint, the normal map as the game reads it (DirectX's green, flipped for Bevy),
+//! roughness from gloss, the specular colour times cavity as F0, ambient occlusion on the
+//! ambient light, and the emissive times its tint and a second texture scrolled with game time
+//! and distorted by a third (the kunai's glow). Tangents are generated at the bind pose and
+//! skinned with the normals.
 //!
 //! Not modelled yet: sway, bob and the view of the camera bone, the oracle's own bone
-//! concatenation, the materials' gloss, spec, emissive and cavity textures and the game's own
-//! shading. That a mantle puts the fists away is what R5Reloaded and retail show; which call
+//! concatenation, and the game's own lighting and exposure (Bevy's lights the inputs, and
+//! `EMISSIVE_NITS` scales the game's emissive into them). That a mantle puts the fists away is what R5Reloaded and retail show; which call
 //! disables them (`0x7d0dc0`) is not settled.
 
 use bevy::asset::RenderAssetUsages;
@@ -23,9 +29,15 @@ use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::camera::{ClearColorConfig, RenderTarget};
+use bevy::light::cluster::ClusterConfig;
 use bevy::light::NotShadowCaster;
+use bevy::math::{Affine3A, Vec3A};
+use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
 use bevy::prelude::*;
+use bevy::render::render_resource::{AsBindGroup, ShaderType};
+use bevy::shader::ShaderRef;
 use bevy::camera::visibility::RenderLayers as Layers;
 use lurch::anim::bones::{self, BoneList, Mat, IDENTITY};
 use lurch::anim::proxy::Proxy;
@@ -51,9 +63,10 @@ pub const DEFAULT_VIEWMODEL_FOV: f32 = 70.0;
 struct Vm {
     state: Viewmodel,
     proxy: Proxy,
-    meshes: Vec<Handle<Mesh>>,
-    /// Each mesh's tangents at the bind pose, in the model's space, with their handedness.
-    tangents: Vec<Vec<[f32; 4]>>,
+    arms: Skinned,
+    weapon: Skinned,
+    /// The materials with an emissive, whose glow scrolls with game time.
+    glowing: Vec<Handle<ViewmodelMaterial>>,
     /// The grapple had the weapons down after the last command.
     grapple_down: bool,
 }
@@ -68,15 +81,101 @@ pub struct GrappleHand(pub Option<V3>);
 #[derive(Resource, Default)]
 pub struct GrappleAnimOver(pub bool);
 
-/// Material texture slots of the arms' shader (`lurch::assets::texture::material`).
+/// Material texture slots, the skinned pixel shader's resource order
+/// (`lurch::assets::texture::material`).
 const ALBEDO: usize = 0;
 const NORMAL: usize = 1;
+const GLOSS: usize = 2;
+const SPEC: usize = 3;
+const EMISSIVE: usize = 4;
 const AO: usize = 5;
+const CAVITY: usize = 6;
+const EMISSIVE_MULTIPLY: usize = 10;
+const UV_DISTORTION: usize = 11;
+
+/// `CBufUberStatic` offsets, from the skinned pixel shader's reflection data.
+const C_UV1_ROT_SCALE_X: usize = 0x00;
+const C_UV1_ROT_SCALE_Y: usize = 0x08;
+const C_UV1_TRANSLATE: usize = 0x10;
+const C_UV2_ROT_SCALE_X: usize = 0x18;
+const C_UV2_ROT_SCALE_Y: usize = 0x20;
+const C_UV2_TRANSLATE: usize = 0x28;
+const C_UV_DISTORTION_INTENSITY: usize = 0x78;
+const C_L0_ALBEDO_TINT: usize = 0x164;
+const C_L0_EMISSIVE_TINT: usize = 0x174;
+
+/// The shell's own scale from the game's emissive units to Bevy's luminance: one unit is
+/// about a white surface in the shell's sun. The game's exposure is not modelled.
+const EMISSIVE_NITS: f32 = 3000.0;
+
+pub type ViewmodelMaterial = ExtendedMaterial<StandardMaterial, GameShading>;
+
+/// What the game's pixel shader adds to the base material (`viewmodel.wgsl`). A texture the
+/// material lacks is left out of `present`, and the shader uses a neutral value.
+#[derive(Asset, TypePath, AsBindGroup, Clone, Default)]
+pub struct GameShading {
+    #[uniform(100)]
+    constants: ShadingConstants,
+    #[texture(101)]
+    #[sampler(102)]
+    normal: Option<Handle<Image>>,
+    #[texture(103)]
+    #[sampler(104)]
+    gloss: Option<Handle<Image>>,
+    #[texture(105)]
+    #[sampler(106)]
+    spec: Option<Handle<Image>>,
+    #[texture(107)]
+    #[sampler(108)]
+    cavity: Option<Handle<Image>>,
+    #[texture(109)]
+    #[sampler(110)]
+    emissive: Option<Handle<Image>>,
+    #[texture(111)]
+    #[sampler(112)]
+    multiply: Option<Handle<Image>>,
+    #[texture(113)]
+    #[sampler(114)]
+    distortion: Option<Handle<Image>>,
+}
+
+#[derive(ShaderType, Clone, Default)]
+struct ShadingConstants {
+    uv1_x: Vec2,
+    uv1_y: Vec2,
+    uv1_translate: Vec2,
+    uv2_x: Vec2,
+    uv2_y: Vec2,
+    uv2_translate: Vec2,
+    distortion: Vec2,
+    emissive_tint: Vec3,
+    game_time: f32,
+    emissive_scale: f32,
+    present: u32,
+}
+
+impl MaterialExtension for GameShading {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://lurch_game/viewmodel.wgsl".into()
+    }
+}
+
+fn f32_at(b: &[u8], at: usize) -> f32 {
+    b.get(at..at + 4).map_or(0.0, |x| f32::from_le_bytes([x[0], x[1], x[2], x[3]]))
+}
+
+fn vec2_at(b: &[u8], at: usize) -> Vec2 {
+    Vec2::new(f32_at(b, at), f32_at(b, at + 4))
+}
+
+fn vec3_at(b: &[u8], at: usize) -> Vec3 {
+    Vec3::new(f32_at(b, at), f32_at(b, at + 4), f32_at(b, at + 8))
+}
 
 /// A texture as the pak holds it, its blocks handed to the GPU as they are.
 pub fn gpu_image(t: &Texture) -> Option<Image> {
     use TextureFormat::*;
-    let format = [Bc1RgbaUnorm, Bc1RgbaUnormSrgb, Bc2RgbaUnorm, Bc2RgbaUnormSrgb, Bc3RgbaUnorm, Bc3RgbaUnormSrgb, Bc4RUnorm, Bc4RSnorm, Bc5RgUnorm, Bc5RgSnorm, Bc6hRgbUfloat, Bc6hRgbFloat, Bc7RgbaUnorm, Bc7RgbaUnormSrgb].get(t.format as usize)?;
+    let format = if t.format == 53 { &R8Unorm } else { [Bc1RgbaUnorm, Bc1RgbaUnormSrgb, Bc2RgbaUnorm, Bc2RgbaUnormSrgb, Bc3RgbaUnorm, Bc3RgbaUnormSrgb, Bc4RUnorm, Bc4RSnorm, Bc5RgUnorm, Bc5RgSnorm, Bc6hRgbUfloat, Bc6hRgbFloat, Bc7RgbaUnorm, Bc7RgbaUnormSrgb].get(t.format as usize)? };
     let size = Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 };
     let mut image = Image::new(size, TextureDimension::D2, t.mips.concat(), *format, RenderAssetUsages::RENDER_WORLD);
     image.texture_descriptor.mip_level_count = t.mips.len() as u32;
@@ -98,16 +197,29 @@ pub struct VmEvents(pub Vec<(u16, String)>);
 pub struct ViewmodelCamera;
 
 #[derive(Component)]
-struct ViewmodelMesh;
+struct ViewmodelMesh {
+    /// The weapon's own, put away while the proxy draws the arms.
+    weapon: bool,
+}
+
+/// A model's bones as its GPU-skinned meshes' joints, and its meshes skinned on the CPU.
+struct Skinned {
+    joints: Vec<Entity>,
+    cpu: Vec<CpuSkinned>,
+}
 
 pub struct ViewmodelPlugin;
 
 impl Plugin for ViewmodelPlugin {
     fn build(&self, app: &mut App) {
         common(app);
+        bevy::asset::embedded_asset!(app, "viewmodel.wgsl");
+        app.add_plugins(MaterialPlugin::<ViewmodelMaterial>::default());
         app.init_resource::<VmEvents>().init_resource::<GrappleHand>().init_resource::<GrappleAnimOver>().add_systems(
             Update,
-            (spawn_meshes.run_if(resource_added::<Data>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera).chain().in_set(Frame::View),
+            (spawn_meshes.run_if(resource_exists_and_changed::<Data>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera, game_time.run_if(resource_exists::<Vm>))
+                .chain()
+                .in_set(Frame::View),
         );
     }
 }
@@ -120,63 +232,125 @@ fn spawn_meshes(
     pose: Res<EyePose>,
     image: Option<Res<ViewImage>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ViewmodelMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     main: Query<Entity, With<MainCamera>>,
+    rui: Query<(), With<crate::rui::RuiCamera>>,
+    cams: Query<(), With<ViewmodelCamera>>,
+    meshes_before: Query<Entity, With<ViewmodelMesh>>,
+    joints_before: Query<Entity, With<Joint>>,
 ) {
-    for e in &main {
-        commands.entity(e).remove::<IsDefaultUiCamera>();
+    for e in meshes_before.iter().chain(&joints_before) {
+        commands.entity(e).despawn();
     }
-    let mut camera = commands.spawn((
-        Camera3d::default(),
-        Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
-        IsDefaultUiCamera,
-        Projection::Perspective(PerspectiveProjection { near: 0.01, far: 100.0, fov: vfov(data.0.legend.float("viewmodelfov").unwrap_or(DEFAULT_VIEWMODEL_FOV)), ..default() }),
-        Transform::from_translation(pos(pose.0.origin)).with_rotation(rot(pose.0.angles)),
-        RenderLayers::layer(VIEWMODEL_LAYER),
-        ViewmodelCamera,
-        sky_light(&mut images),
-    ));
-    if let Some(image) = image {
-        camera.insert(RenderTarget::Image(image.0.clone().into()));
-    }
-    let mut handles = Vec::new();
-    let mut tangents = Vec::new();
-    for (m, textures) in data.0.arms.meshes.iter().zip(&data.0.arms.textures) {
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, m.positions.iter().map(|&p| (dir(p) * INCH).to_array()).collect::<Vec<_>>())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, m.normals.iter().map(|&n| dir(n).to_array()).collect::<Vec<_>>())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, m.uvs.clone())
-            .with_inserted_indices(Indices::U16(m.indices.chunks(3).flat_map(|t| [t[0], t[2], t[1]]).collect()));
-        if let Err(e) = mesh.generate_tangents() {
-            warn!("arms mesh {}: no tangents: {e}", m.material);
+    if cams.is_empty() {
+        let host_ui = rui.is_empty();
+        if host_ui {
+            for e in &main {
+                commands.entity(e).remove::<IsDefaultUiCamera>();
+            }
         }
-        let bind: Vec<[f32; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
-            Some(VertexAttributeValues::Float32x4(t)) => t.iter().map(|t| [-t[2], -t[0], t[1], t[3]]).collect(),
-            _ => Vec::new(),
-        };
-        let mut texture = |slot: usize| textures.get(slot)?.as_ref().and_then(gpu_image).map(|i| images.add(i));
-        let normal_map = if bind.is_empty() { None } else { texture(NORMAL) };
-        let material = materials.add(StandardMaterial {
-            base_color_texture: texture(ALBEDO),
-            normal_map_texture: normal_map,
-            flip_normal_map_y: true,
-            occlusion_texture: texture(AO),
-            perceptual_roughness: 0.8,
-            ..default()
-        });
-        let h = meshes.add(mesh);
-        commands.spawn((Mesh3d(h.clone()), MeshMaterial3d(material), RenderLayers::layer(VIEWMODEL_LAYER), NoFrustumCulling, NotShadowCaster, ViewmodelMesh, Transform::default()));
-        handles.push(h);
-        tangents.push(bind);
+        let mut camera = commands.spawn((
+            Camera3d::default(),
+            Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
+            Projection::Perspective(PerspectiveProjection { near: 0.01, far: 100.0, fov: vfov(data.0.legend.float("viewmodelfov").unwrap_or(DEFAULT_VIEWMODEL_FOV)), ..default() }),
+            Transform::from_translation(pos(pose.0.origin)).with_rotation(rot(pose.0.angles)),
+            RenderLayers::from_layers(&[VIEWMODEL_LAYER, crate::rui::UI_LAYER]),
+            ViewmodelCamera,
+            crate::blur::BlurSource,
+            ClusterConfig::Single,
+            sky_light(&mut images),
+        ));
+        if let Some(image) = image {
+            camera.insert(RenderTarget::Image(image.0.clone().into()));
+        }
+        if host_ui {
+            camera.insert(IsDefaultUiCamera);
+        }
     }
+    let mut glowing = Vec::new();
+    let mut spawn = |src: &[lurch::assets::model::Mesh], textures: &[Vec<Option<Texture>>], constants: &[Option<Vec<u8>>], bones: usize, weapon: bool| {
+        let joints: Vec<Entity> = (0..bones).map(|_| commands.spawn((Joint, GlobalTransform::IDENTITY)).id()).collect();
+        let skin = SkinnedMesh { inverse_bindposes: bindposes.add(SkinnedMeshInverseBindposes::from(vec![Mat4::IDENTITY; joints.len()])), joints: joints.clone() };
+        let mut cpu = Vec::new();
+        for (index, (m, textures)) in src.iter().zip(textures).enumerate() {
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, m.positions.iter().map(|&p| (dir(p) * INCH).to_array()).collect::<Vec<_>>())
+                .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, m.normals.iter().map(|&n| dir(n).to_array()).collect::<Vec<_>>())
+                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, m.uvs.clone())
+                .with_inserted_indices(Indices::U16(m.indices.chunks(3).flat_map(|t| [t[0], t[2], t[1]]).collect()));
+            if let Err(e) = mesh.generate_tangents() {
+                warn!("viewmodel mesh {}: no tangents: {e}", m.material);
+            }
+            let bind: Vec<[f32; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+                Some(VertexAttributeValues::Float32x4(t)) => t.iter().map(|t| [-t[2], -t[0], t[1], t[3]]).collect(),
+                _ => Vec::new(),
+            };
+            let mut texture = |slot: usize| textures.get(slot)?.as_ref().and_then(gpu_image).map(|i| images.add(i));
+            let c = constants.get(index).cloned().flatten().unwrap_or_default();
+            let mut shading = GameShading {
+                normal: if bind.is_empty() { None } else { texture(NORMAL) },
+                gloss: texture(GLOSS),
+                spec: texture(SPEC),
+                cavity: texture(CAVITY),
+                emissive: texture(EMISSIVE),
+                multiply: texture(EMISSIVE_MULTIPLY),
+                distortion: texture(UV_DISTORTION),
+                constants: ShadingConstants {
+                    uv1_x: vec2_at(&c, C_UV1_ROT_SCALE_X),
+                    uv1_y: vec2_at(&c, C_UV1_ROT_SCALE_Y),
+                    uv1_translate: vec2_at(&c, C_UV1_TRANSLATE),
+                    uv2_x: vec2_at(&c, C_UV2_ROT_SCALE_X),
+                    uv2_y: vec2_at(&c, C_UV2_ROT_SCALE_Y),
+                    uv2_translate: vec2_at(&c, C_UV2_TRANSLATE),
+                    distortion: vec2_at(&c, C_UV_DISTORTION_INTENSITY),
+                    emissive_tint: vec3_at(&c, C_L0_EMISSIVE_TINT),
+                    emissive_scale: EMISSIVE_NITS,
+                    ..default()
+                },
+            };
+            let present = [&shading.normal, &shading.gloss, &shading.spec, &shading.cavity, &shading.emissive, &shading.multiply, &shading.distortion];
+            shading.constants.present = present.iter().enumerate().fold(0, |m, (bit, t)| m | (t.is_some() as u32) << bit);
+            let tint = if c.is_empty() { Vec3::ONE } else { vec3_at(&c, C_L0_ALBEDO_TINT) };
+            let lit = shading.emissive.is_some() && shading.constants.emissive_tint != Vec3::ZERO;
+            let material = materials.add(ViewmodelMaterial {
+                base: StandardMaterial { base_color: Color::linear_rgb(tint.x, tint.y, tint.z), base_color_texture: texture(ALBEDO), occlusion_texture: texture(AO), ..default() },
+                extension: shading,
+            });
+            if lit {
+                glowing.push(material.clone());
+            }
+            let gpu = m.weights.iter().all(|w| w.len() <= 4);
+            if gpu {
+                let slot = |w: &Vec<(u16, f32)>, k: usize| w.get(k).copied().unwrap_or((0, 0.0));
+                mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(m.weights.iter().map(|w| [0, 1, 2, 3].map(|k| slot(w, k).0)).collect()));
+                // The stored weights sum to 1 only to their precision. A joint here also carries
+                // the root's placement, which a sum short of 1 would pull toward the origin.
+                let sum = |w: &Vec<(u16, f32)>| w.iter().map(|&(_, x)| x).sum::<f32>();
+                mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, m.weights.iter().map(|w| [0, 1, 2, 3].map(|k| slot(w, k).1 / sum(w))).collect::<Vec<_>>());
+            }
+            let h = meshes.add(mesh);
+            let mut e = commands.spawn((Mesh3d(h.clone()), MeshMaterial3d(material), RenderLayers::layer(VIEWMODEL_LAYER), NoFrustumCulling, NotShadowCaster, ViewmodelMesh { weapon }, Transform::default()));
+            if gpu {
+                e.insert(skin.clone());
+            } else {
+                cpu.push(CpuSkinned { index, mesh: h, tangents: bind });
+            }
+        }
+        Skinned { joints, cpu }
+    };
+    let d = &data.0;
+    let arms = spawn(&d.arms.meshes, &d.arms.textures, &d.arms.constants, d.arms.bones.len(), false);
+    let weapon = spawn(&d.weapon_meshes, &d.weapon_textures, &d.weapon_constants, d.weapon_bones.len(), true);
     let class = data.0.legend.str("classActivityModifier").filter(|m| !m.is_empty()).map(str::to_string);
     let mut state = Viewmodel::new(class.into_iter().collect(), data.0.times);
+    state.idles = lurch::anim::viewmodel::idles(data.0.weapon_class);
     state.deploy(&data.0.anims, sim.pilot.player.sprinting, sim.view_now);
-    info!("viewmodel: {} sequences, {} arms meshes", data.0.anims.seqs.len(), handles.len());
+    info!("viewmodel: {} sequences, {} arms meshes, {} skinned on the CPU, {} weapon meshes", data.0.anims.seqs.len(), data.0.arms.meshes.len(), arms.cpu.len(), data.0.weapon_textures.len());
     let mut proxy = Proxy::default();
     proxy.poses = data.0.arms_anims.sk.default_poses();
-    commands.insert_resource(Vm { state, proxy, meshes: handles, tangents, grapple_down: false });
+    commands.insert_resource(Vm { state, proxy, arms, weapon, glowing, grapple_down: false });
 }
 
 fn mul_point(m: &Mat, v: [f32; 3]) -> [f32; 3] {
@@ -198,7 +372,8 @@ fn animate(
     mut hand: ResMut<GrappleHand>,
     mut over: ResMut<GrappleAnimOver>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut roots: Query<(&mut Transform, &mut Layers, &mut Visibility), With<ViewmodelMesh>>,
+    mut roots: Query<(&mut Transform, &mut Layers, &mut Visibility, &ViewmodelMesh)>,
+    mut joints: Query<&mut GlobalTransform, With<Joint>>,
 ) {
     let vm = &mut *vm;
     let d = &*data.0;
@@ -221,7 +396,7 @@ fn animate(
             vm.state.unholster(&d.anims, now);
         }
         vm.grapple_down = down;
-        vm.state.command(&d.anims, &step.cues, step.sprinting, now);
+        vm.state.command(&d.anims, &step.cues, step.sprinting, step.modifiers, now);
         let drawn = !vm.state.hidden(now);
         vm.proxy.command(&d.arms_anims, step.traversal, drawn, sim.settings.mantle.jumpoff_duration, now);
         vm.proxy.climb(&d.arms_anims, step.climb, now);
@@ -252,11 +427,11 @@ fn animate(
     if vm.proxy.climbing() {
         let place = vm.proxy.climb_place(sim.pilot.origin, a, player.view_offset[2]);
         let skin: Vec<Mat> = d.arms.bones.iter().zip(&own).map(|(b, m)| bones::concat(&bones::concat(&place, m), &b.pose_to_bone)).collect();
-        skin_meshes(&d.arms.meshes, &vm.tangents, &skin, &vm.meshes, &mut meshes);
-        for (mut t, mut layers, mut shown) in &mut roots {
+        skin_meshes(&d.arms.meshes, &vm.arms, &skin, &Transform::IDENTITY, &mut meshes, &mut joints);
+        for (mut t, mut layers, mut shown, m) in &mut roots {
             *t = Transform::IDENTITY;
             *layers = Layers::layer(0);
-            *shown = Visibility::Inherited;
+            *shown = if m.weapon { Visibility::Hidden } else { Visibility::Inherited };
         }
         return;
     }
@@ -277,11 +452,11 @@ fn animate(
             hand.0 = Some([r[0][3], r[1][3], r[2][3]]);
         }
         let skin: Vec<Mat> = d.arms.bones.iter().zip(&own).map(|(b, m)| bones::concat(&bones::concat(&place, m), &b.pose_to_bone)).collect();
-        skin_meshes(&d.arms.meshes, &vm.tangents, &skin, &vm.meshes, &mut meshes);
-        for (mut t, mut layers, mut shown) in &mut roots {
+        skin_meshes(&d.arms.meshes, &vm.arms, &skin, &Transform::IDENTITY, &mut meshes, &mut joints);
+        for (mut t, mut layers, mut shown, m) in &mut roots {
             *t = Transform::IDENTITY;
             *layers = Layers::layer(0);
-            *shown = Visibility::Inherited;
+            *shown = if m.weapon { Visibility::Hidden } else { Visibility::Inherited };
         }
         return;
     }
@@ -289,16 +464,16 @@ fn animate(
         let forward = lurch::sim::math::angle_vectors(view_angles).0;
         let place = vm.proxy.place(&reference, 1.0, forward, sim.view_now);
         let skin: Vec<Mat> = d.arms.bones.iter().zip(&own).map(|(b, m)| bones::concat(&bones::concat(&place, m), &b.pose_to_bone)).collect();
-        skin_meshes(&d.arms.meshes, &vm.tangents, &skin, &vm.meshes, &mut meshes);
-        for (mut t, mut layers, mut shown) in &mut roots {
+        skin_meshes(&d.arms.meshes, &vm.arms, &skin, &Transform::IDENTITY, &mut meshes, &mut joints);
+        for (mut t, mut layers, mut shown, m) in &mut roots {
             *t = Transform::IDENTITY;
             *layers = Layers::layer(0);
-            *shown = Visibility::Inherited;
+            *shown = if m.weapon { Visibility::Hidden } else { Visibility::Inherited };
         }
         return;
     }
     if vm.state.hidden(sim.view_now) {
-        for (_, _, mut shown) in &mut roots {
+        for (_, _, mut shown, _) in &mut roots {
             *shown = Visibility::Hidden;
         }
         return;
@@ -327,9 +502,11 @@ fn animate(
         am.push(m);
     }
     let skin: Vec<Mat> = arms.bones.iter().zip(&am).map(|(b, m)| bones::concat(m, &b.pose_to_bone)).collect();
-    skin_meshes(&arms.meshes, &vm.tangents, &skin, &vm.meshes, &mut meshes);
     let t = Transform::from_translation(pos(eye.0.origin)).with_rotation(rot(eye.0.angles));
-    for (mut r, mut layers, mut shown) in &mut roots {
+    skin_meshes(&arms.meshes, &vm.arms, &skin, &t, &mut meshes, &mut joints);
+    let skin: Vec<Mat> = d.weapon_bones.iter().zip(&weapon).map(|(b, m)| bones::concat(m, &b.pose_to_bone)).collect();
+    skin_meshes(&d.weapon_meshes, &vm.weapon, &skin, &t, &mut meshes, &mut joints);
+    for (mut r, mut layers, mut shown, _) in &mut roots {
         *r = t;
         *layers = Layers::layer(VIEWMODEL_LAYER);
         *shown = Visibility::Inherited;
@@ -351,10 +528,31 @@ fn arms_pose(d: &GameData, blends: &Blends, poses: &[f32]) -> Vec<Mat> {
     bones::build_transforms(sk, &pose, &IDENTITY)
 }
 
-/// Skins the arms on the CPU with every weight a vertex has: `skin` takes each bone from the
-/// bind pose to where it is drawn.
-fn skin_meshes(arms: &[lurch::assets::model::Mesh], bind_tangents: &[Vec<[f32; 4]>], skin: &[Mat], handles: &[Handle<Mesh>], meshes: &mut Assets<Mesh>) {
-    for ((mesh, bind), handle) in arms.iter().zip(bind_tangents).zip(handles) {
+/// A bone of the arms or the weapon as a joint of their GPU-skinned meshes, placed by
+/// `skin_meshes` alone.
+#[derive(Component)]
+struct Joint;
+
+/// A mesh with more than four weights on a vertex: its index in its model, its mesh and
+/// its tangents at the bind pose, in the model's space, with their handedness.
+struct CpuSkinned {
+    index: usize,
+    mesh: Handle<Mesh>,
+    tangents: Vec<[f32; 4]>,
+}
+
+/// Skins a model's meshes: `skin` takes each bone from the bind pose to where it is drawn, in
+/// the space `root` places. The joints get it in Bevy's space; a CPU-skinned mesh is skinned
+/// with every weight a vertex has and placed by its entity's transform.
+fn skin_meshes(src: &[lurch::assets::model::Mesh], s: &Skinned, skin: &[Mat], root: &Transform, meshes: &mut Assets<Mesh>, joints: &mut Query<&mut GlobalTransform, With<Joint>>) {
+    let root = root.compute_affine();
+    for (&e, m) in s.joints.iter().zip(skin) {
+        if let Ok(mut g) = joints.get_mut(e) {
+            *g = GlobalTransform::from(root * joint(m));
+        }
+    }
+    for c in &s.cpu {
+        let (mesh, bind) = (&src[c.index], &c.tangents);
         let mut positions = Vec::with_capacity(mesh.positions.len());
         let mut normals = Vec::with_capacity(mesh.positions.len());
         let mut tangents = Vec::with_capacity(bind.len());
@@ -376,12 +574,29 @@ fn skin_meshes(arms: &[lurch::assets::model::Mesh], bind_tangents: &[Vec<[f32; 4
                 tangents.push(dir(t).normalize_or_zero().extend(b[3]).to_array());
             }
         }
-        if let Some(mut m) = meshes.get_mut(handle) {
+        if let Some(mut m) = meshes.get_mut(&c.mesh) {
             m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
             m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
             if !bind.is_empty() {
                 m.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
             }
+        }
+    }
+}
+
+/// A bone's skinning matrix in Bevy's space: with `A` the axes `dir` maps, `A·R·Aᵀ` and the
+/// translation through `dir` in metres, for vertices already placed by `dir` at the bind pose.
+fn joint(m: &Mat) -> Affine3A {
+    let source = |b: [f32; 3]| [-b[2], -b[0], b[1]];
+    let axis = |b: [f32; 3]| Vec3A::from(dir(mul_dir(m, source(b))));
+    Affine3A::from_cols(axis([1.0, 0.0, 0.0]), axis([0.0, 1.0, 0.0]), axis([0.0, 0.0, 1.0]), Vec3A::from(dir([m[0][3], m[1][3], m[2][3]]) * INCH))
+}
+
+/// `c_gameTime` for the emissive's scroll: the view's clock.
+fn game_time(vm: Res<Vm>, sim: Res<Sim>, mut materials: ResMut<Assets<ViewmodelMaterial>>) {
+    for h in &vm.glowing {
+        if let Some(mut m) = materials.get_mut(h) {
+            m.extension.constants.game_time = sim.view_now;
         }
     }
 }
