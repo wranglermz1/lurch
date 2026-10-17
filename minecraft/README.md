@@ -15,8 +15,20 @@ shell runs next to it as a second process.
   - It writes the frame's viewmodel, grapple rope and HUD, on a transparent background, to
     `/dev/shm/lurch-mc`.
 - `mod/` is a client-only Fabric mod for Minecraft Java 26.3. It needs only Fabric Loader.
-  - While lurch is on, it sends input to the host instead of Minecraft. Escape, F1 to F12 and
-    the chat keys stay with Minecraft.
+  - While lurch is on, it sends input to the host instead of Minecraft. Escape, F1 to F12, the
+    chat keys and the hotbar's slot keys (1 to 9 by default) stay with Minecraft, unless one of
+    lurch's keys is bound there.
+  - Minecraft's Controls screen has an "Apex (lurch)" section: Tactical (Q), Ultimate (Z),
+    Apex Jump (Space) and Apex Crouch (Left Ctrl). Minecraft saves them in its `options.txt`;
+    the mod sends them to the host on connecting and on every change, and the host binds lurch's
+    actions to them in place of its own (`bind`). Minecraft marks Q, Space and Left Ctrl as
+    clashing with its own drop, jump and sprint keys; while lurch is on, they go to lurch only.
+    The Ultimate key does nothing yet but name the key the ultimate's panel shows.
+  - With an empty main hand the player has Apex's fists and moves with their speed scale
+    (`move_speed_modifier` 1.15 in `mp_weapon_melee_survival`). Holding anything, a block or
+    a tool, puts the fists away and shows Minecraft's own hand and item, and the speed scale is
+    1.0, a weapon's without a `move_speed_modifier`. Through a grapple, mantle or climb the
+    host draws Apex's arms and Minecraft's hand is hidden, whatever the player holds.
   - It scans blocks within 24 horizontally, 8 down and 24 up. The grapple reaches 850 units,
     about 21 blocks. It rescans every 0.5 s or after 4 blocks of movement, and sends the result
     only when it changed.
@@ -94,6 +106,11 @@ shell's kill height out of reach above Minecraft's void.
     player back mid-mantle, lurch restarted inside the block, and the camera flew in from the
     cut-short mantle. After it, a trace (`LURCH_MC_TRACE`) of four mantles showed one spawn,
     and the player moved after each. The user confirmed it, superglides included.
+- Hands and binds in the same client, by eye (2026-10-17): with Tactical bound to G in
+  Minecraft's options, the tactical's panel showed G. Keys 1 and 2 switched between an empty
+  slot (Apex fists) and oak planks (Minecraft's hand with the planks); the user played it and
+  confirmed it. The speed while holding, and the grapple with a block in hand, were not looked
+  at.
 - The shared HUD in the same client, by eye, without a test (2026-10-17): at 854x480 and at
   2560x1440 fullscreen, with damage, a diamond helmet and iron chestplate and a shield in the
   offhand, the panel showed three rows at 1 and 3 window pixels per sprite pixel. The hotbar
@@ -114,7 +131,8 @@ world, and block collision edge cases such as seams and partial blocks.
   of it.
 - Timing: the overlay is one readback behind the camera.
 - The shell's dev text in the top-left corner, which overlaps Minecraft's F3 screen.
-- Minecraft's items, block breaking and placing while lurch is on. Turn lurch off for them.
+- Using items, breaking and placing blocks, attacking and opening the inventory while lurch is
+  on: the mouse buttons and E still go to lurch. Turn lurch off for them.
 - Absorption and extra health: more than one row of hearts grows upward over the armour row.
 - Water, ladders, ice, soul sand and other Minecraft-only surfaces. Every collision box is
   solid ground.

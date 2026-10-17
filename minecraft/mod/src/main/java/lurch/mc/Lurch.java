@@ -70,7 +70,9 @@ public final class Lurch {
 	/** The lightmap's inputs as Minecraft last rendered it, and the last light sent. */
 	private static float skyFactor, blockFactor, nightVision, darkness, bossDarkening, brightness;
 	private static final float[] blockTint = {1, 1, 1}, skyColor = {1, 1, 1}, ambient = new float[3], nightVisionColor = new float[3];
-	private static String lastLight = "", lastHotbar = "";
+	private static String lastLight = "", lastHotbar = "", lastBinds = "", lastHands = "";
+	/** Whether lurch-mc drew arms in its last frame; Minecraft draws its own hand only when it did not. */
+	public static boolean arms = true;
 	/**
 	 * The box in the Apex player panel that the armour, hearts and hunger go in, as left, top, right,
 	 * bottom, and how far left the hotbar may reach, in window pixels, as lurch-mc last said; null
@@ -110,12 +112,22 @@ public final class Lurch {
 		return on() && mc.gui.screen() == null && mc.player != null;
 	}
 
-	/** True when Minecraft should not see this key. Escape, F1 to F12 and the chat keys stay Minecraft's. */
+	/**
+	 * True when Minecraft should not see this key. Escape, F1 to F12, the chat keys and the hotbar's
+	 * slot keys stay Minecraft's, unless one of lurch's keys (`ApexKey`) is bound there.
+	 */
 	public static boolean key(int action, KeyEvent e) {
 		Minecraft mc = Minecraft.getInstance();
 		int k = e.key();
 		if (!ours() || k == InputConstants.KEY_ESCAPE || (k >= InputConstants.KEY_F1 && k <= InputConstants.KEY_F12) || mc.options.keyChat.matches(e) || mc.options.keyCommand.matches(e)) {
 			return false;
+		}
+		if (!ApexKey.any(e)) {
+			for (KeyMapping slot : mc.options.keyHotbarSlots) {
+				if (slot.matches(e)) {
+					return false;
+				}
+			}
 		}
 		if (action != InputConstants.REPEAT) {
 			events.append("k ").append(k).append(action == InputConstants.PRESS ? " 1\n" : " 0\n");
@@ -184,6 +196,19 @@ public final class Lurch {
 			} else {
 				msg.append(blocks(mc.level, p.blockPosition(), false));
 			}
+			StringBuilder binds = new StringBuilder();
+			for (ApexKey key : ApexKey.ALL) {
+				binds.append(key.bindLine());
+			}
+			if (!binds.toString().equals(lastBinds)) {
+				msg.append(binds);
+				lastBinds = binds.toString();
+			}
+			String hands = p.getMainHandItem().isEmpty() ? "hands 1\n" : "hands 0\n";
+			if (!hands.equals(lastHands)) {
+				msg.append(hands);
+				lastHands = hands;
+			}
 			String hotbar = hotbarLine(mc);
 			if (!hotbar.equals(lastHotbar)) {
 				msg.append(hotbar);
@@ -215,6 +240,7 @@ public final class Lurch {
 			p.zo = z;
 			p.setDeltaMovement(Vec3.ZERO);
 			p.setOnGround(r[13].equals("1"));
+			arms = r[14].equals("1");
 			float viewPitch = Float.parseFloat(r[11]), viewYaw = Float.parseFloat(r[12]);
 			p.setXRot(viewPitch);
 			p.setYRot(viewYaw);
@@ -468,6 +494,9 @@ public final class Lurch {
 			panel = null;
 			room = Float.NaN;
 			lastHotbar = "";
+			lastBinds = "";
+			lastHands = "";
+			arms = true;
 			shm = null;
 			capturing = false;
 			events.setLength(0);

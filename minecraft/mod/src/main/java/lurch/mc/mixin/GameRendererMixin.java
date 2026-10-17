@@ -10,12 +10,12 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** No Minecraft hand while lurch's viewmodel is drawn. */
+/** No Minecraft hand while lurch-mc draws arms: the fists, or Apex's arms through a grapple, mantle or climb. */
 @Mixin(GameRenderer.class)
 public class GameRendererMixin {
 	@Inject(method = "renderItemInHand", at = @At("HEAD"), cancellable = true)
 	private void lurch$hand(CameraRenderState camera, PlayerRenderState player, GpuTextureView target, CallbackInfo ci) {
-		if (Lurch.on()) {
+		if (Lurch.on() && Lurch.arms) {
 			ci.cancel();
 		}
 	}

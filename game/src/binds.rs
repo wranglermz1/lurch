@@ -13,6 +13,9 @@ pub enum Action {
     DevMenu,
     /// Does nothing in lurch: bound as the game binds it, so prompts show its key.
     Ping,
+    /// Does nothing in lurch, which models no ultimate: bound so the ultimate's panel shows
+    /// its key.
+    Ultimate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -53,6 +56,14 @@ impl Binds {
         self.0.iter().rev().find(|(i, _)| *i == input).map(|(_, a)| *a)
     }
 
+    /// Binds `action` to `input` alone, or to nothing.
+    pub fn rebind(&mut self, action: Action, input: Option<Input>) {
+        self.0.retain(|(_, a)| *a != action);
+        if let Some(input) = input {
+            self.set(input, action);
+        }
+    }
+
     pub fn set(&mut self, input: Input, action: Action) {
         self.0.retain(|(i, _)| *i != input);
         self.0.push((input, action));
@@ -76,7 +87,12 @@ impl Binds {
 
 /// The game's command for an action, bound as its default config binds it.
 fn command(action: Action) -> Option<&'static str> {
-    let Action::Bits(bits) = action else { return (action == Action::Ping).then_some("+ping") };
+    let bits = match action {
+        Action::Bits(bits) => bits,
+        Action::Ping => return Some("+ping"),
+        Action::Ultimate => return Some("+offhand4"),
+        _ => return None,
+    };
     Some(match bits {
         IN_FORWARD => "+forward",
         IN_BACK => "+backward",
@@ -112,6 +128,7 @@ fn action(command: &str) -> Option<Action> {
             "+use" => Action::Bits(IN_USE),
             "+offhand1" => Action::Bits(IN_OFFHAND1),
             "+ping" => Action::Ping,
+            "+offhand4" => Action::Ultimate,
             _ => return None,
         })
     })

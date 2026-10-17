@@ -12,13 +12,20 @@
 //! - `blocks`, lines `f X Y Z MASK` (a full block and which of its faces are open: bits west,
 //!   east, down, up, north, south) and `p X Y Z X0 Y0 Z0 X1 Y1 Z1` (a box of any other shape, in
 //!   the block's coordinates), then `end`: every block near the player.
+//! - `bind NAME k|m CODE`: Minecraft's key for one of lurch's actions, `tactical`, `ultimate`,
+//!   `jump` or `crouch`, a key or a mouse button numbered as in `k` and `m`; `-` for none. It
+//!   replaces every other key bound to that action.
+//! - `hands 1|0`: the player's main hand is empty, or holds something. Holding something puts
+//!   the fists away (`viewmodel::HostHands`) and moves at a speed scale of 1.0, a weapon's
+//!   without `move_speed_modifier`, in place of the fists' 1.15.
 //! - `hotbar X`: the left edge of Minecraft's hotbar, its offhand slot included, in window
 //!   pixels. The tactical's panel moves left of it when it would reach it.
 //! - `light R G B NETHER`: the lightmap colour Minecraft's own hand would be multiplied by where
 //!   the player's eye is, gamma-encoded in 0 to 1, and 1 in the Nether's cardinal lighting.
 //! - `frame FRAMETIME W H`: one frame at Minecraft's size, answered with
-//!   `pose X Y Z EX EY EZ PITCH YAW ROLL FOV VPITCH VYAW GROUND`: the feet, the camera, its angles
-//!   and vertical FOV in degrees, and the view angles the player aims with. When the HUD's
+//!   `pose X Y Z EX EY EZ PITCH YAW ROLL FOV VPITCH VYAW GROUND ARMS`: the feet, the camera, its
+//!   angles and vertical FOV in degrees, the view angles the player aims with, whether the
+//!   pilot is on the ground and whether the shell drew arms this frame. When the HUD's
 //!   layout changed, `hud X0 Y0 X1 Y1 ROOM` comes first: the box in the Apex player panel that
 //!   Minecraft's armour, hearts and hunger go in (where the game draws the name and the bars;
 //!   Y1 is the panel's bottom), and how far left the hotbar may reach and leave room for the
@@ -66,6 +73,7 @@ use lurch::sim::math::V3;
 use lurch::sim::pilot;
 use lurch::sim::{HullQuery, Tracer};
 use lurch::world::Tri;
+use lurch::sim::buttons::{IN_DUCK, IN_JUMP, IN_OFFHAND1};
 use lurch_game::binds::{Action, Input};
 use lurch_game::cmd::{clamp_frametime, CmdBuilder, ScriptFrametime};
 use lurch_game::convar::{self, ConVars};
@@ -74,7 +82,7 @@ use lurch_game::data::{self, Data};
 use lurch_game::rui::{HostBar, HostHud, Preloaded};
 use lurch_game::sim::{CollisionWorld, Map, Pose, Sim, DIST_EPSILON};
 use lurch_game::view::{Target, ViewImage};
-use lurch_game::viewmodel::HostLight;
+use lurch_game::viewmodel::{ArmsShown, HostHands, HostLight};
 use lurch_game::{args, install, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
 
 const ADDR: &str = "127.0.0.1:25600";
@@ -86,6 +94,9 @@ const UNITS_PER_BLOCK: f64 = 40.0;
 /// Below the world's floor, so the shell's kill height (`sim::KILL_Z`) is never reached above
 /// Minecraft's own void.
 const BASE_BELOW_FLOOR: f64 = 64.0;
+/// The speed scale while the player holds something: a weapon's `move_speed_modifier` when its
+/// settings give none.
+const HOLDING_SPEED_SCALE: f32 = 1.0;
 /// How far a spawn is moved to get clear of a block, in units: half a block.
 const UNSTICK_REACH: u32 = 20;
 
@@ -285,7 +296,8 @@ fn pose(world: &World, base: Base) -> String {
     let (a, v) = (eye.angles, sim.pilot.player.view_angles);
     let fov = vfov(eye.fov).to_degrees();
     let ground = sim.pilot.player.ground.is_some() as u8;
-    format!("pose {x} {y} {z} {ex} {ey} {ez} {} {} {} {fov} {} {} {ground}", a[0], flip_yaw(a[1]), a[2], v[0], flip_yaw(v[1]))
+    let arms = world.get_resource::<ArmsShown>().is_some_and(|a| a.0) as u8;
+    format!("pose {x} {y} {z} {ex} {ey} {ez} {} {} {} {fov} {} {} {ground} {arms}", a[0], flip_yaw(a[1]), a[2], v[0], flip_yaw(v[1]))
 }
 
 /// The `hud` line for a layout.
@@ -295,8 +307,9 @@ fn hud(h: &HostHud) -> String {
     format!("hud {panel} {}", num(h.room))
 }
 
-/// Runs one connection's frames until the mod hangs up.
-fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
+/// Runs one connection's frames until the mod hangs up. `hands_speed` is the pilot's own
+/// speed scale, the fists'.
+fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::Result<()> {
     let mut out = stream;
     let mut lines = BufReader::new(stream).lines();
     let mut base = Base::default();
@@ -326,6 +339,25 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
             Some("w") => drop(world.write_message(MouseWheel { unit: MouseScrollUnit::Line, x: 0.0, y: arg(&mut w)?, window: Entity::PLACEHOLDER, phase: TouchPhase::Moved })),
             Some("l") => drop(world.write_message(MouseMotion { delta: Vec2::new(arg(&mut w)?, arg(&mut w)?) })),
             Some("r") => world.resource_mut::<CmdBuilder>().release_all(),
+            Some("bind") => {
+                let action = match w.next() {
+                    Some("tactical") => Action::Bits(IN_OFFHAND1),
+                    Some("ultimate") => Action::Ultimate,
+                    Some("jump") => Action::Bits(IN_JUMP),
+                    Some("crouch") => Action::Bits(IN_DUCK),
+                    _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("bad bind: {line:?}"))),
+                };
+                let input = match w.next() {
+                    Some("k") => arg(&mut w).ok().and_then(key).map(Input::Key),
+                    Some("m") => arg(&mut w).ok().and_then(button).map(Input::Mouse),
+                    _ => None,
+                };
+                world.resource_mut::<Config>().binds.rebind(action, input);
+            }
+            Some("hands") => {
+                let empty = arg::<u8>(&mut w)? == 1;
+                world.insert_resource(HostHands(empty));
+            }
             Some("hotbar") => {
                 let left = arg(&mut w)?;
                 world.insert_resource(HostBar(left));
@@ -368,6 +400,9 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
                     let handle = world.resource::<ViewImage>().0.clone();
                     let _ = world.resource_mut::<Assets<Image>>().insert(handle.id(), target_image(width, height));
                     world.resource_mut::<Overlay>().size = (width, height);
+                }
+                if let Some(h) = world.get_resource::<HostHands>().copied() {
+                    world.resource_mut::<Sim>().pilot.player.speed_scale = if h.0 { hands_speed } else { HOLDING_SPEED_SCALE };
                 }
                 app.update();
                 let layout = *app.world().resource::<HostHud>();
@@ -434,13 +469,14 @@ fn main() -> io::Result<()> {
     app.update();
     let image = app.world().resource::<ViewImage>().0.clone();
     app.world_mut().spawn(Readback::texture(image)).observe(|done: On<ReadbackComplete>, mut overlay: ResMut<Overlay>| overlay.write(&done.data));
+    let hands_speed = app.world().resource::<Sim>().pilot.player.speed_scale;
     let listener = TcpListener::bind(ADDR)?;
     eprintln!("lurch-mc: listening on {ADDR}, overlay in {SHM}");
     for stream in listener.incoming() {
         let stream = stream?;
         stream.set_nodelay(true)?;
         eprintln!("lurch-mc: Minecraft connected");
-        match serve(&mut app, &stream) {
+        match serve(&mut app, &stream, hands_speed) {
             Ok(()) => eprintln!("lurch-mc: Minecraft left"),
             Err(e) => eprintln!("lurch-mc: {e}"),
         }

@@ -12,6 +12,7 @@
 		"MinecraftMixin",
 		"MouseMixin",
 		"NativeImageAccess",
+		"OptionsMixin",
 		"ServerMovementMixin"
 	],
 	"injectors": {
