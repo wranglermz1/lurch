@@ -7,35 +7,114 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.ByteOrder;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import lurch.mc.mixin.NativeImageAccess;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.Options;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.system.MemoryUtil;
 
-/** Hands the local player's movement to lurch-bridge, one usercmd per rendered frame, while F7 has it on. */
+/**
+ * The Minecraft half of the passthrough: while F7 has it on, lurch-mc (the game shell) gets the
+ * keyboard and mouse, the blocks around the player and one frame per rendered frame, and places
+ * the player and the camera; its viewmodel and HUD are drawn over the world from shared memory.
+ */
 public final class Lurch {
 	private static final int PORT = 25600;
-	private static final int IN_JUMP = 0x2, IN_DUCK = 0x4, IN_FORWARD = 0x8, IN_BACK = 0x10, IN_MOVELEFT = 0x200, IN_MOVERIGHT = 0x400, IN_SPEED = 0x8000;
-	private static final int[] BITS = {IN_FORWARD, IN_BACK, IN_MOVELEFT, IN_MOVERIGHT, IN_JUMP, IN_DUCK, IN_SPEED};
+	private static final Path SHM = Path.of("/dev/shm/lurch-mc");
+	private static final Identifier OVERLAY = Identifier.fromNamespaceAndPath("lurch", "overlay");
+	private static final int HORIZONTAL = 24, BELOW = 8, ABOVE = 24;
+	private static final long SCAN_EVERY_NS = 500_000_000L;
+	private static final int RESCAN_DISTANCE = 4;
 
 	private static Socket socket;
 	private static BufferedReader in;
 	private static Writer out;
+	private static final StringBuilder events = new StringBuilder();
 	private static long lastFrame;
-	private static boolean toggleHeld;
+	private static boolean toggleHeld, capturing;
 	/** Where lurch last put the player; anything else moving it (a teleport, a respawn) restarts lurch there. */
 	private static Vec3 placed;
-	/** Where lurch puts the eye; null while lurch is off. */
+	private static String lastBlocks = "";
+	private static BlockPos scannedAt;
+	private static long scannedTime;
+
+	/** The camera lurch asks for; null while lurch is off. */
 	public static Vec3 eye;
+	public static float pitch, yaw, roll, fov;
+
+	private static MappedByteBuffer shm;
+	private static DynamicTexture overlay;
+	private static int overlaySeq;
+
+	public static boolean on() {
+		return socket != null;
+	}
 
 	public static boolean moves(Object entity) {
-		return socket != null && entity instanceof LocalPlayer;
+		return on() && entity instanceof LocalPlayer;
+	}
+
+	/** Whether input goes to lurch instead of Minecraft: lurch is on and no screen is open. */
+	private static boolean ours() {
+		Minecraft mc = Minecraft.getInstance();
+		return on() && mc.gui.screen() == null && mc.player != null;
+	}
+
+	/** True when Minecraft should not see this key. Escape, F1 to F12 and the chat keys stay Minecraft's. */
+	public static boolean key(int action, KeyEvent e) {
+		Minecraft mc = Minecraft.getInstance();
+		int k = e.key();
+		if (!ours() || k == InputConstants.KEY_ESCAPE || (k >= InputConstants.KEY_F1 && k <= InputConstants.KEY_F12) || mc.options.keyChat.matches(e) || mc.options.keyCommand.matches(e)) {
+			return false;
+		}
+		if (action != InputConstants.REPEAT) {
+			events.append("k ").append(k).append(action == InputConstants.PRESS ? " 1\n" : " 0\n");
+		}
+		return true;
+	}
+
+	public static boolean button(int button, int action) {
+		if (!ours()) {
+			return false;
+		}
+		events.append("m ").append(button).append(action == InputConstants.PRESS ? " 1\n" : " 0\n");
+		return true;
+	}
+
+	public static boolean scroll(double y) {
+		if (!ours()) {
+			return false;
+		}
+		events.append("w ").append(y).append('\n');
+		return true;
+	}
+
+	public static boolean move(double dx, double dy) {
+		if (!ours() || !Minecraft.getInstance().mouseHandler.isMouseGrabbed()) {
+			return false;
+		}
+		events.append("l ").append(dx).append(' ').append(dy).append('\n');
+		return true;
 	}
 
 	public static void frame(Minecraft mc) {
@@ -52,40 +131,37 @@ public final class Lurch {
 		if (socket == null) {
 			return;
 		}
-		if (p == null) {
+		if (p == null || mc.level == null) {
 			stop(mc, null);
 			return;
 		}
 		long now = System.nanoTime();
-		float frametime = (now - lastFrame) / 1e9f;
+		double frametime = (now - lastFrame) / 1e9;
 		lastFrame = now;
 		if (mc.isPaused()) {
 			return;
 		}
-		Options o = mc.options;
-		KeyMapping[] keys = {o.keyUp, o.keyDown, o.keyLeft, o.keyRight, o.keyJump, o.keyShift, o.keySprint};
-		boolean playing = mc.gui.screen() == null;
-		int held = 0, pressed = 0;
-		for (int i = 0; i < keys.length; i++) {
-			while (keys[i].consumeClick()) {
-				pressed |= BITS[i];
-			}
-			if (keys[i].isDown()) {
-				held |= BITS[i];
-			}
+		boolean nowOurs = ours();
+		if (capturing && !nowOurs) {
+			events.append("r\n");
 		}
-		if (!playing) {
-			held = pressed = 0;
-		}
+		capturing = nowOurs;
 		try {
+			StringBuilder msg = new StringBuilder();
 			if (placed == null || p.position().distanceToSqr(placed) > 1e-4) {
-				spawn(p);
+				msg.append(blocks(mc.level, p.blockPosition(), true));
+				msg.append("spawn ").append(p.getX()).append(' ').append(p.getY()).append(' ').append(p.getZ()).append(' ').append(Mth.wrapDegrees(p.getYRot())).append(' ').append(mc.level.getMinY()).append('\n');
+			} else {
+				msg.append(blocks(mc.level, p.blockPosition(), false));
 			}
-			out.write("cmd " + frametime + " " + p.getXRot() + " " + Mth.wrapDegrees(p.getYRot()) + " " + held + " " + pressed + "\n");
+			msg.append(events);
+			events.setLength(0);
+			msg.append("frame ").append(frametime).append(' ').append(mc.getWindow().getWidth()).append(' ').append(mc.getWindow().getHeight()).append('\n');
+			out.write(msg.toString());
 			out.flush();
 			String line = in.readLine();
 			if (line == null) {
-				throw new IOException("lurch-bridge closed the connection");
+				throw new IOException("lurch-mc closed the connection");
 			}
 			String[] r = line.split(" ");
 			double x = Double.parseDouble(r[1]), y = Double.parseDouble(r[2]), z = Double.parseDouble(r[3]);
@@ -94,17 +170,127 @@ public final class Lurch {
 			p.yo = y;
 			p.zo = z;
 			p.setDeltaMovement(Vec3.ZERO);
-			p.setOnGround(r[7].equals("1"));
+			p.setOnGround(r[13].equals("1"));
+			float viewPitch = Float.parseFloat(r[11]), viewYaw = Float.parseFloat(r[12]);
+			p.setXRot(viewPitch);
+			p.setYRot(viewYaw);
+			p.xRotO = viewPitch;
+			p.yRotO = viewYaw;
+			p.setYHeadRot(viewYaw);
 			placed = p.position();
 			eye = new Vec3(Double.parseDouble(r[4]), Double.parseDouble(r[5]), Double.parseDouble(r[6]));
+			pitch = Float.parseFloat(r[7]);
+			yaw = Float.parseFloat(r[8]);
+			roll = Float.parseFloat(r[9]);
+			fov = Float.parseFloat(r[10]);
+			readOverlay(mc);
 		} catch (IOException | RuntimeException e) {
 			stop(mc, e.toString());
 		}
 	}
 
-	private static void spawn(LocalPlayer p) throws IOException {
-		out.write("spawn " + p.getX() + " " + p.getY() + " " + p.getZ() + " " + Mth.wrapDegrees(p.getYRot()) + "\n");
-		placed = p.position();
+	/** The blocks near the player when they changed, or when asked, as lurch-mc's `blocks` message. */
+	private static String blocks(ClientLevel level, BlockPos at, boolean force) {
+		long now = System.nanoTime();
+		if (!force && now - scannedTime < SCAN_EVERY_NS && at.distManhattan(scannedAt) < RESCAN_DISTANCE) {
+			return "";
+		}
+		scannedTime = now;
+		scannedAt = at;
+		int x0 = at.getX() - HORIZONTAL - 1, y0 = at.getY() - BELOW - 1, z0 = at.getZ() - HORIZONTAL - 1;
+		int nx = 2 * HORIZONTAL + 3, ny = BELOW + ABOVE + 3, nz = nx;
+		boolean[] full = new boolean[nx * ny * nz];
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		for (int i = 0; i < nx; i++) {
+			for (int j = 0; j < ny; j++) {
+				for (int k = 0; k < nz; k++) {
+					pos.set(x0 + i, y0 + j, z0 + k);
+					BlockState s = level.getBlockState(pos);
+					full[(i * ny + j) * nz + k] = !s.isAir() && s.isCollisionShapeFullBlock(level, pos);
+				}
+			}
+		}
+		StringBuilder sb = new StringBuilder("blocks\n");
+		int[][] sides = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
+		for (int i = 1; i < nx - 1; i++) {
+			for (int j = 1; j < ny - 1; j++) {
+				for (int k = 1; k < nz - 1; k++) {
+					int x = x0 + i, y = y0 + j, z = z0 + k;
+					if (full[(i * ny + j) * nz + k]) {
+						int mask = 0;
+						for (int f = 0; f < 6; f++) {
+							int[] d = sides[f];
+							if (!full[((i + d[0]) * ny + j + d[1]) * nz + k + d[2]]) {
+								mask |= 1 << f;
+							}
+						}
+						if (mask != 0) {
+							sb.append("f ").append(x).append(' ').append(y).append(' ').append(z).append(' ').append(mask).append('\n');
+						}
+						continue;
+					}
+					pos.set(x, y, z);
+					BlockState s = level.getBlockState(pos);
+					if (s.isAir()) {
+						continue;
+					}
+					for (AABB b : s.getCollisionShape(level, pos).toAabbs()) {
+						sb.append("p ").append(x).append(' ').append(y).append(' ').append(z).append(' ')
+							.append(b.minX).append(' ').append(b.minY).append(' ').append(b.minZ).append(' ')
+							.append(b.maxX).append(' ').append(b.maxY).append(' ').append(b.maxZ).append('\n');
+					}
+				}
+			}
+		}
+		sb.append("end\n");
+		String s = sb.toString();
+		if (!force && s.equals(lastBlocks)) {
+			return "";
+		}
+		lastBlocks = s;
+		return s;
+	}
+
+	/** Copies lurch-mc's newest finished image into the overlay texture. */
+	private static void readOverlay(Minecraft mc) throws IOException {
+		if (shm == null || shm.capacity() < 20) {
+			try (FileChannel ch = FileChannel.open(SHM, StandardOpenOption.READ)) {
+				shm = ch.map(FileChannel.MapMode.READ_ONLY, 0, ch.size());
+				shm.order(ByteOrder.LITTLE_ENDIAN);
+			}
+			if (shm.capacity() < 20) {
+				return;
+			}
+		}
+		int seq = shm.getInt(4);
+		if ((seq & 1) != 0 || seq == overlaySeq) {
+			return;
+		}
+		int w = shm.getInt(8), h = shm.getInt(12), stride = shm.getInt(16);
+		if (shm.capacity() < 20L + (long) stride * h) {
+			shm = null;
+			return;
+		}
+		if (overlay == null || overlay.getPixels().getWidth() != w || overlay.getPixels().getHeight() != h) {
+			overlay = new DynamicTexture("lurch overlay", w, h, false);
+			mc.getTextureManager().register(OVERLAY, overlay);
+		}
+		long src = MemoryUtil.memAddress(shm) + 20, dst = ((NativeImageAccess) (Object) overlay.getPixels()).lurch$pixels();
+		for (int row = 0; row < h; row++) {
+			MemoryUtil.memCopy(src + (long) row * stride, dst + (long) row * w * 4, (long) w * 4);
+		}
+		if (shm.getInt(4) == seq) {
+			overlay.upload();
+			overlaySeq = seq;
+		}
+	}
+
+	public static void drawOverlay(GuiGraphicsExtractor g) {
+		if (!on() || overlay == null) {
+			return;
+		}
+		int w = overlay.getPixels().getWidth(), h = overlay.getPixels().getHeight();
+		g.blit(RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA, OVERLAY, 0, 0, 0f, 0f, g.guiWidth(), g.guiHeight(), w, h, w, h);
 	}
 
 	private static void start(Minecraft mc) {
@@ -114,15 +300,19 @@ public final class Lurch {
 		try {
 			socket = new Socket();
 			socket.setTcpNoDelay(true);
-			socket.setSoTimeout(1000);
+			socket.setSoTimeout(5000);
 			socket.connect(new InetSocketAddress("127.0.0.1", PORT), 1000);
 			in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
 			out = new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.US_ASCII);
 			placed = null;
+			shm = null;
+			capturing = false;
+			events.setLength(0);
 			lastFrame = System.nanoTime();
+			KeyMapping.releaseAll();
 			mc.player.sendSystemMessage(Component.literal("lurch: on"));
 		} catch (IOException e) {
-			stop(mc, "no lurch-bridge on 127.0.0.1:" + PORT + " (" + e.getMessage() + ")");
+			stop(mc, "no lurch-mc on 127.0.0.1:" + PORT + " (" + e.getMessage() + ")");
 		}
 	}
 

@@ -2,7 +2,16 @@
 	"required": true,
 	"package": "lurch.mc.mixin",
 	"compatibilityLevel": "JAVA_25",
-	"client": ["CameraMixin", "EntityMixin", "MinecraftMixin"],
+	"client": [
+		"CameraMixin",
+		"EntityMixin",
+		"GameRendererMixin",
+		"HudMixin",
+		"KeyboardMixin",
+		"MinecraftMixin",
+		"MouseMixin",
+		"NativeImageAccess"
+	],
 	"injectors": {
 		"defaultRequire": 1
 	}

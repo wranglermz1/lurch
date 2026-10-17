@@ -29,6 +29,9 @@ const ROPE_RADIUS: f32 = 1.5;
 pub enum Target {
     Window,
     Image { w: u32, h: u32 },
+    /// An image of only what the player holds and sees over the world (the viewmodel, the HUD
+    /// and the grapple's rope), on a transparent background: for another game's world under it.
+    Overlay { w: u32, h: u32 },
 }
 
 pub struct ViewPlugin {
@@ -74,7 +77,7 @@ impl Plugin for ViewPlugin {
     fn build(&self, app: &mut App) {
         common(app);
         app.insert_resource(ViewTarget(self.target))
-            .insert_resource(ClearColor(SKY))
+            .insert_resource(ClearColor(if matches!(self.target, Target::Overlay { .. }) { Color::NONE } else { SKY }))
             .insert_resource(GlobalAmbientLight::NONE)
             .init_resource::<DisplayInfo>()
             .add_systems(Startup, (setup, spawn_props, log_display))
@@ -183,7 +186,9 @@ pub fn map_mesh() -> Mesh {
 #[allow(clippy::too_many_arguments)] // Bevy's system parameters
 fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>, target: Res<ViewTarget>, pose: Res<Pose>, cfg: Res<Config>) {
     let material = StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 1.0, cull_mode: None, double_sided: true, ..default() };
-    commands.spawn((Mesh3d(meshes.add(map_mesh())), MeshMaterial3d(materials.add(material))));
+    if !matches!(target.0, Target::Overlay { .. }) {
+        commands.spawn((Mesh3d(meshes.add(map_mesh())), MeshMaterial3d(materials.add(material))));
+    }
     commands.spawn((
         DirectionalLight { shadow_maps_enabled: cfg.shadows, ..default() },
         Transform::default().looking_to(Vec3::new(0.55, -0.65, -0.52), Vec3::Y),
@@ -194,7 +199,7 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
     // One light cluster: the scene has no point or spot lights to sort into more, and each
     // cluster costs the frame.
     let mut camera = commands.spawn((Camera3d::default(), MainCamera, IsDefaultUiCamera, projection, transform, sky_light(&mut images), ClusterConfig::Single));
-    if let Target::Image { w, h } = target.0 {
+    if let Target::Image { w, h } | Target::Overlay { w, h } = target.0 {
         let mut image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
         image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let handle = images.add(image);
@@ -209,8 +214,8 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
 
 /// Each prop mesh with its albedo tinted by its vertex colours; the models' winding is
 /// clockwise.
-fn spawn_props(mut commands: Commands, props: Option<Res<Props>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
-    let Some(props) = props else { return };
+fn spawn_props(mut commands: Commands, props: Option<Res<Props>>, target: Res<ViewTarget>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
+    let Some(props) = props.filter(|_| !matches!(target.0, Target::Overlay { .. })) else { return };
     for m in &props.0 {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, m.positions.iter().map(|&p| pos(p).to_array()).collect::<Vec<_>>())

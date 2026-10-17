@@ -3,7 +3,7 @@
 	"id": "lurch",
 	"version": "${version}",
 	"name": "lurch",
-	"description": "Apex Legends movement from lurch-bridge, toggled with F7.",
+	"description": "Apex Legends movement, controls and viewmodel from lurch-mc, toggled with F7.",
 	"environment": "client",
 	"mixins": ["lurch.mixins.json"],
 	"depends": {
