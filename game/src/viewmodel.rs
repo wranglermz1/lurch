@@ -51,7 +51,7 @@ use crate::convert::{dir, pos, rot, vfov, INCH};
 use crate::data::{Data, GameData};
 use crate::sim::{FrameCues, Pose as EyePose, Sim};
 use crate::view::{sky_light, MainCamera, ViewImage};
-use crate::{common, Frame};
+use crate::{common, Frame, Respawn};
 
 pub const VIEWMODEL_LAYER: usize = 1;
 /// The viewmodel's FOV when the legend's settings do not give one: horizontal at 4:3, widened
@@ -217,7 +217,7 @@ impl Plugin for ViewmodelPlugin {
         app.add_plugins(MaterialPlugin::<ViewmodelMaterial>::default());
         app.init_resource::<VmEvents>().init_resource::<GrappleHand>().init_resource::<GrappleAnimOver>().add_systems(
             Update,
-            (spawn_meshes.run_if(resource_exists_and_changed::<Data>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera, game_time.run_if(resource_exists::<Vm>))
+            (spawn_meshes.run_if(resource_exists_and_changed::<Data>), respawned.run_if(resource_exists::<Vm>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera, game_time.run_if(resource_exists::<Vm>))
                 .chain()
                 .in_set(Frame::View),
         );
@@ -343,14 +343,29 @@ fn spawn_meshes(
     let d = &data.0;
     let arms = spawn(&d.arms.meshes, &d.arms.textures, &d.arms.constants, d.arms.bones.len(), false);
     let weapon = spawn(&d.weapon_meshes, &d.weapon_textures, &d.weapon_constants, d.weapon_bones.len(), true);
-    let class = data.0.legend.str("classActivityModifier").filter(|m| !m.is_empty()).map(str::to_string);
-    let mut state = Viewmodel::new(class.into_iter().collect(), data.0.times);
-    state.idles = lurch::anim::viewmodel::idles(data.0.weapon_class);
-    state.deploy(&data.0.anims, sim.pilot.player.sprinting, sim.view_now);
+    let (state, proxy) = drawn(d, &sim);
     info!("viewmodel: {} sequences, {} arms meshes, {} skinned on the CPU, {} weapon meshes", data.0.anims.seqs.len(), data.0.arms.meshes.len(), arms.cpu.len(), data.0.weapon_textures.len());
-    let mut proxy = Proxy::default();
-    proxy.poses = data.0.arms_anims.sk.default_poses();
     commands.insert_resource(Vm { state, proxy, arms, weapon, glowing, grapple_down: false });
+}
+
+/// The weapon just drawn and the arms at rest, as a pilot spawns with them.
+fn drawn(d: &GameData, sim: &Sim) -> (Viewmodel, Proxy) {
+    let class = d.legend.str("classActivityModifier").filter(|m| !m.is_empty()).map(str::to_string);
+    let mut state = Viewmodel::new(class.into_iter().collect(), d.times);
+    state.idles = lurch::anim::viewmodel::idles(d.weapon_class);
+    state.deploy(&d.anims, sim.pilot.player.sprinting, sim.view_now);
+    let mut proxy = Proxy::default();
+    proxy.poses = d.arms_anims.sk.default_poses();
+    (state, proxy)
+}
+
+/// A respawn draws the weapon afresh, so a mantle or a grapple cut short leaves nothing behind
+/// in the view.
+fn respawned(mut respawns: MessageReader<Respawn>, mut vm: ResMut<Vm>, data: Res<Data>, sim: Res<Sim>) {
+    if respawns.read().count() > 0 {
+        (vm.state, vm.proxy) = drawn(&data.0, &sim);
+        vm.grapple_down = false;
+    }
 }
 
 fn mul_point(m: &Mat, v: [f32; 3]) -> [f32; 3] {
