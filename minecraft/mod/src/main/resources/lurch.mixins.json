@@ -10,7 +10,8 @@
 		"KeyboardMixin",
 		"MinecraftMixin",
 		"MouseMixin",
-		"NativeImageAccess"
+		"NativeImageAccess",
+		"ServerMovementMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

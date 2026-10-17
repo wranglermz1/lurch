@@ -22,9 +22,15 @@ shell runs next to it as a second process.
     only when it changed.
   - It places the player and the camera from the host's answer.
   - It draws the overlay in place of Minecraft's hand, crosshair and hotbar.
+  - In singleplayer, the integrated server accepts lurch's moves as they are. Apex's mantles
+    pass through the corner of a ledge, and the server's movement checks would pull the player
+    back. The checks it skips are "moved too quickly", "moved wrongly" and colliding with a new
+    block, and only for the world's own player while lurch drives it.
 
-F7 toggles lurch. When anything else moves the player, such as `/tp`, a respawn or a server
-correction, lurch restarts there.
+F7 toggles lurch. When anything else moves the player, such as `/tp` or a respawn, lurch
+restarts there. The arms restart too, so a mantle cut short leaves nothing in the view. Steve
+is 0.6 blocks wide and lurch's hull 0.8, so a restart where the hull would be inside a block
+moves to the nearest clear place, up to half a block away.
 
 ## Running
 
@@ -45,8 +51,12 @@ shell's kill height out of reach above Minecraft's void.
 
 ## What is checked
 
-- `cargo test --release --bin lurch-mc` in `game/`: a block's open top face becomes floor
-  facing up at its height, and positions round-trip between the two coordinate systems.
+- `cargo test --release --bin lurch-mc` in `game/`:
+  - A block's open top face becomes floor facing up at its height, and positions round-trip
+    between the two coordinate systems.
+  - A spawn where Steve fits but the hull does not moves clear.
+- The shell's own tests (`game/tests/shell/sim.rs`): an empty first command after a spawn on a
+  floor of 40-unit tiles leaves the pilot free to move.
 - In a 26.3 dev client on a Superflat world (2026-10-17, Intel UHD 770, 75 Hz):
   - F7 connects.
   - The overlay draws the shell's HUD and the tactical panel. The grapple's cooldown counted
@@ -54,6 +64,10 @@ shell's kill height out of reach above Minecraft's void.
   - Minecraft's hand and hotbar are gone.
   - Minecraft held about 70 fps with a shell frame time of about 14 ms.
   - The user played it and confirmed it works.
+  - A mantle onto a block beside a 2-block wall: before the server fix, the server pulled the
+    player back mid-mantle, lurch restarted inside the block, and the camera flew in from the
+    cut-short mantle. After it, a trace (`LURCH_MC_TRACE`) of four mantles showed one spawn,
+    and the player moved after each. The user confirmed it, superglides included.
 - The earlier flat-floor bridge (see git history) checked walking, sprinting, jumping, sliding
   and `/tp` against lurch's own numbers. The host runs the same simulation.
 
@@ -72,4 +86,5 @@ world, and block collision edge cases such as seams and partial blocks.
 - Water, ladders, ice, soul sand and other Minecraft-only surfaces. Every collision box is
   solid ground.
 - Fall damage: the server still counts falls, so use Creative.
-- Multiplayer servers. Their movement checks are untested.
+- Multiplayer servers. Their movement checks would pull the player back from mantles; only the
+  integrated server's are skipped.

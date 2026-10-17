@@ -21,6 +21,10 @@
 //! header: `LMC1`, a sequence number that is odd while the image is written, then the width,
 //! height and stride, all little-endian u32.
 //!
+//! A spawn where the hull would start inside a block moves to the nearest clear place, up to
+//! half a block away. `LURCH_MC_TRACE=1` prints every spawn and every frame's answer, with the
+//! pilot's state, to stderr.
+//!
 //! Not modelled: sounds, the shell's menus, the test map's respawn binds (dropped here).
 
 use std::fs::File;
@@ -46,6 +50,8 @@ use bevy::time::TimeUpdateStrategy;
 use bevy::window::ExitCondition;
 use bevy::winit::WinitPlugin;
 use lurch::sim::math::V3;
+use lurch::sim::pilot;
+use lurch::sim::{HullQuery, Tracer};
 use lurch::world::Tri;
 use lurch_game::binds::{Action, Input};
 use lurch_game::cmd::{clamp_frametime, CmdBuilder, ScriptFrametime};
@@ -53,7 +59,7 @@ use lurch_game::convar::{self, ConVars};
 use lurch_game::convert::vfov;
 use lurch_game::data::{self, Data};
 use lurch_game::rui::Preloaded;
-use lurch_game::sim::{CollisionWorld, Map, Pose, Sim};
+use lurch_game::sim::{CollisionWorld, Map, Pose, Sim, DIST_EPSILON};
 use lurch_game::view::{Target, ViewImage};
 use lurch_game::{args, install, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
 
@@ -66,6 +72,8 @@ const UNITS_PER_BLOCK: f64 = 40.0;
 /// Below the world's floor, so the shell's kill height (`sim::KILL_Z`) is never reached above
 /// Minecraft's own void.
 const BASE_BELOW_FLOOR: f64 = 64.0;
+/// How far a spawn is moved to get clear of a block, in units: half a block.
+const UNSTICK_REACH: u32 = 20;
 
 /// Where lurch's origin is in Minecraft.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -125,6 +133,22 @@ fn tris(blocks: &[Block], base: Base) -> Vec<Tri> {
         }
     }
     out
+}
+
+/// The nearest place to `origin` where a standing hull spawns clear of the blocks: Steve is
+/// narrower than the hull (0.6 blocks against 0.8), so where he stands the hull can be inside
+/// a block, and a hull that starts inside one never moves.
+fn free(world: &mut CollisionWorld, origin: V3) -> V3 {
+    let p = pilot::spawn(origin);
+    let mut clear = |o: V3| {
+        let o = [o[0], o[1], o[2] + DIST_EPSILON];
+        !world.hull(&HullQuery { start: o, end: o, mins: p.hull_min, maxs: p.hull_max, mask: p.mask }).startsolid
+    };
+    const DIRS: [V3; 10] = [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0], [0.0, 0.0, -1.0]];
+    if clear(origin) {
+        return origin;
+    }
+    (1..=UNSTICK_REACH).flat_map(|r| DIRS.map(|d| [origin[0] + d[0] * r as f32, origin[1] + d[1] * r as f32, origin[2] + d[2] * r as f32])).find(|&o| clear(o)).unwrap_or(origin)
 }
 
 /// Bevy's key for an SDL scancode.
@@ -248,6 +272,7 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
     let mut lines = BufReader::new(stream).lines();
     let mut base = Base::default();
     let mut blocks = Vec::new();
+    let trace = std::env::var_os("LURCH_MC_TRACE").is_some();
     let bound = { let binds = app.world().resource::<Config>().binds.clone(); move |i| binds.get(i) };
     app.world_mut().resource_mut::<CmdBuilder>().release_all();
     while let Some(line) = lines.next() {
@@ -272,11 +297,16 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
             Some("l") => drop(world.write_message(MouseMotion { delta: Vec2::new(arg(&mut w)?, arg(&mut w)?) })),
             Some("r") => world.resource_mut::<CmdBuilder>().release_all(),
             Some("spawn") => {
+                if trace {
+                    eprintln!("trace {line}");
+                }
                 let p: [f64; 3] = [arg(&mut w)?, arg(&mut w)?, arg(&mut w)?];
                 let (yaw, floor): (f32, f64) = (arg(&mut w)?, arg(&mut w)?);
                 base = Base([p[0].floor(), floor - BASE_BELOW_FLOOR, p[2].floor()]);
-                world.write_message(Respawn::At { origin: base.in_lurch(p), yaw: flip_yaw(yaw) });
-                world.resource_mut::<Map>().0 = CollisionWorld::from_tris(tris(&blocks, base));
+                let mut map = CollisionWorld::from_tris(tris(&blocks, base));
+                let origin = free(&mut map, base.in_lurch(p));
+                world.resource_mut::<Map>().0 = map;
+                world.write_message(Respawn::At { origin, yaw: flip_yaw(yaw) });
             }
             Some("blocks") => {
                 blocks.clear();
@@ -301,7 +331,13 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
                     world.resource_mut::<Overlay>().size = (width, height);
                 }
                 app.update();
-                writeln!(out, "{}", pose(app.world(), base))?;
+                let answer = pose(app.world(), base);
+                if trace {
+                    let sim = app.world().resource::<Sim>();
+                    let p = &sim.pilot.player;
+                    eprintln!("trace {answer} | origin {:?} movetype {} traversal {} {} view_entity {} {} ground {:?}", sim.pilot.origin, p.movetype, p.traversal_state, p.traversal_type, p.view_entity, p.view_entity_blend, p.ground);
+                }
+                writeln!(out, "{answer}")?;
             }
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown message: {line:?}"))),
         }
@@ -385,6 +421,18 @@ mod tests {
         let p = [10.5, -60.0, -4.25];
         assert_eq!(base.in_mc(base.in_lurch(p)), p);
         assert_eq!(flip_yaw(flip_yaw(30.0)), 30.0);
+    }
+
+    #[test]
+    fn a_spawn_where_steve_fits_but_the_hull_does_not_moves_clear() {
+        let base = Base([0.0, -128.0, 0.0]);
+        let mut blocks: Vec<Block> = (-3..3).flat_map(|x| (-3..3).map(move |z| Block::Full([x, -61, z], 1 << 3))).collect();
+        blocks.push(Block::Full([1, -60, 0], 0x3f));
+        let mut world = CollisionWorld::from_tris(tris(&blocks, base));
+        let steve = base.in_lurch([0.65, -60.0, 0.5]);
+        let o = free(&mut world, steve);
+        assert_ne!(o, steve);
+        assert!(base.in_mc(o)[0] <= 0.6 + 1e-6, "{:?}", base.in_mc(o));
     }
 }
 

@@ -13,6 +13,7 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.UUID;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import lurch.mc.mixin.NativeImageAccess;
@@ -66,8 +67,15 @@ public final class Lurch {
 	private static DynamicTexture overlay;
 	private static int overlaySeq;
 
+	/** The player lurch drives, read by the integrated server's thread; null while lurch is off. */
+	private static volatile UUID driven;
+
 	public static boolean on() {
 		return socket != null;
+	}
+
+	public static boolean drives(UUID player) {
+		return player.equals(driven);
 	}
 
 	public static boolean moves(Object entity) {
@@ -310,6 +318,7 @@ public final class Lurch {
 			events.setLength(0);
 			lastFrame = System.nanoTime();
 			KeyMapping.releaseAll();
+			driven = mc.player.getUUID();
 			mc.player.sendSystemMessage(Component.literal("lurch: on"));
 		} catch (IOException e) {
 			stop(mc, "no lurch-mc on 127.0.0.1:" + PORT + " (" + e.getMessage() + ")");
@@ -324,6 +333,7 @@ public final class Lurch {
 		} catch (IOException ignored) {
 		}
 		socket = null;
+		driven = null;
 		in = null;
 		out = null;
 		eye = null;
