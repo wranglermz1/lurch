@@ -152,6 +152,21 @@ struct ShadingConstants {
     game_time: f32,
     emissive_scale: f32,
     present: u32,
+    /// The host game's light on the arms, when another game's world is under them
+    /// (`HostLight`): its colour, and 1 in `w` to use it in place of the shell's lights.
+    host_light: Vec4,
+    host_dir0: Vec3,
+    host_dir1: Vec3,
+}
+
+/// Another game's light where the player stands, for the arms drawn over its world: the colour
+/// its own first-person hand is multiplied by, and its two fixed diffuse directions, in Bevy's
+/// world space. Shaded with it, the arms take the host's light as its hand does, gamma-space
+/// diffuse with no specular, and the shell's sun and sky light leave them.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct HostLight {
+    pub color: Vec3,
+    pub dirs: [Vec3; 2],
 }
 
 impl MaterialExtension for GameShading {
@@ -217,7 +232,7 @@ impl Plugin for ViewmodelPlugin {
         app.add_plugins(MaterialPlugin::<ViewmodelMaterial>::default());
         app.init_resource::<VmEvents>().init_resource::<GrappleHand>().init_resource::<GrappleAnimOver>().add_systems(
             Update,
-            (spawn_meshes.run_if(resource_exists_and_changed::<Data>), respawned.run_if(resource_exists::<Vm>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera, game_time.run_if(resource_exists::<Vm>))
+            (spawn_meshes.run_if(resource_exists_and_changed::<Data>), respawned.run_if(resource_exists::<Vm>), host_light.run_if(resource_exists::<HostLight>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera, game_time.run_if(resource_exists::<Vm>))
                 .chain()
                 .in_set(Frame::View),
         );
@@ -608,6 +623,14 @@ fn joint(m: &Mat) -> Affine3A {
 }
 
 /// `c_gameTime` for the emissive's scroll: the view's clock.
+fn host_light(light: Res<HostLight>, mut materials: ResMut<Assets<ViewmodelMaterial>>) {
+    for (_, m) in materials.iter_mut() {
+        let c = &mut m.extension.constants;
+        c.host_light = light.color.extend(1.0);
+        [c.host_dir0, c.host_dir1] = light.dirs;
+    }
+}
+
 fn game_time(vm: Res<Vm>, sim: Res<Sim>, mut materials: ResMut<Assets<ViewmodelMaterial>>) {
     for h in &vm.glowing {
         if let Some(mut m) = materials.get_mut(h) {

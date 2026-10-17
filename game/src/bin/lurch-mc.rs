@@ -12,6 +12,8 @@
 //! - `blocks`, lines `f X Y Z MASK` (a full block and which of its faces are open: bits west,
 //!   east, down, up, north, south) and `p X Y Z X0 Y0 Z0 X1 Y1 Z1` (a box of any other shape, in
 //!   the block's coordinates), then `end`: every block near the player.
+//! - `light R G B NETHER`: the lightmap colour Minecraft's own hand would be multiplied by where
+//!   the player's eye is, gamma-encoded in 0 to 1, and 1 in the Nether's cardinal lighting.
 //! - `frame FRAMETIME W H`: one frame at Minecraft's size, answered with
 //!   `pose X Y Z EX EY EZ PITCH YAW ROLL FOV VPITCH VYAW GROUND`: the feet, the camera, its angles
 //!   and vertical FOV in degrees, and the view angles the player aims with.
@@ -61,6 +63,7 @@ use lurch_game::data::{self, Data};
 use lurch_game::rui::Preloaded;
 use lurch_game::sim::{CollisionWorld, Map, Pose, Sim, DIST_EPSILON};
 use lurch_game::view::{Target, ViewImage};
+use lurch_game::viewmodel::HostLight;
 use lurch_game::{args, install, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
 
 const ADDR: &str = "127.0.0.1:25600";
@@ -149,6 +152,14 @@ fn free(world: &mut CollisionWorld, origin: V3) -> V3 {
         return origin;
     }
     (1..=UNSTICK_REACH).flat_map(|r| DIRS.map(|d| [origin[0] + d[0] * r as f32, origin[1] + d[1] * r as f32, origin[2] + d[2] * r as f32])).find(|&o| clear(o)).unwrap_or(origin)
+}
+
+/// Minecraft's two diffuse directions for entities in a level (`Lighting`), turned into Bevy's
+/// world space, where Minecraft's (x, y, z) is (z, y, -x).
+fn entity_light(nether: bool) -> [Vec3; 2] {
+    let bevy = |x: f32, y: f32, z: f32| Vec3::new(z, y, -x).normalize();
+    let below = if nether { -1.0 } else { 1.0 };
+    [bevy(0.2, 1.0, -0.7), bevy(-0.2, below, 0.7)]
 }
 
 /// Bevy's key for an SDL scancode.
@@ -296,6 +307,11 @@ fn serve(app: &mut App, stream: &std::net::TcpStream) -> io::Result<()> {
             Some("w") => drop(world.write_message(MouseWheel { unit: MouseScrollUnit::Line, x: 0.0, y: arg(&mut w)?, window: Entity::PLACEHOLDER, phase: TouchPhase::Moved })),
             Some("l") => drop(world.write_message(MouseMotion { delta: Vec2::new(arg(&mut w)?, arg(&mut w)?) })),
             Some("r") => world.resource_mut::<CmdBuilder>().release_all(),
+            Some("light") => {
+                let color = Vec3::new(arg(&mut w)?, arg(&mut w)?, arg(&mut w)?);
+                let nether: u8 = arg(&mut w)?;
+                world.insert_resource(HostLight { color, dirs: entity_light(nether == 1) });
+            }
             Some("spawn") => {
                 if trace {
                     eprintln!("trace {line}");

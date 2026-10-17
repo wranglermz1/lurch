@@ -24,14 +24,18 @@ import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.state.LightmapRenderState;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.CardinalLighting;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Vector3fc;
 import org.lwjgl.system.MemoryUtil;
 
 /**
@@ -62,6 +66,11 @@ public final class Lurch {
 	/** The camera lurch asks for; null while lurch is off. */
 	public static Vec3 eye;
 	public static float pitch, yaw, roll, fov;
+
+	/** The lightmap's inputs as Minecraft last rendered it, and the last light sent. */
+	private static float skyFactor, blockFactor, nightVision, darkness, bossDarkening, brightness;
+	private static final float[] blockTint = {1, 1, 1}, skyColor = {1, 1, 1}, ambient = new float[3], nightVisionColor = new float[3];
+	private static String lastLight = "";
 
 	private static MappedByteBuffer shm;
 	private static DynamicTexture overlay;
@@ -162,6 +171,11 @@ public final class Lurch {
 			} else {
 				msg.append(blocks(mc.level, p.blockPosition(), false));
 			}
+			String light = light(mc.level, p);
+			if (!light.equals(lastLight)) {
+				msg.append(light);
+				lastLight = light;
+			}
 			msg.append(events);
 			events.setLength(0);
 			msg.append("frame ").append(frametime).append(' ').append(mc.getWindow().getWidth()).append(' ').append(mc.getWindow().getHeight()).append('\n');
@@ -195,6 +209,62 @@ public final class Lurch {
 		} catch (IOException | RuntimeException e) {
 			stop(mc, e.toString());
 		}
+	}
+
+	public static void lightmap(LightmapRenderState s) {
+		skyFactor = s.skyFactor;
+		blockFactor = s.blockFactor;
+		nightVision = s.nightVisionEffectIntensity;
+		darkness = s.darknessEffectScale;
+		bossDarkening = s.bossOverlayWorldDarkening;
+		brightness = s.brightness;
+		copy(s.blockLightTint, blockTint);
+		copy(s.skyLightColor, skyColor);
+		copy(s.ambientColor, ambient);
+		copy(s.nightVisionColor, nightVisionColor);
+	}
+
+	private static void copy(Vector3fc v, float[] to) {
+		if (v != null) {
+			to[0] = v.x();
+			to[1] = v.y();
+			to[2] = v.z();
+		}
+	}
+
+	private static float lightBrightness(float level) {
+		return level / (4f - 3f * level);
+	}
+
+	/**
+	 * The lightmap texel Minecraft's hand is multiplied by, for the light at the player's eye:
+	 * `lightmap.fsh` on the CPU, and the eye's light as `EntityRenderer.getPackedLightCoords`
+	 * reads it.
+	 */
+	private static String light(ClientLevel level, LocalPlayer p) {
+		BlockPos eyeAt = BlockPos.containing(p.getEyePosition());
+		float block = (p.isOnFire() ? 15 : level.getBrightness(LightLayer.BLOCK, eyeAt)) / 15f;
+		float sky = level.getBrightness(LightLayer.SKY, eyeAt) / 15f;
+		float blockBrightness = lightBrightness(block) * blockFactor, skyBrightness = lightBrightness(sky) * skyFactor;
+		float mix = 0.9f * (2f * block - 1f) * (2f * block - 1f);
+		float[] boss = {0.7f, 0.6f, 0.6f};
+		float[] c = new float[3];
+		for (int i = 0; i < 3; i++) {
+			float v = Math.max(ambient[i], nightVisionColor[i] * nightVision);
+			v += skyColor[i] * skyBrightness;
+			v += (blockTint[i] + (1f - blockTint[i]) * mix) * blockBrightness;
+			v = v + (v * boss[i] - v) * bossDarkening;
+			c[i] = Mth.clamp(v - darkness, 0f, 1f);
+		}
+		float max = Math.max(Math.max(c[0], c[1]), c[2]);
+		float scaled = 1f - (1f - max) * (1f - max) * (1f - max) * (1f - max);
+		StringBuilder sb = new StringBuilder("light");
+		for (int i = 0; i < 3; i++) {
+			float notGamma = max > 0f ? c[i] * (scaled / max) : 0f;
+			sb.append(' ').append(c[i] + (notGamma - c[i]) * brightness);
+		}
+		boolean nether = level.dimensionType().cardinalLightType() == CardinalLighting.Type.NETHER;
+		return sb.append(nether ? " 1\n" : " 0\n").toString();
 	}
 
 	/** The blocks near the player when they changed, or when asked, as lurch-mc's `blocks` message. */
@@ -313,6 +383,7 @@ public final class Lurch {
 			in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
 			out = new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.US_ASCII);
 			placed = null;
+			lastLight = "";
 			shm = null;
 			capturing = false;
 			events.setLength(0);
