@@ -387,3 +387,4 @@ mod tests {
         assert_eq!(flip_yaw(flip_yaw(30.0)), 30.0);
     }
 }
+

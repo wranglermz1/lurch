@@ -129,8 +129,13 @@ pub fn without_view(p: &Pilot) -> Pilot {
     p
 }
 
+/// Source's DIST_EPSILON: a trace leaves a hull resting this far above the surface it stops on.
+/// A pilot spawned exactly touching the floor starts every trace solid, and after a first
+/// command with no input it hangs in the air for good, so it spawns where a trace would leave it.
+pub const DIST_EPSILON: f32 = 0.03125;
+
 fn spawn_pilot(origin: V3, yaw: f32, oldbuttons: u32) -> Pilot {
-    let mut p = Pilot::new(origin).with_oldbuttons(oldbuttons);
+    let mut p = Pilot::new([origin[0], origin[1], origin[2] + DIST_EPSILON]).with_oldbuttons(oldbuttons);
     p.player.view_angles = [0.0, yaw, 0.0];
     p
 }

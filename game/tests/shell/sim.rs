@@ -9,7 +9,7 @@ use lurch::sim::setup::{command_seed, UserCmd};
 use lurch::testmap;
 use lurch::world::World as CollisionWorld;
 use lurch_game::cmd::{CmdBuilder, CmdLog, CmdQueue, CmdPlugin};
-use lurch_game::sim::{without_view, History, Pose, Sim, SimPlugin, Spots, HISTORY};
+use lurch_game::sim::{without_view, History, Map, Pose, Sim, SimPlugin, Spots, DIST_EPSILON, HISTORY};
 use lurch_game::{Config, Paused, Respawn};
 
 use super::input::{down, motion, up};
@@ -59,8 +59,8 @@ pub struct Reference {
 impl Reference {
     pub fn at(spot: &str) -> Self {
         let map = testmap::build();
-        let origin = map.spot(spot).origin;
-        Reference { pilot: Pilot::new(origin), clock: Clock::default(), world: map.world() }
+        let o = map.spot(spot).origin;
+        Reference { pilot: Pilot::new([o[0], o[1], o[2] + DIST_EPSILON]), clock: Clock::default(), world: map.world() }
     }
 
     pub fn frame(&mut self, cmds: &[UserCmd], view_each: bool) {
@@ -157,6 +157,27 @@ fn history_replays_bit_for_bit() {
     }
     assert_eq!(format!("{:?}", without_view(&pilot)), format!("{:?}", without_view(&sim(&app).pilot)));
     assert_eq!(clock, sim(&app).clock);
+}
+
+/// A floor of 40-unit tiles, as Minecraft's blocks make one: a hull exactly touching such a tile
+/// starts every trace solid.
+#[test]
+fn an_empty_first_command_after_a_spawn_leaves_the_pilot_free_to_move() {
+    let mut app = sim_app(Config::default());
+    let tile = |x: f32, y: f32| [[[x, y, 0.0], [x + 40.0, y, 0.0], [x + 40.0, y + 40.0, 0.0]], [[x, y, 0.0], [x + 40.0, y + 40.0, 0.0], [x, y + 40.0, 0.0]]];
+    let tris = (-20..20).flat_map(|i| (-20..20).flat_map(move |j| tile(i as f32 * 40.0, j as f32 * 40.0))).collect();
+    app.world_mut().resource_mut::<Map>().0 = CollisionWorld::from_tris(tris);
+    app.world_mut().write_message(Respawn::At { origin: [20.0, 20.0, 0.0], yaw: 0.0 });
+    for _ in 0..3 {
+        app.update();
+    }
+    let start = sim(&app).pilot.origin;
+    down(&mut app, KeyCode::KeyW);
+    for _ in 0..50 {
+        app.update();
+    }
+    let o = sim(&app).pilot.origin;
+    assert!((o[0] - start[0]).hypot(o[1] - start[1]) > 10.0, "{start:?} to {o:?}");
 }
 
 #[test]
