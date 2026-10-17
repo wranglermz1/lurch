@@ -35,9 +35,18 @@ coordinates small.
   floor, with the eye above the feet.
 - By hand over TCP (2026-10-17): sprinting east gave 7 blocks/s, a jump rose 0.85 blocks, and a
   round trip took 33 µs.
-- The mod compiles against 26.3. Its mixin targets (`Minecraft.renderFrame`, `Entity.move`,
-  `Camera.update` after `alignWithEntity`) were matched to the 26.3 jar with `javap`. It has not
-  been run in a client yet.
+- In a 26.3 dev client on a Superflat world (2026-10-17, 75 fps, keys sent with XTest, positions
+  read from F3 screenshots):
+  - Walking goes along the facing yaw: dx/dz 1.082 measured at yaw -47.2, 1.081 predicted.
+  - 1 s of W, then 0.5 s of coasting, covered 5.15 and 5.19 blocks. The bridge alone gives 5.17
+    for the same input at 75 fps. One run covered 6.79, which matches W held for 1.3 s.
+  - Sprint, jump (1.34 blocks up at 0.28 s) and a crouch slide all ran, and the player landed
+    back on the floor each time.
+  - `/tp` while lurch drives moves the player, and lurch restarts at the new spot. F7 off gives
+    vanilla movement back.
+  - The integrated server logged no "moved too quickly" or "moved wrongly".
+- The camera was checked by eye only. Nothing compares the first-person eye with lurch's eye
+  position.
 
 ## Not modelled
 
