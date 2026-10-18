@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import lurch.mc.mixin.EntityStepAccess;
 import lurch.mc.mixin.NativeImageAccess;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -221,6 +222,18 @@ public final class Lurch {
 		}
 		events.append("m ").append(button).append(action == InputConstants.PRESS ? " 1\n" : " 0\n");
 		return true;
+	}
+
+	/**
+	 * One of lurch's footsteps (`step` in lurch-mc's protocol): Minecraft's own step sound for the
+	 * block under the player, as walking plays it (`Entity.walkingStepSound`).
+	 */
+	private static void step(LocalPlayer p) {
+		BlockPos pos = p.getOnPosLegacy();
+		BlockState s = p.level().getBlockState(pos);
+		if (!s.isAir()) {
+			((EntityStepAccess) p).lurch$walkingStepSound(pos, s);
+		}
 	}
 
 	/**
@@ -485,12 +498,14 @@ public final class Lurch {
 			out.flush();
 			String line = in.readLine();
 			List<String[]> punches = new ArrayList<>();
+			int steps = 0;
 			while (line != null && !line.startsWith("pose ")) {
 				String[] r = line.split(" ");
 				switch (r[0]) {
 					case "hud" -> layout(r);
 					case "rect" -> rects.put(r[1], r[2].equals("-") ? null : new float[] {Float.parseFloat(r[2]), Float.parseFloat(r[3]), Float.parseFloat(r[4]), Float.parseFloat(r[5])});
 					case "punch" -> punches.add(r);
+					case "step" -> steps++;
 					case "choices" -> choices.put(r[1], List.of(Arrays.copyOfRange(r, 2, r.length)));
 					case "config" -> hostOptions.put(r[1], r[2]);
 					default -> {
@@ -528,6 +543,9 @@ public final class Lurch {
 			fov = Float.parseFloat(r[10]);
 			for (String[] blow : punches) {
 				punch(mc, blow);
+			}
+			for (int i = 0; i < steps; i++) {
+				step(p);
 			}
 			readOverlay(mc);
 		} catch (IOException | RuntimeException e) {

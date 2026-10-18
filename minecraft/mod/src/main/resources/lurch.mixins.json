@@ -6,6 +6,7 @@
 		"CameraMixin",
 		"ClientLevelMixin",
 		"EntityMixin",
+		"EntityStepAccess",
 		"GameRendererMixin",
 		"HudMixin",
 		"KeyboardMixin",

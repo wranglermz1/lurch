@@ -141,6 +141,18 @@ const ZIPLINE_DETACH: &str = "player_zipline_detach";
 const GRAPPLE_IMPACT: &str = "Default.Grapple.Impact_1P_vs_3P";
 const GRAPPLE_EXTRACT: &str = "Default.Grapple.Extract_1P_vs_3P";
 
+/// What the local player's blow sounds like on a body (`flesh`) or anything else. The fists'
+/// impact table `melee_human` is loaded at run time and not read: these are the game's sound
+/// events of its names, flesh's and the `default` surface's, and an heirloom's own.
+pub fn melee_impact(heirloom: Option<&crate::assets::Heirloom>, flesh: bool) -> &'static str {
+    match (heirloom, flesh) {
+        (Some(h), true) => h.flesh_impact,
+        (Some(h), false) => h.wall_impact,
+        (None, true) => "player_melee_impact_flesh_1p_vs_3p",
+        (None, false) => "Player_Melee_Impact_Default_1p_vs_3p",
+    }
+}
+
 /// The script callbacks the first-person proxy's mantles call that play a sound, and the sound
 /// (the install's `cl_player.gnut`, SetupFirstPersonProxyEvents: EmitSoundOnEntity on the proxy).
 const CALLBACK_SOUNDS: &[(&str, &str)] = &[

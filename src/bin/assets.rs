@@ -86,8 +86,11 @@ fn main() {
         return;
     }
     if args.get(1).map(String::as_str) == Some("--seqs") {
+        let heirloom = lurch::assets::HEIRLOOMS.iter().find(|h| h.viewmodel.eq_ignore_ascii_case(&args[2]));
+        let own = heirloom.map(|h| inst.pak(h.pak).unwrap());
+        let pak = own.as_ref().unwrap_or(pak);
         let mut m = model::load(pak, install, &args[2]).unwrap();
-        if let Some(h) = lurch::assets::HEIRLOOMS.iter().find(|h| h.viewmodel.eq_ignore_ascii_case(&args[2])) {
+        if let Some(h) = heirloom {
             m.rigs.push(model::load_rig(pak, h.rig).unwrap());
         }
         let anims = lurch::anim::model::ModelAnims::new(&m);

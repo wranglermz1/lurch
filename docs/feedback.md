@@ -262,6 +262,20 @@ runs per command, in movement's order:
   (`0xa44520`) does when its third argument is set; the switch back from a melee weapon
   (`0x7d01b7`, weapon states 4 and 5) sets it. Its client events play its sounds
   (`Mvmt_Melee_Elbow_1P`, `effort_melee_1p`).
+- A blow that hits (`sh_melee.gnut`) dispatches the impact effects of the melee weapon's
+  `impact_effect_table`, `melee_human` for the fists and every heirloom's settings in this
+  install (`melee_knife` for Octane's). The table is loaded at run time and not read. Ours
+  plays the game's events of the matching names at the hit (`lurch::sound::melee_impact`):
+  with the fists `player_melee_impact_flesh_1p_vs_3p` on a body, else
+  `Player_Melee_Impact_Default_1p_vs_3p`; with an heirloom its own `Victim_*` and `Generic_*`
+  events (`Kunai`, `Axe`, `Baton`, `ButterflyKnife`; `lurch::assets::Heirloom`). All resolve
+  through the game's Miles; that any table names them is not checked.
+- The heirlooms' sequences name their swings with `AE_CL_PLAYSOUND` in full (axe, baton,
+  Octane's knife), except the kunai's swipe and stab: `AE_CL_PLAYSOUND_FOR_TYPE`
+  `Mvmt_Melee_Kunai_Swipe_1P` and `_Stab_1P`, which only Wraith's type has. The shell plays
+  a type-named sound the legend has none of as the heirloom owner's (`Heirloom::owner`), so
+  the kunai swings for every legend; every other type-named sound of the four heirlooms
+  resolves for Pathfinder (checked 2026-10-18).
 - Player events reach each child of the player (`0x7e84e0`): 6 and 9 → `ACT_VM_JUMP`, 7 →
   `ACT_VM_DOUBLEJUMP`, 11–14 → `ACT_VM_LAND`, `_LOW`, `_MEDIUM`, `_HIGH`, on overlay layer 1:
   rate 1, weight 1, cycle 0, order 1, fading in and out over the sequence's own fade times.

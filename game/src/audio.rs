@@ -1,6 +1,6 @@
 //! Movement sound through the game's own Miles (`crate::miles`): each command's cues and the
-//! state it left, and the viewmodel's sequence events, go through the sound layer
-//! (`lurch::sound::Sfx`), which names what plays; the listener follows the camera, as the
+//! state it left, the viewmodel's sequence events and each punch's blow go through the sound
+//! layer (`lurch::sound::Sfx`), which names what plays; the listener follows the camera, as the
 //! oracle's 0x956720 sets it from the view each frame. The menus' sounds (`MenuSound`) play by
 //! name.
 //!
@@ -15,12 +15,13 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
+use lurch::sim::cue::Cue;
 use lurch::sim::math::V3;
 use lurch::sound::{Mixer, Sfx, Surfaces};
 
 use crate::data::Data;
 use crate::miles::Miles;
-use crate::sim::{FrameCues, Map, Pose as EyePose};
+use crate::sim::{FrameCues, Map, MeleeAttacks, Pose as EyePose};
 use crate::viewmodel::{Animate, VmEvents};
 use crate::{common, Config, Frame, MenuSound};
 
@@ -42,6 +43,11 @@ pub const CONTROLLERS: [(&CStr, f32); 8] = [
 ];
 /// Instances kept per sound name, so a loop can be stopped.
 const KEPT: usize = 4;
+
+/// The host plays the footsteps itself (the Minecraft host, its own block's), so the shell
+/// leaves the footstep cues silent.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct HostSteps;
 
 #[derive(Resource)]
 struct Opening(Mutex<Receiver<Result<Miles, String>>>);
@@ -116,11 +122,19 @@ impl Surfaces for DefaultSurface {
 struct Out<'a> {
     miles: &'a Miles,
     playing: &'a mut HashMap<String, Vec<u64>>,
+    /// The legend's `footstep_type` and an heirloom owner's: a name of the legend's type the
+    /// game has no sound for is tried as the owner's, so the kunai swings for any legend.
+    retype: Option<(&'a str, &'a str)>,
 }
 
 impl Mixer for Out<'_> {
     fn play(&mut self, name: &str, at: V3) {
-        if let Some(id) = self.miles.play(name, at, 1.0) {
+        let id = self.miles.play(name, at, 1.0).or_else(|| {
+            let (legend, owner) = self.retype?;
+            let rest = name.strip_prefix(legend)?.strip_prefix('.')?;
+            self.miles.play(&format!("{owner}.{rest}"), at, 1.0)
+        });
+        if let Some(id) = id {
             let ids = self.playing.entry(name.to_string()).or_default();
             if ids.len() == KEPT {
                 ids.remove(0);
@@ -147,7 +161,7 @@ fn forward_up(a: V3) -> (V3, V3) {
 }
 
 #[allow(clippy::too_many_arguments)] // Bevy's system parameters
-fn play(mut audio: ResMut<Audio>, data: Option<Res<Data>>, steps: Res<FrameCues>, eye: Res<EyePose>, vm: Option<ResMut<VmEvents>>, mut map: ResMut<Map>, mut menu: MessageReader<MenuSound>) {
+fn play(mut audio: ResMut<Audio>, data: Option<Res<Data>>, steps: Res<FrameCues>, eye: Res<EyePose>, vm: Option<ResMut<VmEvents>>, mut map: ResMut<Map>, mut menu: MessageReader<MenuSound>, (attacks, host_steps, cfg): (Res<MeleeAttacks>, Option<Res<HostSteps>>, Res<Config>)) {
     let audio = &mut *audio;
     if audio.sfx.is_none() {
         let Some(data) = data else { return };
@@ -164,12 +178,20 @@ fn play(mut audio: ResMut<Audio>, data: Option<Res<Data>>, steps: Res<FrameCues>
         }
     }
     let sfx = audio.sfx.as_mut().unwrap();
-    let mut out = Out { miles: &audio.miles, playing: &mut audio.playing };
+    let legend = sfx.sounds.footstep_type.clone();
+    let mut out = Out { miles: &audio.miles, playing: &mut audio.playing, retype: cfg.heirloom.map(|h| (legend.as_str(), h.owner)) };
     for step in &steps.0 {
         for cue in &step.cues {
+            if host_steps.is_some() && matches!(cue, Cue::Footstep { .. }) {
+                continue;
+            }
             sfx.cue(cue, step.sound.origin, &mut map.0, &DefaultSurface, &mut out);
         }
         sfx.after_move(&step.sound, &mut map.0, &DefaultSurface, &mut out);
+    }
+    for blow in attacks.1.iter().flatten() {
+        let flesh = map.0.bodies.iter().any(|b| Some(b.id) == blow.entity);
+        out.play(lurch::sound::melee_impact(cfg.heirloom, flesh), blow.at);
     }
     for (ev, options) in vm.map(|mut v| std::mem::take(&mut v.0)).unwrap_or_default() {
         sfx.anim_event(ev, &options, eye.0.origin, &mut out);

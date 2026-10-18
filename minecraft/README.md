@@ -84,6 +84,12 @@ shell runs next to it as a second process.
     about 21 blocks. It rescans every 0.5 s or after 4 blocks of movement, and sends the result
     only when it changed.
   - It places the player and the camera from the host's answer.
+  - Sounds, on Windows, are lurch-game's, through the game's Miles: slides, jumps, landings,
+    mantles, the grapple, the freefall, the punch's swing, and a blow's impact (flesh on a mob,
+    the `default` surface's on a block). Footsteps are Minecraft's: the host sends `step` for
+    each of lurch's footsteps, so in lurch's rhythm, and the mod plays the step sound of the
+    block under the player as Minecraft's walking does. Minecraft's own sounds (attacks, a
+    mob's hurt sound, breaking) play as well.
   - It sends Minecraft's light at the player's eye: the lightmap colour its own hand would be
     multiplied by (`lightmap.fsh` worked out on the CPU from the inputs Minecraft last rendered
     the lightmap with), and whether the dimension uses the Nether's cardinal lighting. The host
@@ -187,8 +193,8 @@ world, and block collision edge cases such as seams and partial blocks.
 
 ## Not modelled
 
-- Sounds. The shell plays them through the game's Miles, which exists only for Windows, and
-  this dev client has no audio device.
+- Sounds on Linux: the shell plays them through the game's Miles, which exists only for
+  Windows. The melee impact's surface: a blow on any block sounds as on `default`.
 - Depth between the overlay and Minecraft's world. The grapple rope draws over blocks in front
   of it.
 - Timing: the overlay is one readback behind the camera.

@@ -58,6 +58,12 @@ pub struct Heirloom {
     pub viewmodel: &'static str,
     pub rig: &'static str,
     pub pak: &'static str,
+    /// The legend whose `footstep_type` names the heirloom's own sounds: the kunai's swings are
+    /// `<type>.Mvmt_Melee_Kunai_Swipe_1P`, which only Wraith has.
+    pub owner: &'static str,
+    /// The game's impact sounds of the heirloom's name, on a body and on a wall.
+    pub flesh_impact: &'static str,
+    pub wall_impact: &'static str,
 }
 
 pub const HEIRLOOMS: &[Heirloom] = &[
@@ -67,6 +73,9 @@ pub const HEIRLOOMS: &[Heirloom] = &[
         viewmodel: "mdl/Weapons/kunai/ptpov_kunai_wraith.rmdl",
         rig: "animrig/weapons/kunai/ptpov_kunai_wraith.rrig",
         pak: "common.rpak",
+        owner: "wraith",
+        flesh_impact: "Victim_KunaiImpact_1p_vs_3p",
+        wall_impact: "Generic_KunaiImpact_1p_vs_3p",
     },
     Heirloom {
         name: "bloodhound_axe",
@@ -74,6 +83,9 @@ pub const HEIRLOOMS: &[Heirloom] = &[
         viewmodel: "mdl/Weapons/bloodhound_axe/ptpov_bloodhound_axe.rmdl",
         rig: "animrig/weapons/bloodhound_axe/ptpov_axe_bloodhound.rrig",
         pak: "common.rpak",
+        owner: "bloodhound",
+        flesh_impact: "Victim_Axe_Impact_1p_vs_3p",
+        wall_impact: "Generic_Axe_Impact_1p_vs_3p",
     },
     Heirloom {
         name: "lifeline_baton",
@@ -81,6 +93,9 @@ pub const HEIRLOOMS: &[Heirloom] = &[
         viewmodel: "mdl/Weapons/drumstick/ptpov_baton_lifeline.rmdl",
         rig: "animrig/weapons/drumstick/ptpov_baton_lifeline.rrig",
         pak: "common.rpak",
+        owner: "lifeline",
+        flesh_impact: "Victim_Baton_Impact_1p_vs_3p",
+        wall_impact: "Generic_Baton_Impact_1p_vs_3p",
     },
     Heirloom {
         name: "octane_knife",
@@ -88,6 +103,9 @@ pub const HEIRLOOMS: &[Heirloom] = &[
         viewmodel: "mdl/Weapons/octane_knife/ptpov_macks_knife.rmdl",
         rig: "animrig/weapons/octane_knife/ptpov_knife_octane.rrig",
         pak: "common_sdk.rpak",
+        owner: "octane",
+        flesh_impact: "Victim_ButterflyKnife_Impact_1p_vs_3p",
+        wall_impact: "Generic_ButterflyKnife_Impact_1p_vs_3p",
     },
 ];
 

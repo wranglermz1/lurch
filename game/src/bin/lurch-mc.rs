@@ -45,7 +45,9 @@
 //!   Apex does: it lunges at a mob in front, on the ground with none pushes the player forward,
 //!   and a blow that hits something knocks the player back (`lurch::sim::melee`). The first
 //!   answer starts with `choices legend NAME...` and `choices heirloom NAME...`, and any answer
-//!   whose options changed with `config NAME VALUE` for each `set` name.
+//!   whose options changed with `config NAME VALUE` for each `set` name. `step` comes first too,
+//!   once for each footstep lurch took in the frame: Minecraft plays its own block's step sound
+//!   in place of lurch's.
 //!
 //! Positions and angles on the wire are Minecraft's (blocks, y up, its yaw). Each frame's image,
 //! premultiplied RGBA rows `STRIDE` bytes apart, goes to `/dev/shm/lurch-mc` (`lurch-mc` in the
@@ -62,7 +64,10 @@
 //!
 //! Crouching on the ground stops at ledges as Minecraft's sneaking does (`sim::SneakEdges`).
 //!
-//! Not modelled: sounds, the shell's menus, the test map's respawn binds (dropped here).
+//! Sounds play as lurch-game plays them, through the game's Miles (Windows only), except the
+//! footsteps (`audio::HostSteps`).
+//!
+//! Not modelled: the shell's menus, the test map's respawn binds (dropped here).
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
@@ -86,6 +91,7 @@ use bevy::tasks::tick_global_task_pools_on_main_thread;
 use bevy::time::TimeUpdateStrategy;
 use bevy::window::ExitCondition;
 use bevy::winit::WinitPlugin;
+use lurch::sim::cue::Cue;
 use lurch::sim::math::V3;
 use lurch::sim::pilot;
 use lurch::sim::{HullQuery, Tracer};
@@ -97,10 +103,11 @@ use lurch_game::convar::{self, ConVars};
 use lurch_game::convert::vfov;
 use lurch_game::data::{self, Data};
 use lurch_game::rui::{HostBar, HostHud, HostLayout, Place, Preloaded};
-use lurch_game::sim::{CollisionWorld, Map, MeleeAttacks, Pose, Sim, SneakEdges, DIST_EPSILON};
+use lurch_game::audio::HostSteps;
+use lurch_game::sim::{CollisionWorld, FrameCues, Map, MeleeAttacks, Pose, Sim, SneakEdges, DIST_EPSILON};
 use lurch_game::view::{Target, ViewImage};
 use lurch_game::viewmodel::{ArmsShown, HostHands, HostLight};
-use lurch_game::{args, install, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
+use lurch_game::{args, install, AudioPlugin, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
 
 const ADDR: &str = "127.0.0.1:25600";
 const HEADER: u64 = 20;
@@ -568,6 +575,9 @@ fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::R
                 for blow in &app.world().resource::<MeleeAttacks>().1 {
                     writeln!(out, "{}", punch(blow, base))?;
                 }
+                for _ in app.world().resource::<FrameCues>().0.iter().flat_map(|s| &s.cues).filter(|c| matches!(c, Cue::Footstep { .. })) {
+                    writeln!(out, "step")?;
+                }
                 let answer = pose(app.world(), base);
                 if trace {
                     let sim = app.world().resource::<Sim>();
@@ -601,7 +611,7 @@ fn main() -> io::Result<()> {
     let ui = cfg.r5r.as_deref().and_then(|i| lurch::rui::Ui::open(i).map_err(|e| eprintln!("lurch-mc: no UI: {e}")).ok());
     let (w, h) = (854, 480);
     let mut app = App::new();
-    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui))).insert_resource(HostLight { color: Vec3::ONE, dirs: entity_light(false) }).init_resource::<HostHud>().insert_resource(SneakEdges);
+    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui))).insert_resource(HostLight { color: Vec3::ONE, dirs: entity_light(false) }).init_resource::<HostHud>().insert_resource(SneakEdges).insert_resource(HostSteps);
     if let Some(d) = data {
         app.insert_resource(Data(Arc::new(d)));
     }
@@ -617,6 +627,7 @@ fn main() -> io::Result<()> {
         ViewmodelPlugin,
         HudPlugin,
         RuiPlugin,
+        AudioPlugin,
         SingleThreadedPlugin,
     ));
     lurch_game::data::reloading(&mut app);
