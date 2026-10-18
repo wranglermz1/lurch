@@ -3,9 +3,12 @@ package lurch.mc.mixin;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import lurch.mc.Lurch;
+import lurch.mc.HudLayout;
 import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.Hud;
+import net.minecraft.client.gui.contextualbar.ContextualBar;
 import net.minecraft.world.entity.player.Player;
 import org.joml.Matrix3x2f;
 import org.spongepowered.asm.mixin.Mixin;
@@ -16,13 +19,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * lurch's viewmodel and HUD under Minecraft's, in place of its crosshair. While lurch is on, the
  * hotbar stays in the middle, sized and placed to sit between Apex's panels, and the armour,
- * hearts, hunger and air move into Apex's player panel.
+ * hearts, hunger and air move into Apex's player panel. The player's layout (`HudLayout`) moves
+ * and scales the hotbar, the experience bar, the health and hunger (while lurch is off), the
+ * effects, the boss bars and the chat from there.
  */
 @Mixin(Hud.class)
 public class HudMixin {
 	/** The pose before the hotbar's, while the hotbar's is pushed. */
 	private final Matrix3x2f lurch$base = new Matrix3x2f();
-	private boolean lurch$moved;
+	private boolean lurch$moved, lurch$effects, lurch$bosses, lurch$chat;
 
 	@Inject(method = "extractRenderState", at = @At("HEAD"))
 	private void lurch$overlay(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
@@ -39,7 +44,7 @@ public class HudMixin {
 	@Inject(method = "extractHotbarAndDecorations", at = @At("HEAD"))
 	private void lurch$hotbar(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
 		lurch$base.set(g.pose());
-		lurch$moved = Lurch.pushHotbar(g);
+		lurch$moved = Lurch.pushHotbar(g, "hotbar");
 	}
 
 	@Inject(method = "extractHotbarAndDecorations", at = @At("RETURN"))
@@ -53,8 +58,75 @@ public class HudMixin {
 	private void lurch$health(Hud hud, GuiGraphicsExtractor g, Operation<Void> op) {
 		g.pose().pushMatrix();
 		g.pose().set(lurch$base);
+		boolean placed = !Lurch.on() && HudLayout.push(g, "health");
 		op.call(hud, g);
+		if (placed) {
+			g.pose().popMatrix();
+		}
 		g.pose().popMatrix();
+	}
+
+	/** Draws a part of the experience bar from the pose before the hotbar's, where `pushHotbar` puts the experience bar. */
+	private void lurch$xp(GuiGraphicsExtractor g, Runnable draw) {
+		g.pose().pushMatrix();
+		g.pose().set(lurch$base);
+		boolean pushed = Lurch.pushHotbar(g, "xp");
+		draw.run();
+		if (pushed) {
+			g.pose().popMatrix();
+		}
+		g.pose().popMatrix();
+	}
+
+	@WrapOperation(method = "extractHotbarAndDecorations", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/contextualbar/ContextualBar;extractBackground(Lnet/minecraft/client/gui/GuiGraphicsExtractor;Lnet/minecraft/client/DeltaTracker;)V"))
+	private void lurch$xpBackground(ContextualBar bar, GuiGraphicsExtractor g, DeltaTracker delta, Operation<Void> op) {
+		lurch$xp(g, () -> op.call(bar, g, delta));
+	}
+
+	@WrapOperation(method = "extractHotbarAndDecorations", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/contextualbar/ContextualBar;extractRenderState(Lnet/minecraft/client/gui/GuiGraphicsExtractor;Lnet/minecraft/client/DeltaTracker;)V"))
+	private void lurch$xpBar(ContextualBar bar, GuiGraphicsExtractor g, DeltaTracker delta, Operation<Void> op) {
+		lurch$xp(g, () -> op.call(bar, g, delta));
+	}
+
+	@WrapOperation(method = "extractHotbarAndDecorations", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/contextualbar/ContextualBar;extractExperienceLevel(Lnet/minecraft/client/gui/GuiGraphicsExtractor;Lnet/minecraft/client/gui/Font;I)V"))
+	private void lurch$xpLevel(GuiGraphicsExtractor g, Font font, int level, Operation<Void> op) {
+		lurch$xp(g, () -> op.call(g, font, level));
+	}
+
+	@Inject(method = "extractEffects", at = @At("HEAD"))
+	private void lurch$effects(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
+		lurch$effects = HudLayout.push(g, "effects");
+	}
+
+	@Inject(method = "extractEffects", at = @At("RETURN"))
+	private void lurch$effectsEnd(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
+		if (lurch$effects) {
+			g.pose().popMatrix();
+		}
+	}
+
+	@Inject(method = "extractBossOverlay", at = @At("HEAD"))
+	private void lurch$bosses(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
+		lurch$bosses = HudLayout.push(g, "bosses");
+	}
+
+	@Inject(method = "extractBossOverlay", at = @At("RETURN"))
+	private void lurch$bossesEnd(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
+		if (lurch$bosses) {
+			g.pose().popMatrix();
+		}
+	}
+
+	@Inject(method = "extractChat", at = @At("HEAD"))
+	private void lurch$chat(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
+		lurch$chat = HudLayout.push(g, "chat");
+	}
+
+	@Inject(method = "extractChat", at = @At("RETURN"))
+	private void lurch$chatEnd(GuiGraphicsExtractor g, DeltaTracker delta, CallbackInfo ci) {
+		if (lurch$chat) {
+			g.pose().popMatrix();
+		}
 	}
 
 	@WrapOperation(method = "extractPlayerHealth", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/Hud;extractArmor(Lnet/minecraft/client/gui/GuiGraphicsExtractor;Lnet/minecraft/world/entity/player/Player;IIII)V"))

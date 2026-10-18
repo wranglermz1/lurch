@@ -360,12 +360,48 @@ pub struct HostHud {
     /// How far left the host's bar may reach and leave room for the tactical's panel between
     /// it and the player panel.
     pub room: Option<f32>,
+    /// Where the shell puts the player panel, the tactical's and the ultimate's, before the
+    /// host's layout moves them: left, top, right, bottom.
+    pub rects: [Option<[f32; 4]>; 3],
 }
 
 /// The left edge of the host's bar in the middle of the bottom, in the target's pixels: the
 /// tactical's panel moves left of it when it would reach it.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct HostBar(pub f32);
+
+/// Where the host's player put one of the shell's panels: its top left corner `offset` target
+/// pixels from where the shell puts it, drawn `scale` times its size from there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Place {
+    pub offset: [f32; 2],
+    pub scale: f32,
+}
+
+impl Default for Place {
+    fn default() -> Self {
+        Place { offset: [0.0; 2], scale: 1.0 }
+    }
+}
+
+/// The host's own layout of the player panel, the tactical's and the ultimate's.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct HostLayout {
+    pub player: Place,
+    pub tactical: Place,
+    pub ultimate: Place,
+}
+
+/// Where `p` moves a point of something whose bounds are `b`, in a target `size` pixels big.
+fn placed(c: [f32; 2], b: [f32; 4], p: Place, size: [f32; 2]) -> [f32; 2] {
+    std::array::from_fn(|i| (c[i] - b[i]) * p.scale + b[i] + p.offset[i] / size[i])
+}
+
+fn place(quads: &mut [Quad], b: [f32; 4], p: Place, size: [f32; 2]) {
+    for c in quads.iter_mut().flat_map(|q| q.corners.iter_mut()) {
+        *c = placed(*c, b, p, size);
+    }
+}
 
 fn shift_x(quads: &mut [Quad], dx: f32) {
     for c in quads.iter_mut().flat_map(|q| q.corners.iter_mut()) {
@@ -748,7 +784,7 @@ type DrawRest<'w, 's> = (
     MessageWriter<'w, MenuSound>,
     Res<'w, ButtonInput<KeyCode>>,
     ResMut<'w, KeyTrap>,
-    (Option<ResMut<'w, HostHud>>, Option<Res<'w, HostBar>>),
+    (Option<ResMut<'w, HostHud>>, Option<Res<'w, HostBar>>, Option<Res<'w, HostLayout>>),
 );
 
 #[allow(clippy::too_many_arguments)] // Bevy's system parameters
@@ -768,7 +804,7 @@ fn draw(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<RuiMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
-    (mut batches, mut shown, mut vgui_materials, mut menu_open, mut paused, real, mouse, cursor, mut convars, mut wheel, mut sounds, keyboard, mut trap, (mut host, host_bar)): DrawRest,
+    (mut batches, mut shown, mut vgui_materials, mut menu_open, mut paused, real, mouse, cursor, mut convars, mut wheel, mut sounds, keyboard, mut trap, (mut host, host_bar, layout)): DrawRest,
 ) {
     let target = view.and_then(|v| images.get(&v.0)).map(|i| (i.width() as f32, i.height() as f32));
     let (width, height) = target.or_else(|| windows.single().ok().map(|w| (w.width(), w.height()))).unwrap_or((cfg.size.0 as f32, cfg.size.1 as f32));
@@ -843,7 +879,13 @@ fn draw(
         let gap = HOST_GAP * height / width;
         let mut frame = None;
         host.panel = None;
+        let layout = layout.as_deref().copied().unwrap_or_default();
+        let px = [width, height];
+        host.rects = [None; 3];
         if let Some(t) = rt.player.as_mut() {
+            if let Some(icon) = data.as_ref().filter(|d| d.is_changed()).and_then(|d| d.0.character.as_ref()).and_then(|c| c.str("galleryPortrait")) {
+                t.set_image(&ui, "playerIcon", icon);
+            }
             t.set_bool(&ui, "isVisible", visible.0);
             let [vw, vh] = lurch::rui::virtual_screen(width, height);
             (t.size, t.inv_size) = ([vw, vh], [1.0 / vw, 1.0 / vh]);
@@ -853,9 +895,14 @@ fn draw(
                 let name = draws.quads[from..].iter().position(|q| q.flags >> 12 == 0).map_or(draws.quads.len(), |i| from + i);
                 frame = bounds(&draws.quads[from..name]);
                 if let (Some(panel), Some(contents)) = (frame, bounds(&draws.quads[name..])) {
-                    host.panel = Some(std::array::from_fn(|i| [contents[0], panel[1], contents[2], panel[3]][i] * size[i]));
+                    let (lo, hi) = (placed([contents[0], panel[1]], panel, layout.player, px), placed([contents[2], panel[3]], panel, layout.player, px));
+                    host.panel = Some(std::array::from_fn(|i| [lo[0], lo[1], hi[0], hi[1]][i] * size[i]));
                 }
                 draws.quads.truncate(name);
+                if let Some(panel) = frame {
+                    place(&mut draws.quads[from..], panel, layout.player, px);
+                    host.rects[0] = Some(std::array::from_fn(|i| panel[i] * size[i]));
+                }
             }
         }
         if let (Some(t), Some(panel)) = (rt.ultimate.as_mut(), frame) {
@@ -866,6 +913,9 @@ fn draw(
                 ui.draws(t, &rt.frame, &mut draws);
                 if let Some(b) = bounds(&draws.quads[from..]) {
                     shift_x(&mut draws.quads[from..], (1.0 - panel[0]) - b[2]);
+                    let b = [b[0] + (1.0 - panel[0]) - b[2], b[1], 1.0 - panel[0], b[3]];
+                    place(&mut draws.quads[from..], b, layout.ultimate, px);
+                    host.rects[2] = Some(std::array::from_fn(|i| b[i] * size[i]));
                 }
             }
         }
@@ -875,11 +925,14 @@ fn draw(
             (Some(panel), None) => Some((panel[2] + gap) * width),
             _ => None,
         };
-        if let (Some(bar), Some((b, r))) = (host_bar, tactical) {
-            let over = b[2] - (bar.0 / width - gap);
-            if over > 0.0 {
-                shift_x(&mut draws.quads[r], -over);
+        if let Some((mut b, r)) = tactical {
+            let over = host_bar.map_or(0.0, |bar| b[2] - (bar.0 / width - gap));
+            if over > 0.0 && layout.tactical == Place::default() {
+                shift_x(&mut draws.quads[r.clone()], -over);
+                (b[0], b[2]) = (b[0] - over, b[2] - over);
             }
+            place(&mut draws.quads[r], b, layout.tactical, px);
+            host.rects[1] = Some(std::array::from_fn(|i| b[i] * size[i]));
         }
     }
     if visible.0 {

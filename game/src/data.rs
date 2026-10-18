@@ -51,6 +51,9 @@ pub struct GameData {
     /// The weapon's class (its script's name) and script times.
     pub weapon_class: &'static str,
     pub times: WeaponTimes,
+    /// The melee weapon's `melee_anim_1p_number`: the offhand melee's (`melee_pilot_emptyhanded`,
+    /// or `melee_` and the heirloom's name), 1, the registered default, where it gives none.
+    pub melee_anim: i32,
     pub anims: ModelAnims,
     /// The arms model's own sequences, which the first-person proxy plays.
     pub arms_anims: ModelAnims,
@@ -83,8 +86,15 @@ impl Plugin for DataPlugin {
             warn!("no R5Reloaded install given: no sounds, no viewmodel");
             return;
         };
-        app.insert_resource(start(install, cfg.legend, cfg.heirloom)).add_systems(PreUpdate, (reload, finish).chain());
+        app.insert_resource(start(install, cfg.legend, cfg.heirloom));
+        reloading(app);
     }
+}
+
+/// Reads the files again whenever `Config` names another legend or heirloom, for an app that
+/// read them itself.
+pub fn reloading(app: &mut App) {
+    app.add_systems(PreUpdate, (reload, finish).chain());
 }
 
 fn start(install: PathBuf, legend: String, heirloom: Option<&'static Heirloom>) -> Loading {
@@ -100,14 +110,14 @@ fn start(install: PathBuf, legend: String, heirloom: Option<&'static Heirloom>) 
     Loading(Mutex::new(rx))
 }
 
-/// Another heirloom picked (`crate::dev`): the files are read again for it once the reading
-/// under way ends.
-fn reload(mut commands: Commands, cfg: Res<Config>, loading: Option<Res<Loading>>, mut asked: Local<Option<Option<&'static Heirloom>>>) {
-    let asked = asked.get_or_insert(cfg.heirloom);
-    if loading.is_some() || *asked == cfg.heirloom {
+/// Another heirloom picked (`crate::dev`), or another legend: the files are read again for it
+/// once the reading under way ends.
+fn reload(mut commands: Commands, cfg: Res<Config>, loading: Option<Res<Loading>>, mut asked: Local<Option<(String, Option<&'static Heirloom>)>>) {
+    let asked = asked.get_or_insert_with(|| (cfg.legend.clone(), cfg.heirloom));
+    if loading.is_some() || (asked.0 == cfg.legend && asked.1 == cfg.heirloom) {
         return;
     }
-    *asked = cfg.heirloom;
+    *asked = (cfg.legend.clone(), cfg.heirloom);
     if let Some(install) = cfg.r5r.clone() {
         commands.insert_resource(start(install, cfg.legend.clone(), cfg.heirloom));
     }
@@ -150,6 +160,7 @@ pub fn load(install: &Path, legend: &str, heirloom: Option<&Heirloom>) -> Result
         sounds: PlayerSounds::from_settings(&l.legend),
         weapon_class: heirloom.map_or(lurch::assets::FISTS, |h| h.weapon),
         times: WeaponTimes::from_script(|k| l.weapon_script.get(k)?.parse().ok()),
+        melee_anim: melee_anim(install, heirloom),
         legend: l.legend,
         character: l.character,
         anims: ModelAnims::new(&l.weapon),
@@ -162,6 +173,12 @@ pub fn load(install: &Path, legend: &str, heirloom: Option<&Heirloom>) -> Result
         weapon_textures: l.weapon_textures,
         weapon_constants: l.weapon_constants,
     })
+}
+
+fn melee_anim(install: &Path, heirloom: Option<&Heirloom>) -> i32 {
+    let name = heirloom.map_or("melee_pilot_emptyhanded".to_string(), |h| format!("melee_{}", h.name));
+    let script = lurch::assets::script::weapon(install, &name).unwrap_or_default();
+    script.get("melee_anim_1p_number").and_then(|n| n.parse().ok()).unwrap_or(1)
 }
 
 /// One mesh of a test map prop, placed in the map.

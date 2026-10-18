@@ -41,7 +41,7 @@ use bevy::shader::ShaderRef;
 use bevy::camera::visibility::RenderLayers as Layers;
 use lurch::anim::bones::{self, BoneList, Mat, IDENTITY};
 use lurch::anim::proxy::Proxy;
-use lurch::anim::viewmodel::{Blends, Viewmodel};
+use lurch::anim::viewmodel::{Blends, MeleeSwing, Viewmodel};
 use lurch::assets::texture::Texture;
 use lurch::sim::cue::Cue;
 use lurch::sim::grapple::FP_ANIM_GRAPPLE;
@@ -373,6 +373,7 @@ fn spawn_meshes(
     let (state, proxy) = drawn(d, &sim);
     info!("viewmodel: {} sequences, {} arms meshes, {} skinned on the CPU, {} weapon meshes", data.0.anims.seqs.len(), data.0.arms.meshes.len(), arms.cpu.len(), data.0.weapon_textures.len());
     commands.insert_resource(Vm { state, proxy, arms, weapon, glowing, grapple_down: false, away: false });
+    commands.init_resource::<crate::sim::Swing>();
 }
 
 /// The weapon just drawn and the arms at rest, as a pilot spawns with them.
@@ -414,7 +415,7 @@ fn animate(
     mut events: ResMut<VmEvents>,
     mut hand: ResMut<GrappleHand>,
     mut over: ResMut<GrappleAnimOver>,
-    (host_hands, mut shown): (Option<Res<HostHands>>, ResMut<ArmsShown>),
+    (host_hands, mut shown, mut swing): (Option<Res<HostHands>>, ResMut<ArmsShown>, ResMut<crate::sim::Swing>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut roots: Query<(&mut Transform, &mut Layers, &mut Visibility, &ViewmodelMesh)>,
     mut joints: Query<&mut GlobalTransform, With<Joint>>,
@@ -448,6 +449,10 @@ fn animate(
         }
         vm.grapple_down = down;
         vm.state.command(&d.anims, &step.cues, step.sprinting, step.modifiers, now);
+        if step.melee {
+            let act = lurch::anim::viewmodel::melee_activity(d.melee_anim);
+            swing.0 = Some(vm.state.melee(&d.anims, act, now).unwrap_or(MeleeSwing { attack: None, end: now }));
+        }
         let drawn = !vm.state.hidden(now);
         vm.proxy.command(&d.arms_anims, step.traversal, drawn, sim.settings.mantle.jumpoff_duration, now);
         vm.proxy.climb(&d.arms_anims, step.climb, now);

@@ -610,9 +610,17 @@ Settings: `grapple_detachOnGrappleDebounceTime` `0xa88`, `grapple_swingType` `0x
 weapons go down (`0x7d0dc0`, applied per command by `0x854bc0` through `0x7d1430`) while the
 grapple is active, not reeling in, and its hook is more than 128 from the eye.
 
+A catch on an entity (`0x9d1b00`): after placing the hook (`0x61e9a0`) and turning it to face
+away from the eye (`0x61eca0`), a hit entity with a model (`+0x38`) that is not a zipline
+becomes the hook's parent (`0x61ae90`), so the hook moves with it; the attach callback
+(`CodeCallback_OnGrappleAttach`, `0x1723338`) runs with it. Nothing in the catch pulls the
+entity, and the script only counts stats and plays chatter. Ours parents the hook to a
+`world::Body` (`Player::grapple_parent`) and moves the rope's last point with it; how the image's
+rope follows a parented hook is not read.
+
 Not ported: swinging; window hints (`0x86c740`, `0x9d1760`, the `+0x2801`/`+0x2804`
 branches of `0x80cb20`, `0x9d2c20` and `0x808550`), no-grapple volumes (`0x9d5170`) and
-contents-`0x800` entities that let the hook pass, moving or parented anchors, auto-aim and
+contents-`0x800` entities that let the hook pass, moving brush anchors, auto-aim and
 auto-melee targets, jump pads (`0x8095e0`), status effects (`0x89d7c0`), touching the ground
 on attach or detach (both off), the scripted grapple animation (`PlayGrappleAttachedAnimation`,
 `0x9d5460`, `+0x2a50`), the weapon's cooldown (script ammo), and the hook entity's own think
@@ -622,3 +630,115 @@ curtime. Nothing records a grapple: all of this is ported, not verified.
 Player fields: first-person animation state `+0x2a4c` (5: the grapple's; also 1, 3 and 4,
 not identified), scripted flag `+0x2a50`, queued sequences `+0x2a54` and `+0x2a58`; the hook
 entity's `m_grappleZipline` is its `+0x1300`.
+
+## Melee
+
+A punch. The push it gives on the ground, the lunge toward a target, the blow's trace and the
+knockback are ported in `src/sim/melee.rs` and `Pilot::melee_start_activity`/`melee_blow`; the
+game shell starts and ends the attack around them. No recording holds a punch, so none of this
+is checked against the game: the replay gates only check that the push stays zero and the lunge's
+fields stay cleared without one (`melee_push` and the `lunge_*` fields are modelled).
+
+The script starts the attack: the attack button with the fists out presses melee
+(`attack_button_presses_melee`), and `CodeCallback_OnMeleePressed` (`sh_melee.gnut`) checks
+`AttackerCanStartMelee` (alive, no attack on, not freefalling, not lunging) and calls
+`PlayerMelee_StartAttack(PLAYER_MELEE_STATE_HUMAN_KICK_ATTACK)`. The state constants are
+registered at `0x9dd628`: NONE 0, HUMAN_KICK_ATTACK 1, TITAN_MELEE_JAB 5. The melee attack
+weapon is the active weapon if it is melee, else the offhand melee (`melee_pilot_emptyhanded`,
+`melee_anim_1p_number` 2). Script callbacks are called through closure slots in a table at
+`0x1722f60` (32-byte entries: name, signature, flags, closure): OnMeleePressed, Held and
+Released from the melee buttons' handler `0x9dd940`, OnMeleeStartActivity from `0xa5b180`,
+OnMeleeAttackAnimEvent from the weapon's anim-event handler `0xa54850` (a switch from event
+72; `AE_MELEE_ATTACK` is 115) and from `0x856610`.
+
+| RVA | Ours | Behaviour |
+|---|---|---|
+| `0x868280` | `Player::start_melee` | Stops the climbing arms (`0x866e00`), sets attack on (`+0x2c7c`), counter `+0x2c78` += 1 (mod 16), start time `+0x2c80` = curtime, hit entity `+0x2c84` = none, `+0x2c7e` = sprinting, `+0x2c88` = 0, `+0x2c7d` = 0, `+0x2c94` = 1, clears the lunge (`0x868f80`), state `+0x2c90`. A state above 8 only logs. |
+| `0x868350` | `Player::end_melee` | Attack off, start time 0, `+0x2c94` 0, clears the lunge, state 0, `+0x1bdd` 0. Inlined in the weapon's holster and switch paths (`0x7cffd0`, `0xa3e710`, `0xa59870`). |
+| `0x826540` | `Move::melee_push` | Below. Called once from the floor path of `0x818320` (`0x819908`), after friction and acceleration. |
+| `0x868750` | `Player::lunge_time` | The lunge target's flag (`+0x1a0c` bit 11) clear or no target, attack on and a weapon at `+0x1720` with `melee_lunge_time` above 0: that time; else 0.5. |
+| `0x868820` | `LUNGE_NO_TARGET_RANGE` | Attack on and a weapon at `+0x1720`: its `melee_lunge_no_target_range`; else the player setting `melee_cone_trace_range` (`0xc30`). |
+| `0x868890` | `Player::lunge_accel` | 0 when the lunge time is at or below 0; else 2 × range / time², the division in double. |
+| `0x868920` | `Player::lunge_set_target` | `Lunge_SetTargetEntity`. Needs the offhand melee weapon (`+0x2f50`); clears the lunge (`0x868f80`); refuses a target other than one set by `0x86d110`. Target `+0x3adc`; start offset `+0x3af0` = abs origin − the target's origin; end offset `+0x3afc` = the start offset over its 3D length (at least `TINY`) × (half the larger of the player's hull x and y sizes (`0x7dc590`) + half the larger of the target's collision x and y sizes), z 0; start time `+0x3b08` = curtime; abort `+0x3b0c` −1; duration `+0x3b18` from `0x868750`; `+0x3b14` from `0x856db0` (not read by the move) |
+| `0x868f80` | `Player::lunge_clear` | Target none, to-position flag `+0x3ae0` 0, target position `+0x3ae4`, offsets zero, start 0, abort −1, flying `+0x3b10` and the byte after it 0, `+0x3b14` 0, duration 0.5, `+0x3b1c` −1, max end speed `+0x3b20` 0 |
+| `0x869210` | `Player::lunge_active` | A position lunge, or a target that is alive (`+0x730` clear); and `+0x3b1c` ≤ 0 or curtime − start ≤ it; and no attack on, abort ≤ 0, or curtime (`+0x1d18`) ≤ abort |
+| `0x9dc860` | `Player::lunge_running` | Active, and dead or outside the `+0x1790`–`+0x1794` window of `gpGlobals+0x28` (both zero here). With abort ≤ 0: an attack on and curtime − start past the duration (strictly) sets abort to curtime + 0.1. With an abort set: past it, false |
+| `0x822b81` | `Move::lunge_movetype` | PlayerMove before categorize: movetype 2 becomes 15 while `0x9dc860` holds (14 for `generalClass` 3, 4 with `+0x4098`); 15 goes back to 2, the lunge cleared, when it stops. Categorize and the optimized-movement check still use the movetype read before |
+| `0x8257f0` | `Move::lunge_move` | Movetype 15's move. Below |
+| `0x8713f0` | `Player::knock_back` | `KnockBack` (script). A velocity whose largest component is 0, or a time ≤ 0, only warns. Else it fills the slot of `m_playerKnockBacks` (`+0x4120`, four of 0x20: velocity `+8`, start `+0x14` = `+0x1d18`, end `+0x18` = start + time) with the lowest end (compared as ints), sets the abs velocity (`0x61ef30`) to the velocity, and a player on the ground leaves it: movetype 12 becomes 2, the ground entity none (`0x84c870`), `FL_ONGROUND` cleared. Movement never reads the slots |
+| `0x9db3c0` | `lunge_cone_trace` | `PlayerMelee_LungeConeTrace` (script native `0xa1d3b0`). Range and angle: the player's `melee_cone_trace_range` (`0xc30`) and `melee_cone_trace_angle`, both > 0, or with a melee weapon its lunge target range (`0xa5ae80`) and angle (`+0x1a9c`). Then `0x9daf10`: life state `+0x3f0` ≥ 2; the eye (`0x869640`) and eye angles (`0x8697b0`) with the pitch moved down by (1 − |normalized pitch| / 90, clamped 0 to 1) × 15°; `0x9da6e0` gathers up to 64 entities from four lists through a filter of the cone's four planes (half the angle about up and right) and range², sorts them (`0xa1dd20`), and returns the first a ray from the eye reaches whole (fraction ≥ 1) at its `WorldSpaceCenter` or else its eye. None found and an aim target at `+0x2f50`+`0x3c`: the same again toward it with range + 1/32 |
+| `0x9dbd20` | `attack_trace` | `PlayerMelee_AttackTrace` (script native `0xa1ada0`): from the eye along the eye angles' forward, `range` long. A lunge on (`0x869210` or `0x869300`), or a grapple auto-melee target (`+0x2800`, `+0x27d4`), aims at the target first (`0x9dbac0`: toward its eye or attachment; the range at least `melee_attack_trace_can_use_lunge_distance` (0.5) × the weapon's `+0x1a98`), and a hit on anything else is dropped. `0x9db670` traces the ray (length `0x9da540`); a miss tries the ray turned 5° (−0.0872665 rad) off it about the level axis (`v.y, −v.x, 0`), spun 0°, 90°, 180°, 270° about the view (`0x42c990`), then a level ray from the eye less half of `+0xb8`. The table holds the entity, position, surface, damage type, start |
+| `0xa5b180` | `viewmodel::melee_activity` | The weapon's attack activity: `ACT_VM_MELEE_ATTACK1` − 1 + `melee_anim_1p_number` held to 1..3, sent through `0xa3bea0` with flags 4; then OnMeleeStartActivity. |
+
+The push (`0x826540`). With no attack on or state 0, the push `+0x2c98` is zero. With a hit
+entity and a titan's `generalClass` (1 or 3), the velocity is clamped along the view (not
+ported). Otherwise on the ground, not sliding (`+0x2815`), with no hit entity, `+0x2c88` at
+or below 0 and a range above 0: past the lunge time since the start (or a time at or below
+0) the push is zero. Within it, with `v` = push + velocity and `f` the view's forward
+(`mv+0x3c`), the speed wanted along `f` is `(clamp(forwardmove, 0, 1) × 0.5 + 0.5) × time ×
+(2 × range / time²)`, at most 343 u/s for the fists' 60 units in 0.35 s. If `v·f` is below
+it, `v` gains `f × accel × frametime` (accel from `0x868890`), scaled down to no faster than
+the larger of `|v|` and the wanted speed, and the push takes the difference. Anything else
+zeroes it. The floor path then moves by velocity + push (`0x819948`): the speed checks (the
+slide's end, the 1 u/s stop) and the move use it, and the velocity keeps none of it.
+
+The lunge toward a target only starts from script: `Lunge_SetTargetEntity` (`0x868920`) and
+`Lunge_SetTargetPosition` (`0x868ca0`) have no callers but their script natives, and
+`sh_melee.gnut` sets a target in OnMeleeStartActivity, on the server, only for a player or an
+NPC that `PlayerMelee_LungeConeTrace` finds (the fists: `melee_lunge_target_range` 60,
+`melee_lunge_target_angle` 30), unless `move_slow` is above 0.05, then locks the pitch
+(`Lunge_LockPitch`) on the ground; a position only for a door kick. Its ConVars, image values:
+`melee_lunge_abort_if_blocked` 1, `_abort_distance` 0.25, `_force_enable_flying` 1, `_slide` 1,
+`_use_closest_distance_between_cylinders` 1, `_use_command_time` 1, `_adjust_trace_distance` 0,
+`_lag_compensate_target` 1, `_dot_check` 1, `_scale_by_speed` 2.0, `_align_eye_position` 1,
+`melee_cone_trace_box_check` 0.5; the server's copy of the move is `0xbaced0`.
+
+LungeMove (`0x8257f0`). The target's position is its origin (lag-compensated by `0x686470`
+between interpolation samples for a player); x and y are it plus the end offset; z is the
+current z raised to the target's and lowered to the smaller of the target's centre and the
+target's z + half the player's hull height (stance by `FL_DUCKING`), plus the end offset's z.
+Without flying (`melee_lunge_force_enable_flying` or `+0x3b10`) z stays the current one, and
+the wanted position later drops by gravity × frametime × 0.5. `f` = clamp((curtime − start) /
+duration, 0, 1) + 0 (an empty span: 0 before its end, 1 after), squared; wanted = (end − origin)
+× f² + origin. The velocity becomes (wanted − origin) / frametime, scaled to the stance's speed
+(`speed` or, sprinting `+0x2604`, `sprintspeed`, × `+0x2cb8`; `0x869bd0`, `0x869c40`) when
+faster. On world ground the wanted position is lifted along the ground normal (`+0x3e60`) to at
+least 1/128 above it. A hull trace to it (`0x826fc0`, `0x82a7c0`) moves the origin there when
+clear; blocked, `0x8162a0` continues along a walkable plane, then with `melee_lunge_slide` and
+still at least 1 unit away a second trace and, when the part of the remaining move along the hit
+plane (its length rescaled by √(d·d / (d·d − (d·n)²)), the normal part × 1.0000153) heads toward
+the target (against the start offset), a slide along it. With `melee_lunge_abort_if_blocked`,
+more than 0.05 s from either end: when the distance left exceeds the share still due ((1 − f²) ×
+the whole distance) by more than the hull's half width (`mv+0xd0`), and the origin moved less
+than (left / time left) × frametime × `melee_lunge_abort_distance`, the abort time becomes
+curtime. The whole and left distances come from `0x825640` (the closest distance between the
+two hull cylinders, through `0x31b700`) with `…_use_closest_distance_between_cylinders`. Last
+the velocity is capped to the max end speed when that is above 0, else zeroed; the move flags
+`+0x620`; and a ground probe down by the step height (`0x806cf0`) only acts with the up vector
+upside down.
+
+The blow (`CodeCallback_OnMeleeAttackAnimEvent`): with the attack on, `PlayerMelee_AttackTrace`
+at the weapon's `melee_range` (fists 60); nothing hit ends it. A hit sets the attack's hit
+entity, deals `melee_damage` on the server, and knocks back: `MELEE_KNOCKBACK_SCALE` 350 along
+the view (negated for a player or NPC behind the attacker's centre); a player target is knocked
+by it for 0.25 s. The attack ends (`PlayerMelee_EndAttack`) and the lunge clears; the attacker
+takes −push, level, × 0.5 (175) through `KnockBack` for 0.25 s unless the hit is within 10 of
+the feet (end z − 10 ≤ origin z) or the attacker already moves along it (normalized dot > 0;
+a zero vector normalizes to zero); then `GrappleDetach` (player vfunc `0x870`, `0x86c5b0`).
+
+Weapon settings sit in the weapon at `+0x1870` plus the setting's offset. The registry around
+`0x24c6a160` (a copy at `0x25c43120`) holds 32-byte records (name, default, `offset << 32 | index << 16 | type`, 0;
+types 1 int, 2 float, 3 bool, 4 string): `melee_lunge_time` `+0x224`,
+`melee_lunge_target_range` `+0x228`, `melee_lunge_target_angle` `+0x22c`,
+`melee_lunge_no_target_range` `+0x230`, `melee_range` `+0x240`, `melee_angle` `+0x244`,
+`melee_attack_animtime` `+0x25c`, `melee_raise_recovery_animtime_normal` `+0x260`,
+`melee_anim_1p_number` `+0x278` (registered default 1).
+
+Not ported: a lunge to a position, the pitch lock, lag compensation, the cylinders' distance
+(ours measures the lunge's distances between origins) and the upside-down probe; the cone's
+filter and sort (ours: the centre inside the four planes and range, nearest first), its aim
+target fallback; the blow's ray length (`0x9da540`), mask and level fallback (ours: `range`,
+Source's `MASK_SHOT`), the grapple auto-melee target; how the attack ends after a miss (the
+script ends it only on a hit; ours ends it when the attack activity has run) and the recovery
+times; the weapon's own start (`0xa3bea0`); freezelook; damage (the Minecraft mod deals its
+own).

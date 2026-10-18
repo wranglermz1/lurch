@@ -4,6 +4,7 @@
 	"compatibilityLevel": "JAVA_25",
 	"client": [
 		"CameraMixin",
+		"ClientLevelMixin",
 		"EntityMixin",
 		"GameRendererMixin",
 		"HudMixin",
@@ -13,6 +14,7 @@
 		"MouseMixin",
 		"NativeImageAccess",
 		"OptionsMixin",
+		"PauseScreenMixin",
 		"ServerMovementMixin"
 	],
 	"injectors": {

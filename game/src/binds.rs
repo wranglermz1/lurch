@@ -46,6 +46,7 @@ impl Default for Binds {
             (Key(KeyCode::BracketRight), Action::NextSpot),
             (Key(KeyCode::F1), Action::ToggleHud),
             (Key(KeyCode::F2), Action::DevMenu),
+            (Mouse(MouseButton::Left), Action::Bits(IN_ATTACK)),
             (Mouse(MouseButton::Middle), Action::Ping),
         ])
     }
@@ -104,6 +105,7 @@ fn command(action: Action) -> Option<&'static str> {
         IN_SPEED => "+speed",
         IN_USE => "+use; +use_long",
         IN_OFFHAND1 => "+offhand1",
+        IN_ATTACK => "+attack",
         _ => return None,
     })
 }
@@ -127,6 +129,7 @@ fn action(command: &str) -> Option<Action> {
             "+speed" => Action::Bits(IN_SPEED),
             "+use" => Action::Bits(IN_USE),
             "+offhand1" => Action::Bits(IN_OFFHAND1),
+            "+attack" => Action::Bits(IN_ATTACK),
             "+ping" => Action::Ping,
             "+offhand4" => Action::Ultimate,
             _ => return None,

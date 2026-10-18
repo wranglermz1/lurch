@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
-use lurch::sim::buttons::IN_OFFHAND1;
+use lurch::anim::viewmodel::MeleeSwing;
+use lurch::sim::buttons::{IN_ATTACK, IN_DUCK, IN_JUMP, IN_OFFHAND1};
 use lurch::sim::math::V3;
+use lurch::sim::{HullQuery, Trace, Tracer};
 use lurch::sim::pilot::{self, Clock, Eye, Pilot};
 use lurch::sim::setup::UserCmd;
 use lurch::sim::Settings;
@@ -54,6 +56,164 @@ pub struct Snapshot {
     pub clock: Clock,
 }
 
+/// The punch the viewmodel plays, once it has started it: the commands it spans end the attack
+/// and count its blow. Present while a viewmodel can time a punch; without one, nothing punches.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct Swing(pub Option<MeleeSwing>);
+
+/// How many punches have landed their blow (`AE_MELEE_ATTACK`), and what each blow this frame
+/// hit, in order (none for a blow that hit nothing).
+#[derive(Resource, Clone, Debug, Default)]
+pub struct MeleeAttacks(pub u32, pub Vec<Option<lurch::sim::melee::Blow>>);
+
+/// Crouching on the ground stops at ledges as Minecraft's sneaking does, for the Minecraft host:
+/// Apex has nothing like it, so the shell keeps it out of movement and fences the step instead.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct SneakEdges;
+
+/// How far below the hull Minecraft's sneaking still counts as ground: its step height, 0.6
+/// blocks.
+const SNEAK_DROP: f32 = 24.0;
+/// How finely the move is cut back toward a ledge: Minecraft's 0.05 blocks.
+const SNEAK_BACK_OFF: f32 = 2.0;
+
+/// A limit on a moving hull's origin along one axis: no further than `at` in the direction
+/// `sign` (1 or -1) on axis `axis`.
+#[derive(Clone, Copy)]
+struct Fence {
+    axis: usize,
+    sign: f32,
+    at: f32,
+}
+
+/// The world with fences that only a moving hull hits: what holds a sneaking pilot in for one
+/// command.
+struct Fenced<'a> {
+    world: &'a mut CollisionWorld,
+    fences: &'a [Fence],
+}
+
+impl Tracer for Fenced<'_> {
+    fn hull(&mut self, q: &HullQuery) -> Trace {
+        let mut t = self.world.hull(q);
+        if q.mins == q.maxs || t.startsolid {
+            return t;
+        }
+        let d = [q.end[0] - q.start[0], q.end[1] - q.start[1], q.end[2] - q.start[2]];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        for f in self.fences {
+            let toward = d[f.axis] * f.sign;
+            if toward <= 0.0 {
+                continue;
+            }
+            let room = (f.at - q.start[f.axis]) * f.sign;
+            let frac = if room <= 0.0 { 0.0 } else { ((room / toward) - DIST_EPSILON / len).max(0.0) };
+            if frac < t.fraction {
+                let mut n = [0.0; 3];
+                n[f.axis] = -f.sign;
+                (t.fraction, t.normal, t.entity, t.contents) = (frac, n, 1, 1);
+            }
+        }
+        t.endpos = std::array::from_fn(|i| q.start[i] + d[i] * t.fraction);
+        t
+    }
+
+    fn ziplines(&self) -> &[lurch::sim::zipline::Zipline] {
+        self.world.ziplines()
+    }
+
+    fn bodies(&self) -> &[lurch::world::Body] {
+        self.world.bodies()
+    }
+}
+
+/// Whether the hull at `at` has something under it within `SNEAK_DROP`.
+fn supported(world: &mut CollisionWorld, at: V3, mins: V3, maxs: V3, mask: u32) -> bool {
+    world.hull(&HullQuery { start: at, end: [at[0], at[1], at[2] - SNEAK_DROP], mins, maxs, mask }).fraction < 1.0
+}
+
+/// Minecraft's `maybeBackOffFromEdge` on a move `d` from `o`: each axis, then both, cut back
+/// toward zero until the hull there stays over ground.
+fn back_off(world: &mut CollisionWorld, o: V3, d: [f32; 2], mins: V3, maxs: V3, mask: u32) -> [f32; 2] {
+    let toward_zero = |v: f32| if v.abs() <= SNEAK_BACK_OFF { 0.0 } else { v - SNEAK_BACK_OFF * v.signum() };
+    let mut on = |x: f32, y: f32| supported(world, [o[0] + x, o[1] + y, o[2]], mins, maxs, mask);
+    if on(d[0], d[1]) {
+        return d;
+    }
+    let [mut x, mut y] = d;
+    while x != 0.0 && !on(x, 0.0) {
+        x = toward_zero(x);
+    }
+    while y != 0.0 && !on(0.0, y) {
+        y = toward_zero(y);
+    }
+    while x != 0.0 && y != 0.0 && !on(x, y) {
+        (x, y) = (toward_zero(x), toward_zero(y));
+    }
+    [x, y]
+}
+
+/// One command for a pilot crouching on the ground with `SneakEdges`: the command runs, and a
+/// move that would leave the hull over nothing runs again with a fence where Minecraft's
+/// sneaking would stop it on each axis, so the move slides along it and stays on the ground.
+/// The pilot never ends a command further over an edge than the fences allow: when the
+/// fences have not held it after a few tries, it is put back where they would have, at rest
+/// along each axis cut back.
+fn sneak_step(pilot: &mut Pilot, s: &Settings, cmd: &UserCmd, now: f32, world: &mut CollisionWorld) {
+    const TRIES: usize = 4;
+    let o = pilot.origin;
+    let p = &pilot.player;
+    let (mins, maxs) = if p.ducked() { (p.hull_duck_min, p.hull_duck_max) } else { (p.hull_min, p.hull_max) };
+    let mask = p.mask;
+    let start = pilot.clone();
+    let mut fences = Vec::new();
+    for _ in 0..TRIES {
+        let mut trial = start.clone();
+        trial.step(s, cmd, now, &mut Fenced { world, fences: &fences });
+        let d = [trial.origin[0] - o[0], trial.origin[1] - o[1]];
+        let kept = back_off(world, o, d, mins, maxs, mask);
+        if kept == d {
+            *pilot = trial;
+            return;
+        }
+        for i in 0..2 {
+            if kept[i] != d[i] && !fences.iter().any(|f: &Fence| f.axis == i && f.sign == d[i].signum()) {
+                fences.push(Fence { axis: i, sign: d[i].signum(), at: o[i] + kept[i] });
+            }
+        }
+        *pilot = trial;
+    }
+    let d = [pilot.origin[0] - o[0], pilot.origin[1] - o[1]];
+    let kept = back_off(world, o, d, mins, maxs, mask);
+    for i in 0..2 {
+        if kept[i] != d[i] {
+            pilot.origin[i] = o[i] + kept[i];
+            pilot.velocity[i] = 0.0;
+        }
+    }
+    if supported(world, pilot.origin, mins, maxs, mask) && pilot.player.ground.is_none() {
+        pilot.origin[2] = o[2];
+        pilot.velocity[2] = 0.0;
+        pilot.player.ground = Some(1);
+        pilot.player.flags |= 1;
+    }
+}
+
+/// Whether the command is one `SneakEdges` fences: walking on the ground no faster than the
+/// standing walk, crouched or crouching, not sliding, jumping or on a zipline.
+fn sneaking(pilot: &Pilot, s: &Settings, cmd: &UserCmd) -> bool {
+    let p = &pilot.player;
+    let v = pilot.velocity;
+    let walk = s.stances[0].speed * p.speed_scale;
+    p.ground.is_some()
+        && p.movetype == 2
+        && !p.sliding
+        && p.zipline.is_none()
+        && v[0] * v[0] + v[1] * v[1] <= walk * walk
+        && (p.ducked() || p.duck_held || cmd.buttons & IN_DUCK != 0)
+        && cmd.buttons & IN_JUMP == 0
+}
+
 /// The last commands run and the movement state each left, oldest first.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct History(pub VecDeque<Snapshot>);
@@ -86,6 +246,8 @@ pub struct Step {
     pub grapple_down: bool,
     /// The player's activity modifiers after the command.
     pub modifiers: lurch::anim::viewmodel::Modifiers,
+    /// A punch started after the command.
+    pub melee: bool,
     pub frametime: f32,
 }
 
@@ -134,9 +296,12 @@ pub fn without_view(p: &Pilot) -> Pilot {
 /// command with no input it hangs in the air for good, so it spawns where a trace would leave it.
 pub const DIST_EPSILON: f32 = 0.03125;
 
-fn spawn_pilot(origin: V3, yaw: f32, oldbuttons: u32) -> Pilot {
+/// A pilot spawned with the hulls `settings` give its stances.
+fn spawn_pilot(settings: &Settings, origin: V3, yaw: f32, oldbuttons: u32) -> Pilot {
     let mut p = Pilot::new([origin[0], origin[1], origin[2] + DIST_EPSILON]).with_oldbuttons(oldbuttons);
     p.player.view_angles = [0.0, yaw, 0.0];
+    let (stand, duck) = (&settings.stances[0], &settings.stances[1]);
+    (p.player.hull_min, p.player.hull_max, p.player.hull_duck_min, p.player.hull_duck_max) = (stand.hull_min, stand.hull_max, duck.hull_min, duck.hull_max);
     p
 }
 
@@ -159,7 +324,7 @@ impl Plugin for SimPlugin {
         let current = map.spots.iter().position(|s| s.name == cfg.spot).unwrap_or_else(|| panic!("no spot {:?}", cfg.spot));
         let (origin, yaw) = (map.spots[current].origin, map.spots[current].yaw);
         let settings = pilot::pathfinder();
-        let pilot = spawn_pilot(origin, yaw, 0);
+        let pilot = spawn_pilot(&settings, origin, yaw, 0);
         let clock = Clock::default();
         let pose = Pose(pilot.eye(&settings, cfg.fov_scale, clock.now()));
         app.insert_resource(Sim { pilot, clock, settings, view_now: clock.now(), grapple_clip: GrappleClip::default() })
@@ -167,6 +332,7 @@ impl Plugin for SimPlugin {
             .insert_resource(Spots { list: map.spots, current })
             .init_resource::<History>()
             .init_resource::<FrameCues>()
+            .init_resource::<MeleeAttacks>()
             .insert_resource(pose)
             .add_systems(Update, apply_respawn.in_set(Frame::Respawn))
             .add_systems(Update, run_cmds.in_set(Frame::Run))
@@ -175,7 +341,7 @@ impl Plugin for SimPlugin {
     }
 }
 
-fn apply_respawn(mut respawns: MessageReader<Respawn>, mut sim: ResMut<Sim>, mut spots: ResMut<Spots>, mut history: ResMut<History>, mut look: MessageWriter<LookReset>) {
+fn apply_respawn(mut respawns: MessageReader<Respawn>, mut sim: ResMut<Sim>, mut spots: ResMut<Spots>, mut history: ResMut<History>, mut look: MessageWriter<LookReset>, swing: Option<ResMut<Swing>>) {
     let Some(r) = respawns.read().last().cloned() else { return };
     let n = spots.list.len() as isize;
     let (origin, yaw) = match r {
@@ -196,8 +362,11 @@ fn apply_respawn(mut respawns: MessageReader<Respawn>, mut sim: ResMut<Sim>, mut
         Respawn::At { origin, yaw } => (origin, yaw),
     };
     let old = sim.pilot.oldbuttons();
-    sim.pilot = spawn_pilot(origin, yaw, old);
+    sim.pilot = spawn_pilot(&sim.settings, origin, yaw, old);
     sim.grapple_clip = GrappleClip::default();
+    if let Some(mut swing) = swing {
+        swing.0 = None;
+    }
     sim.clock = Clock::default();
     sim.view_now = sim.clock.now();
     history.0.clear();
@@ -213,21 +382,45 @@ fn run_cmds(
     mut cues: ResMut<FrameCues>,
     mut respawn: MessageWriter<Respawn>,
     over: Option<ResMut<crate::viewmodel::GrappleAnimOver>>,
+    (mut swing, mut attacks, hands): (Option<ResMut<Swing>>, ResMut<MeleeAttacks>, Option<Res<crate::viewmodel::HostHands>>),
+    sneak: Option<Res<SneakEdges>>,
 ) {
     let Sim { pilot, clock, settings, view_now, grapple_clip } = &mut *sim;
     let mut last = None;
     cues.0.clear();
+    attacks.1.clear();
     if let Some(mut over) = over.filter(|o| o.0) {
         over.0 = false;
         pilot.player.grapple_anim_end(&mut Vec::new());
     }
     while let Some(cmd) = queue.0.pop_front() {
         let now = clock.now();
+        if let Some(Swing(punch)) = swing.as_deref_mut() {
+            if let Some(s) = punch.as_mut().filter(|s| s.attack.is_some_and(|t| t <= now)) {
+                s.attack = None;
+                attacks.0 += 1;
+                let blow = pilot.melee_blow(settings, now, lurch::sim::melee::MELEE_RANGE, &mut map.0);
+                attacks.1.push(blow);
+            }
+            if punch.is_some_and(|s| s.end <= now) {
+                pilot.player.end_melee();
+                *punch = None;
+            }
+        }
         let rising = pilot.velocity[2] > f32::EPSILON;
         let old = pilot.oldbuttons();
-        pilot.step(settings, &cmd, now, &mut map.0);
+        if sneak.is_some() && sneaking(pilot, settings, &cmd) {
+            sneak_step(pilot, settings, &cmd, now, &mut map.0);
+        } else {
+            pilot.step(settings, &cmd, now, &mut map.0);
+        }
         if cmd.buttons & !old & IN_OFFHAND1 != 0 && (pilot.player.grappling || grapple_clip.ready()) {
             pilot.grapple(settings, now);
+        }
+        let fists = swing.is_some() && hands.as_ref().is_none_or(|h| h.0);
+        let melee = fists && cmd.buttons & !old & IN_ATTACK != 0 && pilot.melee(now);
+        if melee {
+            pilot.melee_start_activity(settings, now, &mut map.0);
         }
         grapple_clip.think(now, cmd.frametime, pilot);
         let p = &pilot.player;
@@ -246,7 +439,7 @@ fn run_cmds(
         let h = p.grapple_hook_at;
         let (dx, dy, dz) = (h[0] - eye[0], h[1] - eye[1], h[2] - eye[2]);
         let grapple_down = p.grappling && !p.grapple_retracting && GRAPPLE_WEAPONS_DOWN2 < dy * dy + dx * dx + dz * dz;
-        cues.0.push(Step { cues: pilot.cues.clone(), sound: sound_frame(pilot, now), sprinting: p.sprinting, traversal, climb, grapple_down, modifiers: lurch::anim::viewmodel::player_modifiers(p), frametime: cmd.frametime });
+        cues.0.push(Step { cues: pilot.cues.clone(), sound: sound_frame(pilot, now), sprinting: p.sprinting, traversal, climb, grapple_down, modifiers: lurch::anim::viewmodel::player_modifiers(p), melee, frametime: cmd.frametime });
         clock.advance(cmd.frametime);
         history.push(Snapshot { cmd, pilot: pilot.clone(), clock: *clock });
         if pilot.origin[2] < KILL_Z {

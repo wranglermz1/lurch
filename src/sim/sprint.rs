@@ -52,7 +52,7 @@ impl Move<'_> {
         if !(MIN_INPUT2 <= m2 && m2 != 0.0 && 0.707 <= f / m2.sqrt()) {
             return false;
         }
-        if p.sprint_blocked || p.context_action != 0 || 1 >= p.traversal_state.wrapping_sub(1) || p.sprint_suppressed {
+        if p.sprint_blocked || p.melee_active || p.context_action != 0 || 1 >= p.traversal_state.wrapping_sub(1) || p.sprint_suppressed {
             return false;
         }
         if self.landing_slowdown() < self.s.land_slowdown_no_sprint_frac {

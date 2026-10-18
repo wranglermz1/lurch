@@ -18,6 +18,9 @@ public final class ApexKey extends KeyMapping {
 		new ApexKey("crouch", InputConstants.KEY_LCONTROL),
 	};
 
+	/** Opens lurch's options (`LurchOptionsScreen`); Minecraft's key, not one lurch-mc binds. */
+	public static final KeyMapping OPTIONS = new KeyMapping("key.lurch.options", InputConstants.Type.KEYBOARD, InputConstants.KEY_O, CATEGORY);
+
 	/** lurch-mc's name for the action. */
 	public final String action;
 
@@ -30,6 +33,16 @@ public final class ApexKey extends KeyMapping {
 	public String bindLine() {
 		String to = key.getType() == InputConstants.Type.MOUSE ? "m " + key.getValue() : isUnbound() ? "-" : "k " + key.getValue();
 		return "bind " + action + " " + to + "\n";
+	}
+
+	/** Whether the key or mouse button is one of lurch's keys. */
+	public static boolean any(InputConstants.Key key) {
+		for (ApexKey k : ALL) {
+			if (k.matches(key)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Whether the key event is one of lurch's keys. */

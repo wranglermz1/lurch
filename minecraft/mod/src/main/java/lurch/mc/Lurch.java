@@ -13,6 +13,13 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import com.mojang.blaze3d.platform.InputConstants;
@@ -23,15 +30,27 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.state.LightmapRenderState;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.CardinalLighting;
+import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -50,6 +69,11 @@ public final class Lurch {
 	private static final int HORIZONTAL = 24, BELOW = 8, ABOVE = 24;
 	private static final long SCAN_EVERY_NS = 500_000_000L;
 	private static final int RESCAN_DISTANCE = 4;
+	/** How far from the player mobs are sent: past the grapple's 850 units, 21¼ blocks. */
+	private static final double BODY_RANGE = 24;
+	/** A punch hits three times as hard as Minecraft's empty hand: its attack damage, tripled while it lands. */
+	private static final Identifier PUNCH = Identifier.fromNamespaceAndPath("lurch", "punch");
+	private static final double PUNCH_EXTRA = 2.0;
 
 	private static Socket socket;
 	private static BufferedReader in;
@@ -57,11 +81,15 @@ public final class Lurch {
 	private static final StringBuilder events = new StringBuilder();
 	private static long lastFrame;
 	private static boolean toggleHeld, capturing;
+	/** The mouse buttons down that went to lurch. */
+	private static final Set<Integer> lurchButtons = new HashSet<>();
 	/** Where lurch last put the player; anything else moving it (a teleport, a respawn) restarts lurch there. */
 	private static Vec3 placed;
 	private static String lastBlocks = "";
 	private static BlockPos scannedAt;
 	private static long scannedTime;
+	/** A block that blocks movement changed since the last scan. */
+	private static boolean blocksChanged;
 
 	/** The camera lurch asks for; null while lurch is off. */
 	public static Vec3 eye;
@@ -70,7 +98,22 @@ public final class Lurch {
 	/** The lightmap's inputs as Minecraft last rendered it, and the last light sent. */
 	private static float skyFactor, blockFactor, nightVision, darkness, bossDarkening, brightness;
 	private static final float[] blockTint = {1, 1, 1}, skyColor = {1, 1, 1}, ambient = new float[3], nightVisionColor = new float[3];
-	private static String lastLight = "", lastHotbar = "", lastBinds = "", lastHands = "";
+	private static String lastLight = "", lastHotbar = "", lastBinds = "", lastHands = "", lastLayout = "";
+	private static boolean sentOptions;
+	/**
+	 * The player is waist-deep in water: Minecraft moves them, swimming, until they are out, and
+	 * lurch starts again where they are. Apex has no swimming.
+	 */
+	private static boolean swimming;
+	/** How far above the feet water must reach for Minecraft to take over: half Steve's height, so lurch still wades through one block of water. */
+	private static final double WAIST = 0.9;
+	/** The player's speed when lurch last placed them, in blocks per tick. */
+	private static Vec3 lastVelocity = Vec3.ZERO;
+	/** lurch-mc's options as it last said (`config`), and what `set` may choose from (`choices`). */
+	private static final Map<String, String> hostOptions = new HashMap<>();
+	private static final Map<String, List<String>> choices = new HashMap<>();
+	/** Where lurch-mc draws its panels before the player's layout, in window pixels (`rect`). */
+	private static final Map<String, float[]> rects = new HashMap<>();
 	/** Whether lurch-mc drew arms in its last frame; Minecraft draws its own hand only when it did not. */
 	public static boolean arms = true;
 	/**
@@ -91,11 +134,15 @@ public final class Lurch {
 	private static DynamicTexture overlay;
 	private static int overlaySeq;
 
+	/** Where lurch last put the player, read by the integrated server's thread; null while lurch is off or the player swims. */
+	public static volatile Vec3 placedAt;
+
 	/** The player lurch drives, read by the integrated server's thread; null while lurch is off. */
 	private static volatile UUID driven;
 
+	/** Whether lurch drives the player: it is on and the player is not swimming. */
 	public static boolean on() {
-		return socket != null;
+		return socket != null && !swimming;
 	}
 
 	public static boolean drives(UUID player) {
@@ -106,25 +153,40 @@ public final class Lurch {
 		return on() && entity instanceof LocalPlayer;
 	}
 
+	/** Whether the entity aims from lurch's camera: the player lurch moves, once lurch has placed the camera. */
+	public static boolean aims(Object entity) {
+		return eye != null && moves(entity);
+	}
+
 	/** Whether input goes to lurch instead of Minecraft: lurch is on and no screen is open. */
 	private static boolean ours() {
 		Minecraft mc = Minecraft.getInstance();
 		return on() && mc.gui.screen() == null && mc.player != null;
 	}
 
+	/** Minecraft's keys that stay Minecraft's while lurch is on: everything but moving, which lurch's keys do. */
+	private static List<KeyMapping> minecraftKeys(Minecraft mc) {
+		var o = mc.options;
+		List<KeyMapping> keys = new java.util.ArrayList<>(List.of(o.keyChat, o.keyCommand, o.keyInventory, o.keySwapOffhand, o.keyDrop, o.keyUse, o.keyAttack, o.keyPickItem, o.keyPlayerList, o.keyAdvancements, o.keySocialInteractions, o.keyFriends, o.keyQuickActions));
+		keys.addAll(List.of(o.keyHotbarSlots));
+		keys.add(ApexKey.OPTIONS);
+		return keys;
+	}
+
 	/**
-	 * True when Minecraft should not see this key. Escape, F1 to F12, the chat keys and the hotbar's
-	 * slot keys stay Minecraft's, unless one of lurch's keys (`ApexKey`) is bound there.
+	 * True when Minecraft should not see this key. Escape, F1 to F12 and Minecraft's own keys but
+	 * its movement (`minecraftKeys`: chat, inventory, drop, the hotbar's slots and so on) stay
+	 * Minecraft's, unless one of lurch's keys (`ApexKey`) is bound there.
 	 */
 	public static boolean key(int action, KeyEvent e) {
 		Minecraft mc = Minecraft.getInstance();
 		int k = e.key();
-		if (!ours() || k == InputConstants.KEY_ESCAPE || (k >= InputConstants.KEY_F1 && k <= InputConstants.KEY_F12) || mc.options.keyChat.matches(e) || mc.options.keyCommand.matches(e)) {
+		if (!ours() || k == InputConstants.KEY_ESCAPE || (k >= InputConstants.KEY_F1 && k <= InputConstants.KEY_F12)) {
 			return false;
 		}
 		if (!ApexKey.any(e)) {
-			for (KeyMapping slot : mc.options.keyHotbarSlots) {
-				if (slot.matches(e)) {
+			for (KeyMapping m : minecraftKeys(mc)) {
+				if (m.matches(e)) {
 					return false;
 				}
 			}
@@ -135,12 +197,187 @@ public final class Lurch {
 		return true;
 	}
 
+	/**
+	 * True when Minecraft should not see this mouse button. lurch takes the left button while the
+	 * fists are out (a punch) and any button one of lurch's keys is bound to; Minecraft keeps the
+	 * rest, so the player mines, attacks, places and uses items as usual. A button goes up to
+	 * whichever side it went down to.
+	 */
 	public static boolean button(int button, int action) {
-		if (!ours()) {
+		Minecraft mc = Minecraft.getInstance();
+		if (action == InputConstants.RELEASE && (!lurchButtons.remove(button) || !ours())) {
 			return false;
+		}
+		if (action == InputConstants.PRESS) {
+			if (!ours()) {
+				return false;
+			}
+			boolean apex = ApexKey.any(InputConstants.Type.MOUSE.getOrCreate(button));
+			boolean punch = button == InputConstants.MOUSE_BUTTON_LEFT && mc.player.getMainHandItem().isEmpty();
+			if (!apex && !punch) {
+				return false;
+			}
+			lurchButtons.add(button);
 		}
 		events.append("m ").append(button).append(action == InputConstants.PRESS ? " 1\n" : " 0\n");
 		return true;
+	}
+
+	/**
+	 * A punch's blow landed on what lurch-mc's trace hit (`punch` in its protocol). A mob takes
+	 * three times the damage Minecraft's empty hand deals it: on the integrated server the
+	 * player's attack damage is tripled while the attack lands (singleplayer only; elsewhere the
+	 * hand's own attack). A block breaks, with its drops, when an empty hand mines it at least as
+	 * fast as it mines a log, and in Creative always; anything slower is left as it is. Breaking
+	 * goes through the integrated server, so in singleplayer only.
+	 */
+	private static void punch(Minecraft mc, String[] r) {
+		LocalPlayer p = mc.player;
+		IntegratedServer server = mc.getSingleplayerServer();
+		UUID id = p.getUUID();
+		if (r[1].equals("e")) {
+			int target = Integer.parseInt(r[2]);
+			Entity e = mc.level.getEntity(target);
+			if (e == null) {
+				return;
+			}
+			if (server == null) {
+				mc.gameMode.attack(p, e);
+				return;
+			}
+			server.execute(() -> {
+				ServerPlayer sp = server.getPlayerList().getPlayer(id);
+				Entity t = sp == null ? null : sp.level().getEntity(target);
+				if (t == null) {
+					return;
+				}
+				AttributeInstance damage = sp.getAttribute(Attributes.ATTACK_DAMAGE);
+				damage.addOrUpdateTransientModifier(new AttributeModifier(PUNCH, PUNCH_EXTRA, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL));
+				try {
+					sp.attack(t);
+				} finally {
+					damage.removeModifier(PUNCH);
+				}
+			});
+			return;
+		}
+		if (!r[1].equals("b") || server == null) {
+			return;
+		}
+		BlockPos pos = new BlockPos(Integer.parseInt(r[2]), Integer.parseInt(r[3]), Integer.parseInt(r[4]));
+		BlockState seen = mc.level.getBlockState(pos);
+		server.execute(() -> {
+			ServerPlayer sp = server.getPlayerList().getPlayer(id);
+			if (sp == null) {
+				return;
+			}
+			ServerLevel level = sp.level();
+			BlockState s = level.getBlockState(pos);
+			if (s.isAir() || !(sp.isCreative() || s.getDestroyProgress(sp, level, pos) >= Blocks.OAK_LOG.defaultBlockState().getDestroyProgress(sp, level, pos))) {
+				return;
+			}
+			if (sp.gameMode.destroyBlock(pos)) {
+				mc.execute(() -> mc.level.levelEvent(null, 2001, pos, Block.getId(seen)));
+			}
+		});
+	}
+
+	/**
+	 * A block changed in the client's world (`ClientLevelMixin`): one that blocks or blocked
+	 * movement near the player rescans the blocks the next frame, so a block just placed is
+	 * floor before the pilot falls through it.
+	 */
+	public static void blockChanged(ClientLevel level, BlockPos pos, BlockState old, BlockState now) {
+		if (socket == null || scannedAt == null || Math.abs(pos.getX() - scannedAt.getX()) > HORIZONTAL || Math.abs(pos.getZ() - scannedAt.getZ()) > HORIZONTAL) {
+			return;
+		}
+		if (!old.getCollisionShape(level, pos).isEmpty() || !now.getCollisionShape(level, pos).isEmpty()) {
+			blocksChanged = true;
+		}
+	}
+
+	/** The mobs near the player, as lurch-mc's `bodies` message. */
+	private static String bodies(ClientLevel level, LocalPlayer p) {
+		StringBuilder sb = new StringBuilder("bodies\n");
+		for (Entity e : level.getEntities(p, p.getBoundingBox().inflate(BODY_RANGE), e -> e instanceof LivingEntity && e.isAlive() && !e.isSpectator())) {
+			AABB b = e.getBoundingBox();
+			sb.append("b ").append(e.getId()).append(' ').append(b.minX).append(' ').append(b.minY).append(' ').append(b.minZ).append(' ').append(b.maxX).append(' ').append(b.maxY).append(' ').append(b.maxZ).append('\n');
+		}
+		return sb.append("end\n").toString();
+	}
+
+	/** The player's place for each of lurch-mc's panels, as `layout` lines in window pixels. */
+	private static String layoutLines(Minecraft mc) {
+		var win = mc.getWindow();
+		StringBuilder sb = new StringBuilder();
+		for (String e : HudLayout.APEX) {
+			LurchConfig.Place p = LurchConfig.place(e);
+			sb.append("layout ").append(e).append(' ').append(p.dx() * win.getWidth()).append(' ').append(p.dy() * win.getHeight()).append(' ').append(p.scale()).append('\n');
+		}
+		return sb.toString();
+	}
+
+	/** lurch-mc's value for an option, or null before it said. */
+	public static String hostOption(String name) {
+		return hostOptions.get(name);
+	}
+
+	/** What an option may be, as lurch-mc last said, or the install's usual choices before it has. */
+	public static List<String> choices(String name) {
+		List<String> c = choices.get(name);
+		if (c != null) {
+			return c;
+		}
+		return name.equals("legend") ? List.of("bangalore", "bloodhound", "caustic", "crypto", "gibraltar", "lifeline", "mirage", "octane", "pathfinder", "revenant", "wattson", "wraith") : List.of("none", "wraith_kunai");
+	}
+
+	/** Whether water reaches the player's waist. */
+	private static boolean waistDeep(ClientLevel level, LocalPlayer p) {
+		double y = p.getY() + WAIST;
+		BlockPos at = BlockPos.containing(p.getX(), y, p.getZ());
+		FluidState f = level.getFluidState(at);
+		return f.is(FluidTags.WATER) && y < at.getY() + f.getHeight(level, at);
+	}
+
+	/**
+	 * Hands the player to Minecraft in water, at the speed lurch moved them, with the keys held
+	 * now; and back to lurch out of it, which starts where they are (a `spawn`) with the keys
+	 * held then. lurch-mc lets go of every key first (`r`), since it saw none of the swim's.
+	 */
+	private static void swim(Minecraft mc, LocalPlayer p, boolean in) {
+		swimming = in;
+		placed = null;
+		placedAt = null;
+		if (in) {
+			eye = null;
+			p.setDeltaMovement(lastVelocity);
+			KeyMapping.setAll();
+			events.append("r\n");
+			return;
+		}
+		KeyMapping.releaseAll();
+		for (int k = 0; k < 512; k++) {
+			if (InputConstants.isKeyDown(k)) {
+				key(InputConstants.PRESS, new KeyEvent(k, 0, 0));
+			}
+		}
+	}
+
+	/** Sends an option the player changed to lurch-mc, while it is connected. */
+	public static void sendOption(String name, String value) {
+		if (socket != null) {
+			events.append("set ").append(name).append(' ').append(value).append('\n');
+		}
+	}
+
+	/** Where lurch-mc draws one of its panels before the player's layout, in GUI pixels, or null. */
+	public static float[] apexRect(String element) {
+		float[] r = rects.get(element);
+		if (!on() || r == null) {
+			return null;
+		}
+		float k = Minecraft.getInstance().getWindow().getGuiScale();
+		return new float[] {r[0] / k, r[1] / k, r[2] / k, r[3] / k};
 	}
 
 	public static boolean scroll(double y) {
@@ -169,6 +406,11 @@ public final class Lurch {
 			}
 		}
 		toggleHeld = toggle;
+		while (ApexKey.OPTIONS.consumeClick()) {
+			if (mc.gui.screen() == null) {
+				mc.gui.setScreen(new LurchOptionsScreen(null));
+			}
+		}
 		LocalPlayer p = mc.player;
 		if (socket == null) {
 			return;
@@ -181,6 +423,13 @@ public final class Lurch {
 		double frametime = (now - lastFrame) / 1e9;
 		lastFrame = now;
 		if (mc.isPaused()) {
+			return;
+		}
+		boolean wet = waistDeep(mc.level, p);
+		if (wet != swimming) {
+			swim(mc, p, wet);
+		}
+		if (swimming) {
 			return;
 		}
 		boolean nowOurs = ours();
@@ -219,14 +468,34 @@ public final class Lurch {
 				msg.append(light);
 				lastLight = light;
 			}
+			if (!sentOptions) {
+				msg.append(LurchConfig.setLines());
+				sentOptions = true;
+			}
+			String layout = layoutLines(mc);
+			if (!layout.equals(lastLayout)) {
+				msg.append(layout);
+				lastLayout = layout;
+			}
+			msg.append(bodies(mc.level, p));
 			msg.append(events);
 			events.setLength(0);
 			msg.append("frame ").append(frametime).append(' ').append(mc.getWindow().getWidth()).append(' ').append(mc.getWindow().getHeight()).append('\n');
 			out.write(msg.toString());
 			out.flush();
 			String line = in.readLine();
-			while (line != null && line.startsWith("hud ")) {
-				layout(line.split(" "));
+			List<String[]> punches = new ArrayList<>();
+			while (line != null && !line.startsWith("pose ")) {
+				String[] r = line.split(" ");
+				switch (r[0]) {
+					case "hud" -> layout(r);
+					case "rect" -> rects.put(r[1], r[2].equals("-") ? null : new float[] {Float.parseFloat(r[2]), Float.parseFloat(r[3]), Float.parseFloat(r[4]), Float.parseFloat(r[5])});
+					case "punch" -> punches.add(r);
+					case "choices" -> choices.put(r[1], List.of(Arrays.copyOfRange(r, 2, r.length)));
+					case "config" -> hostOptions.put(r[1], r[2]);
+					default -> {
+					}
+				}
 				line = in.readLine();
 			}
 			if (line == null) {
@@ -247,12 +516,19 @@ public final class Lurch {
 			p.xRotO = viewPitch;
 			p.yRotO = viewYaw;
 			p.setYHeadRot(viewYaw);
+			if (placed != null && frametime > 0) {
+				lastVelocity = p.position().subtract(placed).scale(1 / (frametime * 20));
+			}
 			placed = p.position();
+			placedAt = placed;
 			eye = new Vec3(Double.parseDouble(r[4]), Double.parseDouble(r[5]), Double.parseDouble(r[6]));
 			pitch = Float.parseFloat(r[7]);
 			yaw = Float.parseFloat(r[8]);
 			roll = Float.parseFloat(r[9]);
 			fov = Float.parseFloat(r[10]);
+			for (String[] blow : punches) {
+				punch(mc, blow);
+			}
 			readOverlay(mc);
 		} catch (IOException | RuntimeException e) {
 			stop(mc, e.toString());
@@ -285,17 +561,36 @@ public final class Lurch {
 		return h == null ? "" : "hotbar " + (h[1] - HOTBAR_HALF * h[0]) + "\n";
 	}
 
-	/** Pushes a pose that draws the hotbar and what sits on it where `hotbar` puts them; false, with nothing pushed, when it puts them nowhere. */
-	public static boolean pushHotbar(GuiGraphicsExtractor g) {
+	/**
+	 * Pushes a pose that draws `element` (the hotbar, or the experience bar, which moves with it)
+	 * where the player's layout puts it, from where `hotbar` puts the hotbar; false, with nothing
+	 * pushed, when neither moves it.
+	 */
+	public static boolean pushHotbar(GuiGraphicsExtractor g, String element) {
 		int[] h = hotbar();
+		boolean placed = HudLayout.push(g, element);
 		if (h == null) {
-			return false;
+			return placed;
+		}
+		if (!placed) {
+			g.pose().pushMatrix();
 		}
 		float scale = Minecraft.getInstance().getWindow().getGuiScale();
-		g.pose().pushMatrix();
 		g.pose().translate((h[1] - h[0] * (g.guiWidth() / 2)) / scale, (h[2] - h[0] * g.guiHeight()) / scale);
 		g.pose().scale(h[0] / scale);
 		return true;
+	}
+
+	/** Where the hotbar's pose (`pushHotbar` without the layout) puts a rectangle in GUI pixels. */
+	public static float[] throughHotbar(float[] r) {
+		int[] h = hotbar();
+		if (h == null) {
+			return r;
+		}
+		var w = Minecraft.getInstance().getWindow();
+		float scale = w.getGuiScale(), k = h[0] / scale;
+		float tx = (h[1] - h[0] * (w.getGuiScaledWidth() / 2)) / scale, ty = (h[2] - h[0] * w.getGuiScaledHeight()) / scale;
+		return new float[] {r[0] * k + tx, r[1] * k + ty, r[2] * k + tx, r[3] * k + ty};
 	}
 
 	/**
@@ -377,9 +672,10 @@ public final class Lurch {
 	/** The blocks near the player when they changed, or when asked, as lurch-mc's `blocks` message. */
 	private static String blocks(ClientLevel level, BlockPos at, boolean force) {
 		long now = System.nanoTime();
-		if (!force && now - scannedTime < SCAN_EVERY_NS && at.distManhattan(scannedAt) < RESCAN_DISTANCE) {
+		if (!force && !blocksChanged && now - scannedTime < SCAN_EVERY_NS && at.distManhattan(scannedAt) < RESCAN_DISTANCE) {
 			return "";
 		}
+		blocksChanged = false;
 		scannedTime = now;
 		scannedAt = at;
 		int x0 = at.getX() - HORIZONTAL - 1, y0 = at.getY() - BELOW - 1, z0 = at.getZ() - HORIZONTAL - 1;
@@ -496,9 +792,15 @@ public final class Lurch {
 			lastHotbar = "";
 			lastBinds = "";
 			lastHands = "";
+			lastLayout = "";
+			sentOptions = false;
+			swimming = false;
+			lastVelocity = Vec3.ZERO;
+			rects.clear();
 			arms = true;
 			shm = null;
 			capturing = false;
+			lurchButtons.clear();
 			events.setLength(0);
 			lastFrame = System.nanoTime();
 			KeyMapping.releaseAll();
@@ -518,6 +820,7 @@ public final class Lurch {
 		}
 		socket = null;
 		driven = null;
+		placedAt = null;
 		in = null;
 		out = null;
 		eye = null;

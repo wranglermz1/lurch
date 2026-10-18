@@ -12,7 +12,12 @@
 //!
 //! A mantle puts the weapon away (`holster`) and raises it after (`unholster`).
 //!
-//! Not modelled: firing, reloading, switching, melee and inspecting; the weapon's
+//! A punch (`melee`) plays the melee weapon's attack activity through SendWeaponAnim, then the
+//! fists raise from it (`melee_over`).
+//!
+//! Not modelled: firing, reloading, switching and inspecting; the melee weapon's own start
+//! (`0xa3bea0`, which sets its attack times) and its recovery times
+//! (`melee_raise_recovery_animtime_*`); the weapon's
 //! one-handed and alternate activities (`0xa582a0`); the modifiers `airfast`, `althand` and
 //! `onehand_was_sprinting`; the draw among equally good sequences; the lockout a melee leaves on
 //! the weapon's sequence lengths; the client's frame advance (cycles run from when a sequence
@@ -99,6 +104,23 @@ pub enum WeaponState {
     Deploying,
     Raising,
     Sprinting,
+    /// The melee weapon's attack plays.
+    Melee,
+}
+
+/// A punch as the melee weapon plays it: when its `AE_MELEE_ATTACK` comes, if its sequence has
+/// one, and when its activity has run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeleeSwing {
+    pub attack: Option<f32>,
+    pub end: f32,
+}
+
+/// The melee weapon's attack activity (`0xa5b180`): its `melee_anim_1p_number`, held to 1..3,
+/// counted from `ACT_VM_MELEE_ATTACK1`.
+pub fn melee_activity(anim_number: i32) -> Activity {
+    let n = if anim_number < 1 { 1 } else { anim_number };
+    Activity(0x1ec + if n < 3 { n } else { 3 } as u16)
 }
 
 /// A sequence as sent: from cycle `from` at `start`, at `rate`, with the layer's weight and
@@ -310,6 +332,9 @@ impl Viewmodel {
     /// weapon has one; otherwise, once the current activity has run, idle for a weapon that
     /// idles.
     pub fn weapon_idle(&mut self, set: &ModelAnims, sprinting: bool, now: f32) {
+        if self.state == WeaponState::Melee && now < self.next_idle {
+            return;
+        }
         if sprinting && set.select(Activity::VM_SPRINT, &[], None).is_some() {
             self.state = WeaponState::Sprinting;
             if self.activity != Some(Activity::VM_SPRINT) {
@@ -336,6 +361,32 @@ impl Viewmodel {
         let raised = WEAPON_SPRINT_RAISE_DELAY && self.send_weapon_anim(set, Activity::VM_RAISE_FROM_SPRINT, now)
             || WEAPON_SPRINT_RAISE_DELAY && self.send_weapon_anim(set, Activity::VM_RAISE, now);
         if !raised {
+            self.send_weapon_anim(set, Activity::VM_IDLE, now);
+            self.next_idle = now;
+        }
+    }
+
+    /// The melee weapon's attack (`0xa5b180`): `act` sent at once. None when the weapon has no
+    /// sequence for it.
+    pub fn melee(&mut self, set: &ModelAnims, act: Activity, now: f32) -> Option<MeleeSwing> {
+        if self.holstered.is_some() || !self.send_weapon_anim(set, act, now) {
+            return None;
+        }
+        self.state = WeaponState::Melee;
+        let info = &set.seqs[self.ideal?.0 as usize];
+        let length = self.next_idle - now;
+        let attack = info.named_events.iter().find(|(_, name, _)| name == "AE_MELEE_ATTACK").map(|(c, _, _)| now + c * length);
+        Some(MeleeSwing { attack, end: self.next_idle })
+    }
+
+    /// The fists back after a punch (RaiseWeapon from melee, `0xa44520`):
+    /// `ACT_VM_RAISE_FROM_MELEE`, else idle at once.
+    pub fn melee_over(&mut self, set: &ModelAnims, now: f32) {
+        if self.state != WeaponState::Melee {
+            return;
+        }
+        self.state = WeaponState::Raising;
+        if !self.send_weapon_anim(set, Activity::VM_RAISE_FROM_MELEE, now) {
             self.send_weapon_anim(set, Activity::VM_IDLE, now);
             self.next_idle = now;
         }
@@ -418,6 +469,9 @@ impl Viewmodel {
             }
         }
         self.set_player_modifiers(modifiers);
+        if self.state == WeaponState::Melee && self.next_idle <= now {
+            self.melee_over(set, now);
+        }
         self.weapon_idle(set, sprinting, now);
     }
 

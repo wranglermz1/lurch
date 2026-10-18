@@ -341,9 +341,22 @@ pub fn player(p: &[u8]) -> Player {
         sprint_until: f32_at(p, 0x25f8),
         sprint_started_fresh: byte(p, 0x25fc) != 0,
         sprint_toggle_lock: byte(p, 0x1881) != 0,
-        sprint_blocked: byte(p, 0x2605) != 0 || byte(p, 0x2c7c) != 0,
+        sprint_blocked: byte(p, 0x2605) != 0,
         sprint_suppressed: false,
-        traversal_blocked: byte(p, 0x2c7c) != 0,
+        melee_active: byte(p, 0x2c7c) != 0,
+        melee_state: u32_at(p, 0x2c90),
+        melee_start: f32_at(p, 0x2c80),
+        melee_hit: u32_at(p, 0x2c84) != u32::MAX,
+        melee_push: vec3_at(p, 0x2c98),
+        lunge_target: (u32_at(p, 0x3adc) != u32::MAX).then(|| u32_at(p, 0x3adc) as u64),
+        lunge_start_offset: vec3_at(p, 0x3af0),
+        lunge_end_offset: vec3_at(p, 0x3afc),
+        lunge_start: f32_at(p, 0x3b08),
+        lunge_abort: f32_at(p, 0x3b0c),
+        lunge_flying: byte(p, 0x3b10) != 0,
+        lunge_duration: f32_at(p, 0x3b18),
+        lunge_max_time: f32_at(p, 0x3b1c),
+        lunge_max_end_speed: f32_at(p, 0x3b20),
         traversal_state: u32_at(p, 0x262c),
         frozen: byte(p, 0x2184) != 0,
         dead: byte(p, 0x730) != 0,
@@ -448,6 +461,7 @@ pub fn player(p: &[u8]) -> Player {
         grapple_swing_hold: f32_at(p, 0x27e8),
         suit_grapple_power: f32_at(p, 0x1a64),
         grapple_hook_at: [0.0; 3],
+        grapple_parent: None,
         grapple_zipline: None,
         mantle_blocked: (u32_at(p, 0x2cac) >> 11) & 1 != 0
             || u64_at(p, 0x2ac8) as i64 > 0
@@ -912,6 +926,15 @@ macro_rules! modelled_fields {
         $m!(step_side);
         $m!(land_speed);
         $m!(heavy_land_speed);
+        $m!(melee_push);
+        $m!(lunge_start_offset);
+        $m!(lunge_end_offset);
+        $m!(lunge_start);
+        $m!(lunge_abort);
+        $m!(lunge_flying);
+        $m!(lunge_duration);
+        $m!(lunge_max_time);
+        $m!(lunge_max_end_speed);
     };
 }
 
@@ -953,6 +976,8 @@ fn diff_player_as(ours: &Player, theirs: &Player, norm: fn(String) -> String) ->
     present!(surface);
     present!(step_probe);
     present!(land_probe);
+    present!(lunge_target);
+    present!(grapple_parent);
     out
 }
 
@@ -987,6 +1012,8 @@ pub fn with_state(mut base: Player, state: &Player) -> Player {
     base.surface = state.surface;
     base.step_probe = state.step_probe;
     base.land_probe = state.land_probe;
+    base.lunge_target = state.lunge_target;
+    base.grapple_parent = state.grapple_parent;
     base
 }
 

@@ -1,6 +1,9 @@
 package lurch.mc.mixin;
 
 import lurch.mc.Lurch;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.entity.Entity;
@@ -32,6 +35,20 @@ public class ServerMovementMixin {
 	@Redirect(method = "handlePlayerPositionChange", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerPlayer;isCreative()Z"))
 	private boolean lurch$wrongly(ServerPlayer p) {
 		return p.isCreative() || Lurch.drives(p.getUUID());
+	}
+
+	/**
+	 * The server checks a placed block against where it last heard the player was, up to a tick
+	 * ago: mid-jump, lurch moves fast enough that a block placed under the feet would land in that
+	 * older box and be refused. So the player is where lurch last put them first. (A second
+	 * position packet in the tick would get the client kicked.)
+	 */
+	@Inject(method = "handleUseItemOn", at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/server/level/ServerLevel;)V", shift = At.Shift.AFTER))
+	private void lurch$placing(ServerboundUseItemOnPacket packet, CallbackInfo ci) {
+		Vec3 at = Lurch.placedAt;
+		if (at != null && Lurch.drives(player.getUUID())) {
+			player.setPos(at);
+		}
 	}
 
 	@Inject(method = "isEntityCollidingWithAnythingNew", at = @At("HEAD"), cancellable = true)

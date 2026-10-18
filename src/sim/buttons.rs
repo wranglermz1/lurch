@@ -1,5 +1,8 @@
 //! The usercmd button bits the simulation reads or the client sets.
 
+/// `+attack`. Movement never reads it: with the fists out it starts a punch after the move
+/// (`Pilot::melee`).
+pub const IN_ATTACK: u32 = 0x1;
 pub const IN_JUMP: u32 = 0x2;
 pub const IN_DUCK: u32 = 0x4;
 pub const IN_FORWARD: u32 = 0x8;

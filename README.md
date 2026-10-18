@@ -24,7 +24,7 @@ the sources.
 ## Fidelity reached
 
 `cargo test` replays every recording two ways, and both must be bit-exact on origin,
-velocity and all 136 modelled player fields:
+velocity and all 146 modelled player fields:
 
 - call by call, each call starting from the oracle's state;
 - chained, the simulation carrying its own state from call to call for whole recordings.
@@ -52,6 +52,12 @@ grab it leads to, the first-person animation state it sets (`+0x2a4c`, a gated f
 suit power's refill and the view's roll toward the rope; the grapple's sounds, its arms
 animation, the rope's shape and the crosshair's in-range answer are ported from the image too
 (`docs/feedback.md`, Grapple), none of it recorded.
+
+Melee: the push a punch on the ground gives with no target (`0x826540`) is ported from the
+image, and the shell starts the attack on the attack button with the fists out and plays the
+melee weapon's attack activity (`docs/oracle.md`, Melee). No recording holds a punch: the gates
+only check the push stays zero, and the lunge's fields cleared, without one. The lunge toward a
+target, the blow's trace and the knockback it gives are ported but not recorded.
 
 Camera: what the movement call keeps for the view (sprint tilt, view punch springs, fall
 speed, sprint transition times, eye height through a duck) is among those fields, and so

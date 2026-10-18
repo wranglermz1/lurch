@@ -22,8 +22,9 @@ public class OptionsMixin {
 
 	@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Options;load()V"))
 	private void lurch$keys(Minecraft minecraft, File dir, CallbackInfo ci) {
-		KeyMapping[] all = Arrays.copyOf(keyMappings, keyMappings.length + ApexKey.ALL.length);
+		KeyMapping[] all = Arrays.copyOf(keyMappings, keyMappings.length + ApexKey.ALL.length + 1);
 		System.arraycopy(ApexKey.ALL, 0, all, keyMappings.length, ApexKey.ALL.length);
+		all[all.length - 1] = ApexKey.OPTIONS;
 		keyMappings = all;
 	}
 }

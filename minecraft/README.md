@@ -15,9 +15,60 @@ shell runs next to it as a second process.
   - It writes the frame's viewmodel, grapple rope and HUD, on a transparent background, to
     `/dev/shm/lurch-mc`.
 - `mod/` is a client-only Fabric mod for Minecraft Java 26.3. It needs only Fabric Loader.
-  - While lurch is on, it sends input to the host instead of Minecraft. Escape, F1 to F12, the
-    chat keys and the hotbar's slot keys (1 to 9 by default) stay with Minecraft, unless one of
-    lurch's keys is bound there.
+  - While lurch is on, it sends input to the host instead of Minecraft. Escape, F1 to F12 and
+    Minecraft's own keys but its movement keys stay with Minecraft, unless one of lurch's keys
+    is bound there: chat, inventory (E), swap hands, drop, the hotbar's slots, the player list,
+    advancements and the rest. So the inventory and crafting work as usual while lurch is on.
+  - The mouse buttons are Minecraft's too, so the player mines, attacks, places blocks and uses
+    items as usual, except the left button with an empty main hand, and any button one of
+    lurch's keys is bound to. A button goes up to whichever side it went down to.
+  - The left button with the fists out punches as Apex does: the melee weapon's attack
+    (`melee_punch` standing, the uppercut crouched, the kick in the air). A mob whose centre
+    is within the fists' lunge cone (60 units, a block and a half, and 30°) and in sight
+    becomes the punch's target, and the player lunges at it over 0.35 s, ending against its
+    side; with none, on the ground, the punch pushes forward instead (up to 60 units over
+    0.35 s; `lurch::sim::melee`). The punch blocks the sprint, mantles and the grapple until its
+    swing ends (0.93 s for `melee_punch`). Its blow (`AE_MELEE_ATTACK`, 0.3 s in) traces 60
+    units from the eye, as Apex's does, at the lunge's target while it lunges: lurch-mc says
+    `punch` with what it hit. Anything hit above the feet knocks the player back at 175 u/s,
+    level, unless they already move away from it, ends the lunge and lets go of the grapple.
+    The mod then hits it: a mob takes three times the damage Minecraft's empty hand deals
+    (singleplayer; on a server, the hand's own damage); a block breaks at once, with its drops,
+    if an empty hand mines it at least as fast as a log (so logs, planks, dirt, sand, glass,
+    leaves and plants, but not stone or ores), and any block in Creative. A slower block is left
+    as it is. Breaking goes through the integrated server, so only in singleplayer.
+  - The pilot's hull is Steve's width, 0.6 blocks (24 units), in place of Apex's 32, so it fits
+    through an open door (13/16 of a block) and wherever Steve fits; its heights stay Apex's.
+    A block that changes near the player is collision the next frame (`ClientLevelMixin`), and
+    the server hears where the player is just before a block is placed (`GameModeMixin`), since
+    mid-jump it can be a tick behind and refuse a block under the feet. When a block appears
+    where the walking pilot's hull is, the pilot is lifted onto it if it is within a block
+    below (building a pillar), else moved to the nearest clear place within half a block.
+  - Crouching on the ground (held or toggled) stops at ledges as sneaking does in Minecraft:
+    the hull may hang over an edge until it barely overlaps the block, and drops of 0.6 blocks
+    or less still step down (`sim::SneakEdges`, Minecraft's `maybeBackOffFromEdge` cutting the
+    move back in 0.05-block steps). Only up to the standing walk speed (138 u/s with the
+    fists): a slide, anything faster, a jump or a zipline goes over as in Apex. The shell runs
+    such a command again with a fence where the move was cut back, so movement itself is
+    Apex's; if a few tries do not hold it, the pilot is put back at the fence.
+  - Water up to the waist (0.9 blocks above the feet) hands the player to Minecraft, which
+    swims, at the speed lurch was moving; out of it, lurch starts again where they are, with
+    the keys still held, at rest and looking level. Shallower water lurch walks through.
+  - The grapple's hook catches mobs and holds on as they move; the pull goes to where the mob
+    is. Nothing pulls the mob, as in Apex.
+  - The pause menu has a "lurch..." button, and O opens the same screen (rebind it under
+    "Apex (lurch)"): FOV (Apex's 70 to 110, `cl_fovScale` 1.0 to 1.55), sensitivity (lurch's
+    own `mouse_sensitivity`), autosprint, legend, heirloom, and "HUD layout...". The layout
+    screen shows a box for each piece of the HUD over the game: drag one to move it, drag its
+    corner or turn the wheel over it to resize it, Reset puts everything back. Apex's player
+    panel (with the hearts and hunger in it), the tactical's and the ultimate's panels, the
+    hotbar, the experience bar, the health and hunger while lurch is off, the effects, the boss
+    bars and the chat all move. Options and layout are kept in `config/lurch.properties`; an
+    option never set leaves lurch-mc's own (its flags and `lurch.cfg`). Changing the legend or
+    the heirloom reads the install again in the background; the arms change when that ends.
+  - What the crosshair is on is picked from lurch's camera (its eye and the camera's angles),
+    not Steve's eye, so the block outline is where the Apex crosshair points. A punch does not
+    use it: it reaches 60 units, where Minecraft's hand reaches 4½ blocks.
   - Minecraft's Controls screen has an "Apex (lurch)" section: Tactical (Q), Ultimate (Z),
     Apex Jump (Space) and Apex Crouch (Left Ctrl). Minecraft saves them in its `options.txt`;
     the mod sends them to the host on connecting and on every change, and the host binds lurch's
@@ -117,6 +168,10 @@ shell's kill height out of reach above Minecraft's void.
   was centred at scale 1 and 4, its bottom level with the panels'. The tactical's panel kept
   its place at 854x480 and moved left of the offhand slot at 2560x1440. The ultimate's panel
   sat at the right edge.
+- The punch in `game/tests/shell/sim.rs`: on a floor of 40-unit tiles, a punch with no input
+  moves the pilot forward between 30 and 60 units along the view, leaves its velocity at 0,
+  lands one blow and ends with its swing. The mod's side of it (routing, the crosshair pick,
+  breaking and attacking) is not tested.
 - The earlier flat-floor bridge (see git history) checked walking, sprinting, jumping, sliding
   and `/tp` against lurch's own numbers. The host runs the same simulation.
 
@@ -131,11 +186,19 @@ world, and block collision edge cases such as seams and partial blocks.
   of it.
 - Timing: the overlay is one readback behind the camera.
 - The shell's dev text in the top-left corner, which overlaps Minecraft's F3 screen.
-- Using items, breaking and placing blocks, attacking and opening the inventory while lurch is
-  on: the mouse buttons and E still go to lurch. Turn lurch off for them.
+- Parts of the lunge and the blow the image was not read for (`docs/oracle.md`, Melee): the
+  cone's exact filter, the lunge's pitch lock and cylinder distances, the blow's ray length
+  and last level try. A punch's damage is Minecraft's hand's × 3, not Apex's 30.
+- Mobs do not block the player's hull, as in Minecraft; only the hook's and the punch's rays
+  hit them. Moving the chat leaves its clickable text where it was.
+- The legend changes the arms, the portrait and the sounds' names; movement keeps
+  Pathfinder's settings, and every legend keeps the grapple.
+- How a punch's attack ends after a miss and the recovery times after it: the attack ends when
+  the swing has run, and the fists raise at the raise sequence's own length.
+- Punching blocks, and the punch's triple damage, on a multiplayer server.
 - Absorption and extra health: more than one row of hearts grows upward over the armour row.
-- Water, ladders, ice, soul sand and other Minecraft-only surfaces. Every collision box is
-  solid ground.
+- Ladders, lava, ice, soul sand and other Minecraft-only surfaces. Every collision box is
+  solid ground; water is Minecraft's own swimming.
 - Fall damage: the server still counts falls, so use Creative.
 - Multiplayer servers. Their movement checks would pull the player back from mantles; only the
   integrated server's are skipped.

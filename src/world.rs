@@ -18,6 +18,20 @@ const HEADER: u64 = 64;
 
 pub type Tri = [V3; 3];
 
+/// Something in the world besides its collision: a box that moves on its own, such as another
+/// game's mob, in world coordinates. Rays that test `CONTENTS_MONSTER` hit it; a player's hull
+/// does not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Body {
+    /// What a trace that hits it reports as its entity; never `WORLD_ENTITY` (1).
+    pub id: u64,
+    pub mins: V3,
+    pub maxs: V3,
+}
+
+/// A body's contents (Source's `CONTENTS_MONSTER`).
+pub const CONTENTS_MONSTER: u32 = 0x200_0000;
+
 struct Grid {
     cell: f32,
     min: [f32; 2],
@@ -100,12 +114,13 @@ enum Source {
 pub struct World {
     src: Source,
     pub ziplines: Vec<Zipline>,
+    pub bodies: Vec<Body>,
 }
 
 impl World {
     pub fn from_tris(tris: Vec<Tri>) -> Self {
         let grid = MemGrid::new(&tris);
-        World { src: Source::Mem(tris, grid), ziplines: Vec::new() }
+        World { src: Source::Mem(tris, grid), ziplines: Vec::new(), bodies: Vec::new() }
     }
 
     /// A flat floor at height `z`, wide enough for any arena.
@@ -154,7 +169,7 @@ impl World {
                 }
             }
         }
-        Ok(World { src: Source::File(f, g, tags), ziplines: Vec::new() })
+        Ok(World { src: Source::File(f, g, tags), ziplines: Vec::new(), bodies: Vec::new() })
     }
 
     /// Every triangle that might meet the box `lo`–`hi`; a triangle may come more than once.
@@ -311,6 +326,10 @@ impl Tracer for World {
         &self.ziplines
     }
 
+    fn bodies(&self) -> &[Body] {
+        &self.bodies
+    }
+
     fn hull(&mut self, q: &HullQuery) -> Trace {
         let e: V3 = std::array::from_fn(|i| (q.maxs[i] - q.mins[i]) * 0.5);
         let c: V3 = std::array::from_fn(|i| q.start[i] + (q.mins[i] + q.maxs[i]) * 0.5);
@@ -335,9 +354,39 @@ impl Tracer for World {
             t.entity = WORLD_ENTITY;
             t.contents = CONTENTS_SOLID;
         }
+        if q.mins == [0.0; 3] && q.maxs == [0.0; 3] && q.mask & CONTENTS_MONSTER != 0 && !t.startsolid {
+            for b in &self.bodies {
+                if let Some((f, n)) = ray_box(q.start, d, b.mins, b.maxs).filter(|&(f, _)| f < t.fraction) {
+                    (t.fraction, t.normal, t.entity, t.contents) = (f, n, b.id, CONTENTS_MONSTER);
+                }
+            }
+        }
         t.endpos = mad(q.start, d, t.fraction);
         t
     }
+}
+
+/// Where a ray from `start` along `d` enters a box, as a fraction of `d`, and the face's
+/// normal; none when it starts inside or misses.
+pub fn ray_box(start: V3, d: V3, lo: V3, hi: V3) -> Option<(f32, V3)> {
+    let (mut enter, mut leave, mut normal) = (f32::NEG_INFINITY, 1.0f32, [0.0; 3]);
+    for i in 0..3 {
+        if d[i] == 0.0 {
+            if start[i] < lo[i] || hi[i] < start[i] {
+                return None;
+            }
+            continue;
+        }
+        let (a, b) = ((lo[i] - start[i]) / d[i], (hi[i] - start[i]) / d[i]);
+        let (near, far) = if a < b { (a, b) } else { (b, a) };
+        if enter < near {
+            enter = near;
+            normal = [0.0; 3];
+            normal[i] = -d[i].signum();
+        }
+        leave = leave.min(far);
+    }
+    (0.0 <= enter && enter <= leave).then_some((enter, normal))
 }
 
 #[cfg(test)]

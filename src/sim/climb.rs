@@ -139,7 +139,7 @@ impl Move<'_> {
         if !c.enabled || !faces(self.mv.flat_forward, normal) || c.speed_start * 0.5 < self.mv.velocity[2] {
             return 0;
         }
-        if (c.vertical_gain_cutoff + self.p.floor_height) - c.final_jump_up_height < point[2] || self.p.traversal_blocked {
+        if (c.vertical_gain_cutoff + self.p.floor_height) - c.final_jump_up_height < point[2] || self.p.melee_active {
             return 0;
         }
         let ceiling = c.ceiling_limit.max(0.0).min(1.0);
@@ -303,7 +303,7 @@ impl Move<'_> {
     /// the wall's normal finds the wall within the allowed distance, the first-person proxy
     /// plays its climb and is the view-offset entity; once it does not, they stop.
     pub(super) fn climb_arms(&mut self) {
-        if self.p.traversal_blocked || self.p.first_person_anim == super::grapple::FP_ANIM_GRAPPLE {
+        if self.p.melee_active || self.p.first_person_anim == super::grapple::FP_ANIM_GRAPPLE {
             return;
         }
         let eye = self.p.eye(self.s, self.p.abs_origin, self.p.view_angles, self.g.curtime);

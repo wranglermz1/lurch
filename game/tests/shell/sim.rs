@@ -9,10 +9,13 @@ use lurch::sim::setup::{command_seed, UserCmd};
 use lurch::testmap;
 use lurch::world::World as CollisionWorld;
 use lurch_game::cmd::{CmdBuilder, CmdLog, CmdQueue, CmdPlugin};
-use lurch_game::sim::{without_view, History, Map, Pose, Sim, SimPlugin, Spots, DIST_EPSILON, HISTORY};
+use lurch::anim::viewmodel::MeleeSwing;
+use lurch_game::sim::{without_view, History, Map, MeleeAttacks, Pose, Sim, SimPlugin, SneakEdges, Spots, Swing, DIST_EPSILON, HISTORY};
 use lurch_game::{Config, Paused, Respawn};
 
-use super::input::{down, motion, up};
+use bevy::input::ButtonState;
+
+use super::input::{down, motion, mouse, up};
 
 pub const FT: f32 = 0.004;
 
@@ -178,6 +181,83 @@ fn an_empty_first_command_after_a_spawn_leaves_the_pilot_free_to_move() {
     }
     let o = sim(&app).pilot.origin;
     assert!((o[0] - start[0]).hypot(o[1] - start[1]) > 10.0, "{start:?} to {o:?}");
+}
+
+/// A punch on flat ground with no input and no target: the push carries the pilot along the view,
+/// within the melee weapon's no-target range, while the velocity keeps none of it; the blow
+/// lands once and the attack ends when the swing does.
+#[test]
+fn a_punch_on_the_ground_steps_forward_and_ends_with_its_swing() {
+    let mut app = sim_app(Config::default());
+    app.init_resource::<Swing>();
+    let tile = |x: f32, y: f32| [[[x, y, 0.0], [x + 40.0, y, 0.0], [x + 40.0, y + 40.0, 0.0]], [[x, y, 0.0], [x + 40.0, y + 40.0, 0.0], [x, y + 40.0, 0.0]]];
+    let tris = (-20..20).flat_map(|i| (-20..20).flat_map(move |j| tile(i as f32 * 40.0, j as f32 * 40.0))).collect();
+    app.world_mut().resource_mut::<Map>().0 = CollisionWorld::from_tris(tris);
+    app.world_mut().write_message(Respawn::At { origin: [20.0, 20.0, 0.0], yaw: 0.0 });
+    for _ in 0..3 {
+        app.update();
+    }
+    let start = sim(&app).pilot.origin;
+    mouse(&mut app, MouseButton::Left, ButtonState::Pressed);
+    app.update();
+    assert!(sim(&app).pilot.player.melee_active);
+    let now = sim(&app).clock.now();
+    app.world_mut().resource_mut::<Swing>().0 = Some(MeleeSwing { attack: Some(now + 0.3), end: now + 0.9 });
+    for _ in 0..100 {
+        app.update();
+    }
+    let p = &sim(&app).pilot;
+    assert!(p.origin[0] - start[0] > 30.0 && p.origin[0] - start[0] < lurch::sim::melee::LUNGE_NO_TARGET_RANGE, "{start:?} to {:?}", p.origin);
+    assert!((p.origin[1] - start[1]).abs() < 1e-3);
+    assert_eq!(p.velocity, [0.0; 3]);
+    assert_eq!(app.world().resource::<MeleeAttacks>().0, 1);
+    for _ in 0..150 {
+        app.update();
+    }
+    let p = &sim(&app).pilot;
+    assert!(!p.player.melee_active && p.player.melee_push == [0.0; 3]);
+    assert!(app.world().resource::<Swing>().0.is_none());
+}
+
+/// A pilot crouch-walking along +x for twelve seconds of Minecraft's frames from x = -120 (-300 to slide), on a
+/// floor that ends at x = 0 over nothing, with or without `SneakEdges`, sprinting into a slide
+/// first or not; where it ends up, and the lowest it went.
+fn crouch_walk_to_a_ledge(sneak: bool, slide: bool) -> (lurch::sim::pilot::Pilot, f32) {
+    let mut app = sim_app(Config { autosprint: slide, ..Default::default() });
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 75.0)));
+    if sneak {
+        app.insert_resource(SneakEdges);
+    }
+    let tile = |x: f32, y: f32| [[[x, y, 0.0], [x + 40.0, y, 0.0], [x + 40.0, y + 40.0, 0.0]], [[x, y, 0.0], [x + 40.0, y + 40.0, 0.0], [x, y + 40.0, 0.0]]];
+    let tris = (-20..0).flat_map(|i| (-20..20).flat_map(move |j| tile(i as f32 * 40.0, j as f32 * 40.0))).collect();
+    app.world_mut().resource_mut::<Map>().0 = CollisionWorld::from_tris(tris);
+    app.world_mut().write_message(Respawn::At { origin: [if slide { -300.0 } else { -120.0 }, 0.0, 0.0], yaw: 0.0 });
+    for _ in 0..3 {
+        app.update();
+    }
+    down(&mut app, KeyCode::KeyW);
+    for _ in 0..if slide { 60 } else { 0 } {
+        app.update();
+    }
+    down(&mut app, KeyCode::ControlLeft);
+    let mut lowest = f32::MAX;
+    for _ in 0..900 {
+        app.update();
+        lowest = lowest.min(sim(&app).pilot.origin[2]);
+    }
+    (sim(&app).pilot.clone(), lowest)
+}
+
+#[test]
+fn crouching_with_sneak_edges_stops_at_a_ledge_as_minecraft_sneaking_does() {
+    let (p, lowest) = crouch_walk_to_a_ledge(true, false);
+    assert!(p.player.ground.is_some() && -1.0 < lowest, "{:?} down to {lowest}", p.origin);
+    let half = p.player.hull_duck_max[0];
+    assert!(p.origin[0] > half - 2.0 * 2.0 - 1.0 && p.origin[0] < half, "the hull hangs over the edge until it barely overlaps it: {:?}", p.origin);
+    let (_, lowest) = crouch_walk_to_a_ledge(false, false);
+    assert!(lowest < -40.0, "without it the pilot walks off");
+    let (_, lowest) = crouch_walk_to_a_ledge(true, true);
+    assert!(lowest < -40.0, "a slide goes over");
 }
 
 #[test]

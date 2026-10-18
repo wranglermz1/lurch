@@ -22,6 +22,14 @@
 //!   pixels. The tactical's panel moves left of it when it would reach it.
 //! - `light R G B NETHER`: the lightmap colour Minecraft's own hand would be multiplied by where
 //!   the player's eye is, gamma-encoded in 0 to 1, and 1 in the Nether's cardinal lighting.
+//! - `bodies`, lines `b ID X0 Y0 Z0 X1 Y1 Z1` (a mob's box), then `end`: the mobs near the
+//!   player now. The grapple's hook and a punch's blow hit them, a punch lunges at them; the
+//!   player's hull passes through them, as in Minecraft.
+//! - `set NAME VALUE`: one of the player's options, `fov_scale` (`cl_fovScale`), `autosprint`
+//!   (0 or 1), `sens` (`mouse_sensitivity`), `legend` or `heirloom` (`none` for the fists).
+//! - `layout NAME DX DY SCALE`: the player's own place for one of the shell's panels, `player`,
+//!   `tactical` or `ultimate`: its top left corner DX DY window pixels from the shell's place,
+//!   SCALE times its size (`rui::HostLayout`).
 //! - `frame FRAMETIME W H`: one frame at Minecraft's size, answered with
 //!   `pose X Y Z EX EY EZ PITCH YAW ROLL FOV VPITCH VYAW GROUND ARMS`: the feet, the camera, its
 //!   angles and vertical FOV in degrees, the view angles the player aims with, whether the
@@ -30,7 +38,14 @@
 //!   Minecraft's armour, hearts and hunger go in (where the game draws the name and the bars;
 //!   Y1 is the panel's bottom), and how far left the hotbar may reach and leave room for the
 //!   tactical's panel beside the player panel, in window pixels; `-` for each one the shell
-//!   does not draw.
+//!   does not draw, and with it `rect NAME X0 Y0 X1 Y1` for each panel `layout` names, where
+//!   the shell puts it (`-` four times for none). `punch WHAT` comes first too, once for each
+//!   punch whose blow (`AE_MELEE_ATTACK`) landed in the frame, with what it hit: `e ID` a mob,
+//!   `b X Y Z` a block, `-` nothing in reach. The left button with the fists out punches as
+//!   Apex does: it lunges at a mob in front, on the ground with none pushes the player forward,
+//!   and a blow that hits something knocks the player back (`lurch::sim::melee`). The first
+//!   answer starts with `choices legend NAME...` and `choices heirloom NAME...`, and any answer
+//!   whose options changed with `config NAME VALUE` for each `set` name.
 //!
 //! Positions and angles on the wire are Minecraft's (blocks, y up, its yaw). Each frame's image,
 //! premultiplied RGBA rows `STRIDE` bytes apart, goes to `/dev/shm/lurch-mc` after a 20-byte
@@ -44,6 +59,8 @@
 //! The shell draws the player panel's frame and portrait where the game puts them, the
 //! ultimate's panel at the right edge as their mirror, and the tactical's panel where the game
 //! puts it or left of the hotbar (`rui::HostHud`).
+//!
+//! Crouching on the ground stops at ledges as Minecraft's sneaking does (`sim::SneakEdges`).
 //!
 //! Not modelled: sounds, the shell's menus, the test map's respawn binds (dropped here).
 
@@ -72,15 +89,15 @@ use bevy::winit::WinitPlugin;
 use lurch::sim::math::V3;
 use lurch::sim::pilot;
 use lurch::sim::{HullQuery, Tracer};
-use lurch::world::Tri;
+use lurch::world::{Body, Tri};
 use lurch::sim::buttons::{IN_DUCK, IN_JUMP, IN_OFFHAND1};
 use lurch_game::binds::{Action, Input};
 use lurch_game::cmd::{clamp_frametime, CmdBuilder, ScriptFrametime};
 use lurch_game::convar::{self, ConVars};
 use lurch_game::convert::vfov;
 use lurch_game::data::{self, Data};
-use lurch_game::rui::{HostBar, HostHud, Preloaded};
-use lurch_game::sim::{CollisionWorld, Map, Pose, Sim, DIST_EPSILON};
+use lurch_game::rui::{HostBar, HostHud, HostLayout, Place, Preloaded};
+use lurch_game::sim::{CollisionWorld, Map, MeleeAttacks, Pose, Sim, SneakEdges, DIST_EPSILON};
 use lurch_game::view::{Target, ViewImage};
 use lurch_game::viewmodel::{ArmsShown, HostHands, HostLight};
 use lurch_game::{args, install, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
@@ -97,8 +114,24 @@ const BASE_BELOW_FLOOR: f64 = 64.0;
 /// The speed scale while the player holds something: a weapon's `move_speed_modifier` when its
 /// settings give none.
 const HOLDING_SPEED_SCALE: f32 = 1.0;
-/// How far a spawn is moved to get clear of a block, in units: half a block.
+/// How far a spawn, or a pilot a new block lands on, is moved to get clear of a block, in units:
+/// half a block.
 const UNSTICK_REACH: u32 = 20;
+/// How far a pilot a new block lands under is lifted onto it, in units: a block, as when the
+/// player places one under their feet mid-jump to build a pillar.
+const LIFT_REACH: u32 = 40;
+/// Steve's half width, 0.3 blocks: every stance's hull is this wide in place of Apex's 16, so the
+/// pilot fits where Steve does (an open door leaves 13/16 of a block) and a block Minecraft lets
+/// the player place never lands inside the hull.
+const HALF_WIDTH: f32 = 12.0;
+/// The walking movetype: a pilot mid-mantle passes through ledges' corners and is left alone.
+const MOVETYPE_WALK: u8 = 2;
+/// A mob's trace entity is its Minecraft id past this, clear of the world's.
+const BODY_IDS: u64 = 1 << 32;
+/// The legends whose files the install holds.
+const LEGENDS: [&str; 12] = ["bangalore", "bloodhound", "caustic", "crypto", "gibraltar", "lifeline", "mirage", "octane", "pathfinder", "revenant", "wattson", "wraith"];
+/// `cl_fovScale`'s range.
+const FOV_SCALE: (f32, f32) = (1.0, 1.7);
 
 /// Where lurch's origin is in Minecraft.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -160,20 +193,30 @@ fn tris(blocks: &[Block], base: Base) -> Vec<Tri> {
     out
 }
 
-/// The nearest place to `origin` where a standing hull spawns clear of the blocks: Steve is
-/// narrower than the hull (0.6 blocks against 0.8), so where he stands the hull can be inside
-/// a block, and a hull that starts inside one never moves.
-fn free(world: &mut CollisionWorld, origin: V3) -> V3 {
-    let p = pilot::spawn(origin);
+/// The nearest place to `origin` where the hull `mins`–`maxs` is clear of the blocks: a hull
+/// that starts inside a block never moves. Steve's box can stand where the hull cannot (a spawn
+/// half inside a block's edge, a block placed against him).
+fn free(world: &mut CollisionWorld, origin: V3, mins: V3, maxs: V3) -> V3 {
+    let mask = pilot::spawn(origin).mask;
     let mut clear = |o: V3| {
         let o = [o[0], o[1], o[2] + DIST_EPSILON];
-        !world.hull(&HullQuery { start: o, end: o, mins: p.hull_min, maxs: p.hull_max, mask: p.mask }).startsolid
+        !world.hull(&HullQuery { start: o, end: o, mins, maxs, mask }).startsolid
     };
     const DIRS: [V3; 10] = [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0], [0.0, 0.0, -1.0]];
     if clear(origin) {
         return origin;
     }
     (1..=UNSTICK_REACH).flat_map(|r| DIRS.map(|d| [origin[0] + d[0] * r as f32, origin[1] + d[1] * r as f32, origin[2] + d[2] * r as f32])).find(|&o| clear(o)).unwrap_or(origin)
+}
+
+/// The nearest place straight above `origin`, up to `LIFT_REACH`, where the hull `mins`–`maxs` is
+/// clear of the blocks; `origin` when it already is.
+fn lift(world: &mut CollisionWorld, origin: V3, mins: V3, maxs: V3) -> Option<V3> {
+    let mask = pilot::spawn(origin).mask;
+    (0..=LIFT_REACH).map(|dz| [origin[0], origin[1], origin[2] + dz as f32]).find(|&o| {
+        let o = [o[0], o[1], o[2] + DIST_EPSILON];
+        !world.hull(&HullQuery { start: o, end: o, mins, maxs, mask }).startsolid
+    })
 }
 
 /// Minecraft's two diffuse directions for entities in a level (`Lighting`), turned into Bevy's
@@ -300,11 +343,54 @@ fn pose(world: &World, base: Base) -> String {
     format!("pose {x} {y} {z} {ex} {ey} {ez} {} {} {} {fov} {} {} {ground} {arms}", a[0], flip_yaw(a[1]), a[2], v[0], flip_yaw(v[1]))
 }
 
-/// The `hud` line for a layout.
+/// The `hud` line for a layout, and its `rect` lines.
 fn hud(h: &HostHud) -> String {
     let num = |v: Option<f32>| v.map_or("-".to_string(), |v| v.to_string());
-    let panel = h.panel.map_or_else(|| ["-"; 4].join(" "), |p| p.map(|v| v.to_string()).join(" "));
-    format!("hud {panel} {}", num(h.room))
+    let rect = |r: Option<[f32; 4]>| r.map_or_else(|| ["-"; 4].join(" "), |p| p.map(|v| v.to_string()).join(" "));
+    let mut out = format!("hud {} {}", rect(h.panel), num(h.room));
+    for (name, r) in ["player", "tactical", "ultimate"].iter().zip(h.rects) {
+        out += &format!("\nrect {name} {}", rect(r));
+    }
+    out
+}
+
+/// The `config` lines for the options `set` changes.
+fn config(c: &lurch_game::Config) -> String {
+    let heirloom = c.heirloom.map_or("none", |h| h.name);
+    format!("config fov_scale {}\nconfig autosprint {}\nconfig sens {}\nconfig legend {}\nconfig heirloom {heirloom}", c.fov_scale, c.autosprint as u8, c.sens, c.legend)
+}
+
+/// Applies a `set` line's option; false for an unknown name or a value out of range.
+fn set(c: &mut lurch_game::Config, name: &str, value: &str) -> bool {
+    match name {
+        "fov_scale" => value.parse().ok().filter(|v| (FOV_SCALE.0..=FOV_SCALE.1).contains(v)).map(|v| c.fov_scale = v).is_some(),
+        "autosprint" => value.parse::<u8>().ok().filter(|&v| v <= 1).map(|v| c.autosprint = v == 1).is_some(),
+        "sens" => value.parse().ok().filter(|&v: &f32| 0.0 < v).map(|v| c.sens = v).is_some(),
+        "legend" => LEGENDS.contains(&value).then(|| c.legend = value.to_string()).is_some(),
+        "heirloom" => match value {
+            "none" => {
+                c.heirloom = None;
+                true
+            }
+            _ => lurch::assets::HEIRLOOMS.iter().find(|h| h.name == value).map(|h| c.heirloom = Some(h)).is_some(),
+        },
+        _ => false,
+    }
+}
+
+/// The `punch` line for a blow: the mob or the block it hit, the block just behind the face.
+fn punch(blow: &Option<lurch::sim::melee::Blow>, base: Base) -> String {
+    match blow {
+        None => "punch -".to_string(),
+        Some(b) => match b.entity.filter(|&e| BODY_IDS <= e) {
+            Some(e) => format!("punch e {}", e - BODY_IDS),
+            None => {
+                let inside = [b.at[0] - b.normal[0], b.at[1] - b.normal[1], b.at[2] - b.normal[2]];
+                let [x, y, z] = base.in_mc(inside).map(|v| v.floor() as i64);
+                format!("punch b {x} {y} {z}")
+            }
+        },
+    }
 }
 
 /// Runs one connection's frames until the mod hangs up. `hands_speed` is the pilot's own
@@ -315,6 +401,9 @@ fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::R
     let mut base = Base::default();
     let mut blocks = Vec::new();
     let mut sent_hud = None;
+    let mut sent_config = None;
+    let mut greeted = false;
+    let mut bodies: Vec<Body> = Vec::new();
     let trace = std::env::var_os("LURCH_MC_TRACE").is_some();
     let bound = { let binds = app.world().resource::<Config>().binds.clone(); move |i| binds.get(i) };
     app.world_mut().resource_mut::<CmdBuilder>().release_all();
@@ -362,6 +451,38 @@ fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::R
                 let left = arg(&mut w)?;
                 world.insert_resource(HostBar(left));
             }
+            Some("bodies") => {
+                bodies.clear();
+                for line in lines.by_ref() {
+                    let line = line?;
+                    let mut w = line.split_ascii_whitespace();
+                    if w.next() != Some("b") {
+                        break;
+                    }
+                    let id: u64 = arg(&mut w)?;
+                    let (a, b) = (base.in_lurch([arg(&mut w)?, arg(&mut w)?, arg(&mut w)?]), base.in_lurch([arg(&mut w)?, arg(&mut w)?, arg(&mut w)?]));
+                    bodies.push(Body { id: BODY_IDS + id, mins: std::array::from_fn(|i| a[i].min(b[i])), maxs: std::array::from_fn(|i| a[i].max(b[i])) });
+                }
+                app.world_mut().resource_mut::<Map>().0.bodies = bodies.clone();
+            }
+            Some("set") => {
+                let (name, value) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
+                if !set(&mut world.resource_mut::<Config>(), name, value) {
+                    eprintln!("lurch-mc: bad option: {line:?}");
+                }
+            }
+            Some("layout") => {
+                let name = w.next().unwrap_or("").to_string();
+                let p = Place { offset: [arg(&mut w)?, arg(&mut w)?], scale: arg(&mut w)? };
+                let mut l = world.get_resource::<HostLayout>().copied().unwrap_or_default();
+                match name.as_str() {
+                    "player" => l.player = p,
+                    "tactical" => l.tactical = p,
+                    "ultimate" => l.ultimate = p,
+                    _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("bad layout: {line:?}"))),
+                }
+                world.insert_resource(l);
+            }
             Some("light") => {
                 let color = Vec3::new(arg(&mut w)?, arg(&mut w)?, arg(&mut w)?);
                 let nether: u8 = arg(&mut w)?;
@@ -375,7 +496,9 @@ fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::R
                 let (yaw, floor): (f32, f64) = (arg(&mut w)?, arg(&mut w)?);
                 base = Base([p[0].floor(), floor - BASE_BELOW_FLOOR, p[2].floor()]);
                 let mut map = CollisionWorld::from_tris(tris(&blocks, base));
-                let origin = free(&mut map, base.in_lurch(p));
+                let stand = &world.resource::<Sim>().settings.stances[0];
+                let origin = free(&mut map, base.in_lurch(p), stand.hull_min, stand.hull_max);
+                map.bodies = bodies.clone();
                 world.resource_mut::<Map>().0 = map;
                 world.write_message(Respawn::At { origin, yaw: flip_yaw(yaw) });
             }
@@ -390,7 +513,19 @@ fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::R
                         _ => break,
                     }
                 }
-                app.world_mut().resource_mut::<Map>().0 = CollisionWorld::from_tris(tris(&blocks, base));
+                let mut map = CollisionWorld::from_tris(tris(&blocks, base));
+                map.bodies = bodies.clone();
+                let mut sim = app.world_mut().resource_mut::<Sim>();
+                let p = &sim.pilot.player;
+                if p.movetype == MOVETYPE_WALK {
+                    let (mins, maxs) = if p.ducked() { (p.hull_duck_min, p.hull_duck_max) } else { (p.hull_min, p.hull_max) };
+                    let at = sim.pilot.origin;
+                    let to = lift(&mut map, at, mins, maxs).unwrap_or_else(|| free(&mut map, at, mins, maxs));
+                    if to != at {
+                        sim.pilot.origin = [to[0], to[1], to[2] + DIST_EPSILON];
+                    }
+                }
+                app.world_mut().resource_mut::<Map>().0 = map;
             }
             Some("frame") => {
                 let (ft, width, height): (f64, u32, u32) = (arg(&mut w)?, arg(&mut w)?, arg(&mut w)?);
@@ -405,10 +540,23 @@ fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::R
                     world.resource_mut::<Sim>().pilot.player.speed_scale = if h.0 { hands_speed } else { HOLDING_SPEED_SCALE };
                 }
                 app.update();
+                if !greeted {
+                    let heirlooms: Vec<&str> = std::iter::once("none").chain(lurch::assets::HEIRLOOMS.iter().map(|h| h.name)).collect();
+                    writeln!(out, "choices legend {}\nchoices heirloom {}", LEGENDS.join(" "), heirlooms.join(" "))?;
+                    greeted = true;
+                }
+                let options = config(app.world().resource::<Config>());
+                if sent_config.as_ref() != Some(&options) {
+                    writeln!(out, "{options}")?;
+                    sent_config = Some(options);
+                }
                 let layout = *app.world().resource::<HostHud>();
                 if sent_hud != Some(layout) {
                     writeln!(out, "{}", hud(&layout))?;
                     sent_hud = Some(layout);
+                }
+                for blow in &app.world().resource::<MeleeAttacks>().1 {
+                    writeln!(out, "{}", punch(blow, base))?;
                 }
                 let answer = pose(app.world(), base);
                 if trace {
@@ -443,7 +591,7 @@ fn main() -> io::Result<()> {
     let ui = cfg.r5r.as_deref().and_then(|i| lurch::rui::Ui::open(i).map_err(|e| eprintln!("lurch-mc: no UI: {e}")).ok());
     let (w, h) = (854, 480);
     let mut app = App::new();
-    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui))).insert_resource(HostLight { color: Vec3::ONE, dirs: entity_light(false) }).init_resource::<HostHud>();
+    app.insert_resource(cfg).insert_resource(convars).insert_resource(Preloaded(Mutex::new(ui))).insert_resource(HostLight { color: Vec3::ONE, dirs: entity_light(false) }).init_resource::<HostHud>().insert_resource(SneakEdges);
     if let Some(d) = data {
         app.insert_resource(Data(Arc::new(d)));
     }
@@ -461,6 +609,7 @@ fn main() -> io::Result<()> {
         RuiPlugin,
         SingleThreadedPlugin,
     ));
+    lurch_game::data::reloading(&mut app);
     while app.plugins_state() == PluginsState::Adding {
         tick_global_task_pools_on_main_thread();
     }
@@ -469,6 +618,15 @@ fn main() -> io::Result<()> {
     app.update();
     let image = app.world().resource::<ViewImage>().0.clone();
     app.world_mut().spawn(Readback::texture(image)).observe(|done: On<ReadbackComplete>, mut overlay: ResMut<Overlay>| overlay.write(&done.data));
+    {
+        let mut sim = app.world_mut().resource_mut::<Sim>();
+        for st in &mut sim.settings.stances {
+            (st.hull_min[0], st.hull_min[1], st.hull_max[0], st.hull_max[1]) = (-HALF_WIDTH, -HALF_WIDTH, HALF_WIDTH, HALF_WIDTH);
+        }
+        let (stand, duck) = (sim.settings.stances[0].clone(), sim.settings.stances[1].clone());
+        let p = &mut sim.pilot.player;
+        (p.hull_min, p.hull_max, p.hull_duck_min, p.hull_duck_max) = (stand.hull_min, stand.hull_max, duck.hull_min, duck.hull_max);
+    }
     let hands_speed = app.world().resource::<Sim>().pilot.player.speed_scale;
     let listener = TcpListener::bind(ADDR)?;
     eprintln!("lurch-mc: listening on {ADDR}, overlay in {SHM}");
@@ -504,13 +662,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pilot_a_block_lands_under_stands_on_it() {
+        let base = Base([0.0, -128.0, 0.0]);
+        let mut blocks: Vec<Block> = (-3..3).flat_map(|x| (-3..3).map(move |z| Block::Full([x, -61, z], 1 << 3))).collect();
+        blocks.push(Block::Full([0, -60, 0], 0x3f));
+        let mut world = CollisionWorld::from_tris(tris(&blocks, base));
+        let (mins, maxs) = ([-HALF_WIDTH, -HALF_WIDTH, 0.0], [HALF_WIDTH, HALF_WIDTH, 72.0]);
+        let feet = base.in_lurch([0.5, -59.7, 0.5]);
+        let o = lift(&mut world, feet, mins, maxs).expect("a block's height is in reach");
+        assert_eq!(base.in_mc(o)[1], -59.0);
+        assert_eq!(lift(&mut world, base.in_lurch([0.5, -60.0, 0.5]), mins, maxs).map(|o| base.in_mc(o)[1]), Some(-59.0));
+    }
+
+    #[test]
     fn a_spawn_where_steve_fits_but_the_hull_does_not_moves_clear() {
         let base = Base([0.0, -128.0, 0.0]);
         let mut blocks: Vec<Block> = (-3..3).flat_map(|x| (-3..3).map(move |z| Block::Full([x, -61, z], 1 << 3))).collect();
         blocks.push(Block::Full([1, -60, 0], 0x3f));
         let mut world = CollisionWorld::from_tris(tris(&blocks, base));
         let steve = base.in_lurch([0.65, -60.0, 0.5]);
-        let o = free(&mut world, steve);
+        let o = free(&mut world, steve, [-16.0, -16.0, 0.0], [16.0, 16.0, 72.0]);
         assert_ne!(o, steve);
         assert!(base.in_mc(o)[0] <= 0.6 + 1e-6, "{:?}", base.in_mc(o));
     }
