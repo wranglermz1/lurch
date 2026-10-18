@@ -64,7 +64,7 @@ import org.lwjgl.system.MemoryUtil;
  */
 public final class Lurch {
 	private static final int PORT = 25600;
-	private static final Path SHM = Path.of("/dev/shm/lurch-mc");
+	private static final Path SHM = System.getProperty("os.name").startsWith("Windows") ? Path.of(System.getProperty("java.io.tmpdir"), "lurch-mc") : Path.of("/dev/shm/lurch-mc");
 	private static final Identifier OVERLAY = Identifier.fromNamespaceAndPath("lurch", "overlay");
 	private static final int HORIZONTAL = 24, BELOW = 8, ABOVE = 24;
 	private static final long SCAN_EVERY_NS = 500_000_000L;

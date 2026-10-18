@@ -13,7 +13,7 @@ shell runs next to it as a second process.
   - It answers each frame with the player's position, the camera (eye, angles with view punch
     and roll, FOV) and the view angles.
   - It writes the frame's viewmodel, grapple rope and HUD, on a transparent background, to
-    `/dev/shm/lurch-mc`.
+    `/dev/shm/lurch-mc`, or `lurch-mc` in the temporary directory (`%TEMP%`) on Windows.
 - `mod/` is a client-only Fabric mod for Minecraft Java 26.3. It needs only Fabric Loader.
   - While lurch is on, it sends input to the host instead of Minecraft. Escape, F1 to F12 and
     Minecraft's own keys but its movement keys stay with Minecraft, unless one of lurch's keys
@@ -127,6 +127,10 @@ moves to the nearest clear place, up to half a block away.
 Load a world and press F7. Without `--r5r`, the host runs without the viewmodel and the
 game's UI. The Gradle wrapper is 9.8.1, the first release that runs on Java 27.
 
+On Windows, run `gradlew.bat runClient` with `JAVA_HOME` set to a JDK 25 or later, and the
+host's `lurch-mc.exe` (cross-built with `--target x86_64-pc-windows-gnu`) reads `lurch.cfg`
+beside it, as lurch-game does.
+
 ## Units and axes
 
 A block is 40 units, so the standing hull (72 units) is 1.8 blocks, and a 1-block gap fits the
@@ -141,6 +145,9 @@ shell's kill height out of reach above Minecraft's void.
   - A block's open top face becomes floor facing up at its height, and positions round-trip
     between the two coordinate systems.
   - A spawn where Steve fits but the hull does not moves clear.
+- On the Windows 10 guest (2026-10-18, RTX 3060 Ti, Temurin JDK 27): the mod built with
+  `gradlew.bat build`, `lurch-mc.exe` cross-built from Linux found the install and wrote the
+  overlay to `%TEMP%\lurch-mc`, and the dev client connected to it on F7 (`lurch: on`).
 - The shell's own tests (`game/tests/shell/sim.rs`): an empty first command after a spawn on a
   floor of 40-unit tiles leaves the pilot free to move.
 - In a 26.3 dev client on a Superflat world (2026-10-17, Intel UHD 770, 75 Hz):

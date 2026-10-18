@@ -48,8 +48,8 @@
 //!   whose options changed with `config NAME VALUE` for each `set` name.
 //!
 //! Positions and angles on the wire are Minecraft's (blocks, y up, its yaw). Each frame's image,
-//! premultiplied RGBA rows `STRIDE` bytes apart, goes to `/dev/shm/lurch-mc` after a 20-byte
-//! header: `LMC1`, a sequence number that is odd while the image is written, then the width,
+//! premultiplied RGBA rows `STRIDE` bytes apart, goes to `/dev/shm/lurch-mc` (`lurch-mc` in the
+//! temporary directory on Windows) after a 20-byte header: `LMC1`, a sequence number that is odd while the image is written, then the width,
 //! height and stride, all little-endian u32.
 //!
 //! A spawn where the hull would start inside a block moves to the nearest clear place, up to
@@ -67,7 +67,7 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::os::unix::fs::FileExt;
+use std::path::PathBuf;
 use std::str::{FromStr, SplitAsciiWhitespace};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -103,7 +103,6 @@ use lurch_game::viewmodel::{ArmsShown, HostHands, HostLight};
 use lurch_game::{args, install, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
 
 const ADDR: &str = "127.0.0.1:25600";
-const SHM: &str = "/dev/shm/lurch-mc";
 const HEADER: u64 = 20;
 /// A Source unit is an inch, a block a metre; 40 keeps block edges exact in f32 and makes the
 /// standing hull (72) as tall as Steve.
@@ -304,11 +303,22 @@ impl Overlay {
         for v in [self.seq, w, h, stride] {
             head.extend(v.to_le_bytes());
         }
-        let _ = self.file.write_at(&head, 0);
-        let _ = self.file.write_at(data, HEADER);
+        write_at(&self.file, &head, 0);
+        write_at(&self.file, data, HEADER);
         self.seq = self.seq.wrapping_add(1);
-        let _ = self.file.write_at(&self.seq.to_le_bytes(), 4);
+        write_at(&self.file, &self.seq.to_le_bytes(), 4);
     }
+}
+
+fn shm() -> PathBuf {
+    if cfg!(windows) { std::env::temp_dir().join("lurch-mc") } else { PathBuf::from("/dev/shm/lurch-mc") }
+}
+
+fn write_at(file: &File, data: &[u8], at: u64) {
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::FileExt::write_at(file, data, at);
+    #[cfg(windows)]
+    let _ = std::os::windows::fs::FileExt::seek_write(file, data, at);
 }
 
 fn target_image(w: u32, h: u32) -> Image {
@@ -595,7 +605,7 @@ fn main() -> io::Result<()> {
     if let Some(d) = data {
         app.insert_resource(Data(Arc::new(d)));
     }
-    app.insert_resource(Overlay { size: (w, h), file: File::options().read(true).write(true).create(true).truncate(true).open(SHM)?, seq: 0 }).add_plugins((
+    app.insert_resource(Overlay { size: (w, h), file: File::options().read(true).write(true).create(true).truncate(false).open(shm())?, seq: 0 }).add_plugins((
         DefaultPlugins
             .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
@@ -629,7 +639,7 @@ fn main() -> io::Result<()> {
     }
     let hands_speed = app.world().resource::<Sim>().pilot.player.speed_scale;
     let listener = TcpListener::bind(ADDR)?;
-    eprintln!("lurch-mc: listening on {ADDR}, overlay in {SHM}");
+    eprintln!("lurch-mc: listening on {ADDR}, overlay in {}", shm().display());
     for stream in listener.incoming() {
         let stream = stream?;
         stream.set_nodelay(true)?;
