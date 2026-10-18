@@ -51,8 +51,11 @@
 //!
 //! Positions and angles on the wire are Minecraft's (blocks, y up, its yaw). Each frame's image,
 //! premultiplied RGBA rows `STRIDE` bytes apart, goes to `/dev/shm/lurch-mc` (`lurch-mc` in the
-//! temporary directory on Windows) after a 20-byte header: `LMC1`, a sequence number that is odd while the image is written, then the width,
-//! height and stride, all little-endian u32.
+//! temporary directory on Windows) after a 24-byte header of little-endian u32s: `LMC2`, the
+//! newest image's number N (0 before the first), its width, height and stride, then the number
+//! of the image being written now. Image N is the `N % 2`th of two slots of `STRIDE * H` bytes
+//! after the header; a copy of a slot is whole if, after it, the image being written is not
+//! N + 2 or later.
 //!
 //! A spawn where the hull would start inside a block moves to the nearest clear place, up to
 //! half a block away. `LURCH_MC_TRACE=1` prints every spawn and every frame's answer, with the
@@ -67,6 +70,10 @@
 //! Sounds play as lurch-game plays them, through the game's Miles (Windows only), except the
 //! footsteps (`audio::HostSteps`).
 //!
+//! Each frame's answer goes out before the shell renders the frame, so the render runs while
+//! Minecraft draws. The frame's image reaches the file from another thread once the GPU has
+//! drawn it: Minecraft draws the newest image there, a frame or two behind the camera.
+//!
 //! Not modelled: the shell's menus, the test map's respawn binds (dropped here).
 
 use std::fs::File;
@@ -74,7 +81,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::str::{FromStr, SplitAsciiWhitespace};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use bevy::app::PluginsState;
@@ -83,10 +90,12 @@ use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWh
 use bevy::input::touch::TouchPhase;
 use bevy::input::ButtonState;
 use bevy::prelude::*;
-use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
-use bevy::render::render_resource::{TextureFormat, TextureUsages};
-use bevy::render::RenderPlugin;
+use bevy::render::render_asset::RenderAssets;
+use bevy::render::render_resource::{Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, MapMode, PollType, TexelCopyBufferInfo, TexelCopyBufferLayout, TextureFormat, TextureUsages};
+use bevy::render::renderer::{render_system, RenderDevice, RenderQueue};
+use bevy::render::texture::GpuImage;
+use bevy::render::{Render, RenderApp, RenderPlugin, RenderSystems};
 use bevy::tasks::tick_global_task_pools_on_main_thread;
 use bevy::time::TimeUpdateStrategy;
 use bevy::window::ExitCondition;
@@ -110,7 +119,7 @@ use lurch_game::viewmodel::{ArmsShown, HostHands, HostLight};
 use lurch_game::{args, install, AudioPlugin, CmdPlugin, Config, HudPlugin, Respawn, RuiPlugin, SimPlugin, SingleThreadedPlugin, ViewPlugin, ViewmodelPlugin};
 
 const ADDR: &str = "127.0.0.1:25600";
-const HEADER: u64 = 20;
+const HEADER: u64 = 24;
 /// A Source unit is an inch, a block a metre; 40 keeps block edges exact in f32 and makes the
 /// standing hull (72) as tall as Steve.
 const UNITS_PER_BLOCK: f64 = 40.0;
@@ -290,30 +299,100 @@ fn button(n: u32) -> Option<MouseButton> {
     })
 }
 
-/// The overlay image's size and the file it goes to, written whenever a readback lands.
+/// The overlay image's size, in the main world.
 #[derive(Resource)]
-struct Overlay {
-    size: (u32, u32),
+struct OverlaySize(u32, u32);
+
+/// The overlay file and the number of the last image written to it, on the writer thread.
+struct OverlayFile {
     file: File,
     seq: u32,
 }
 
-impl Overlay {
-    fn write(&mut self, data: &[u8]) {
-        let (w, h) = self.size;
-        let stride = (w * 4).next_multiple_of(256);
-        if data.len() != (stride * h) as usize {
-            return;
-        }
-        self.seq = self.seq.wrapping_add(1) | 1;
-        let mut head = b"LMC1".to_vec();
-        for v in [self.seq, w, h, stride] {
+impl OverlayFile {
+    /// Writes the next image into its slot, then makes it the newest. The slot is marked as being
+    /// written first, so a reader can tell its copy of the other image there was cut.
+    fn write(&mut self, w: u32, h: u32, stride: u32, data: &[u8]) {
+        let n = self.seq.wrapping_add(1);
+        write_at(&self.file, &n.to_le_bytes(), 20);
+        write_at(&self.file, data, HEADER + (n % 2) as u64 * data.len() as u64);
+        let mut head = b"LMC2".to_vec();
+        for v in [n, w, h, stride] {
             head.extend(v.to_le_bytes());
         }
         write_at(&self.file, &head, 0);
-        write_at(&self.file, data, HEADER);
-        self.seq = self.seq.wrapping_add(1);
-        write_at(&self.file, &self.seq.to_le_bytes(), 4);
+        self.seq = n;
+    }
+}
+
+/// A frame's overlay image being copied into a buffer, and its width, height and row stride.
+type Copied = (Buffer, [u32; 3]);
+
+/// How many images may be on their way to the file at once.
+const IN_FLIGHT: usize = 2;
+
+/// The overlay image and the buffers it is read back through, in the render world. A buffer goes
+/// to the writer thread with its copy and comes back once written.
+#[derive(Resource)]
+struct Overlay {
+    image: AssetId<Image>,
+    bytes: u64,
+    made: usize,
+    spare: Vec<Buffer>,
+    back: Mutex<mpsc::Receiver<Buffer>>,
+    out: mpsc::Sender<Copied>,
+}
+
+/// Copies the frame's overlay image into a buffer once the render is submitted and hands it to
+/// the writer thread, so neither the wait for the GPU nor the write holds up the next frame.
+/// Waits only when every buffer is still on its way.
+fn read_back(mut overlay: ResMut<Overlay>, images: Res<RenderAssets<GpuImage>>, device: Res<RenderDevice>, queue: Res<RenderQueue>) {
+    let Some(image) = images.get(overlay.image) else { return };
+    let size = image.texture_descriptor.size;
+    let stride = RenderDevice::align_copy_bytes_per_row(size.width as usize * 4) as u32;
+    let bytes = stride as u64 * size.height as u64;
+    let o = &mut *overlay;
+    if o.bytes != bytes {
+        (o.bytes, o.made) = (bytes, 0);
+        o.spare.clear();
+    }
+    let back = o.back.get_mut().unwrap_or_else(|e| e.into_inner());
+    o.spare.extend(back.try_iter().filter(|b| b.size() == bytes));
+    let buffer = match o.spare.pop() {
+        Some(b) => b,
+        None if o.made < IN_FLIGHT => {
+            o.made += 1;
+            device.create_buffer(&BufferDescriptor { label: Some("lurch-mc overlay"), size: bytes, usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ, mapped_at_creation: false })
+        }
+        None => match back.iter().find(|b| b.size() == bytes) {
+            Some(b) => b,
+            None => return,
+        },
+    };
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
+    let layout = TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: None };
+    encoder.copy_texture_to_buffer(image.texture.as_image_copy(), TexelCopyBufferInfo { buffer: &buffer, layout }, size);
+    queue.submit([encoder.finish()]);
+    let _ = o.out.send((buffer, [size.width, size.height, stride]));
+}
+
+/// The writer thread: waits for each copy, writes it to the file and sends its buffer back. The
+/// copy is the newest submission when it arrives: the shell submits nothing more until
+/// Minecraft's next frame.
+fn write_overlays(device: RenderDevice, mut file: OverlayFile, copies: mpsc::Receiver<Copied>, back: mpsc::Sender<Buffer>) {
+    for (buffer, [w, h, stride]) in copies {
+        let (mapped, done) = mpsc::channel();
+        buffer.slice(..).map_async(MapMode::Read, move |r| {
+            let _ = mapped.send(r.is_ok());
+        });
+        let _ = device.poll(PollType::wait_indefinitely());
+        if done.recv() == Ok(true) {
+            file.write(w, h, stride, &buffer.slice(..).get_mapped_range());
+            buffer.unmap();
+        }
+        if back.send(buffer).is_err() {
+            return;
+        }
     }
 }
 
@@ -410,10 +489,28 @@ fn punch(blow: &Option<lurch::sim::melee::Blow>, base: Base) -> String {
     }
 }
 
+/// `app.update()` with the frame's answer sent between the extract and the render, so the render
+/// runs while Minecraft draws its own frame instead of before it. The answer goes out in one
+/// write.
+fn update_answering(app: &mut App, stream: &std::net::TcpStream, answer: impl FnOnce(&World, &mut Vec<u8>) -> io::Result<()>) -> io::Result<()> {
+    let apps = app.sub_apps_mut();
+    apps.main.run_default_schedule();
+    for sub in apps.sub_apps.values_mut() {
+        sub.extract(apps.main.world_mut());
+    }
+    let mut text = Vec::new();
+    answer(apps.main.world(), &mut text)?;
+    let sent = (&*stream).write_all(&text);
+    for sub in apps.sub_apps.values_mut() {
+        sub.update();
+    }
+    apps.main.world_mut().clear_trackers();
+    sent
+}
+
 /// Runs one connection's frames until the mod hangs up. `hands_speed` is the pilot's own
 /// speed scale, the fists'.
 fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::Result<()> {
-    let mut out = stream;
     let mut lines = BufReader::new(stream).lines();
     let mut base = Base::default();
     let mut blocks = Vec::new();
@@ -548,43 +645,45 @@ fn serve(app: &mut App, stream: &std::net::TcpStream, hands_speed: f32) -> io::R
                 let (ft, width, height): (f64, u32, u32) = (arg(&mut w)?, arg(&mut w)?, arg(&mut w)?);
                 world.insert_resource(ScriptFrametime(clamp_frametime(ft)));
                 world.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(ft.max(1e-6))));
-                if world.resource::<Overlay>().size != (width, height) && width > 0 && height > 0 {
+                let size = world.resource::<OverlaySize>();
+                if (size.0, size.1) != (width, height) && width > 0 && height > 0 {
                     let handle = world.resource::<ViewImage>().0.clone();
                     let _ = world.resource_mut::<Assets<Image>>().insert(handle.id(), target_image(width, height));
-                    world.resource_mut::<Overlay>().size = (width, height);
+                    world.insert_resource(OverlaySize(width, height));
                 }
                 if let Some(h) = world.get_resource::<HostHands>().copied() {
                     world.resource_mut::<Sim>().pilot.player.speed_scale = if h.0 { hands_speed } else { HOLDING_SPEED_SCALE };
                 }
-                app.update();
-                if !greeted {
-                    let heirlooms: Vec<&str> = std::iter::once("none").chain(lurch::assets::HEIRLOOMS.iter().map(|h| h.name)).collect();
-                    writeln!(out, "choices legend {}\nchoices heirloom {}", LEGENDS.join(" "), heirlooms.join(" "))?;
-                    greeted = true;
-                }
-                let options = config(app.world().resource::<Config>());
-                if sent_config.as_ref() != Some(&options) {
-                    writeln!(out, "{options}")?;
-                    sent_config = Some(options);
-                }
-                let layout = *app.world().resource::<HostHud>();
-                if sent_hud != Some(layout) {
-                    writeln!(out, "{}", hud(&layout))?;
-                    sent_hud = Some(layout);
-                }
-                for blow in &app.world().resource::<MeleeAttacks>().1 {
-                    writeln!(out, "{}", punch(blow, base))?;
-                }
-                for _ in app.world().resource::<FrameCues>().0.iter().flat_map(|s| &s.cues).filter(|c| matches!(c, Cue::Footstep { .. })) {
-                    writeln!(out, "step")?;
-                }
-                let answer = pose(app.world(), base);
-                if trace {
-                    let sim = app.world().resource::<Sim>();
-                    let p = &sim.pilot.player;
-                    eprintln!("trace {answer} | origin {:?} movetype {} traversal {} {} view_entity {} {} ground {:?}", sim.pilot.origin, p.movetype, p.traversal_state, p.traversal_type, p.view_entity, p.view_entity_blend, p.ground);
-                }
-                writeln!(out, "{answer}")?;
+                update_answering(app, stream, |world, out| {
+                    if !greeted {
+                        let heirlooms: Vec<&str> = std::iter::once("none").chain(lurch::assets::HEIRLOOMS.iter().map(|h| h.name)).collect();
+                        writeln!(out, "choices legend {}\nchoices heirloom {}", LEGENDS.join(" "), heirlooms.join(" "))?;
+                        greeted = true;
+                    }
+                    let options = config(world.resource::<Config>());
+                    if sent_config.as_ref() != Some(&options) {
+                        writeln!(out, "{options}")?;
+                        sent_config = Some(options);
+                    }
+                    let layout = *world.resource::<HostHud>();
+                    if sent_hud != Some(layout) {
+                        writeln!(out, "{}", hud(&layout))?;
+                        sent_hud = Some(layout);
+                    }
+                    for blow in &world.resource::<MeleeAttacks>().1 {
+                        writeln!(out, "{}", punch(blow, base))?;
+                    }
+                    for _ in world.resource::<FrameCues>().0.iter().flat_map(|s| &s.cues).filter(|c| matches!(c, Cue::Footstep { .. })) {
+                        writeln!(out, "step")?;
+                    }
+                    let answer = pose(world, base);
+                    if trace {
+                        let sim = world.resource::<Sim>();
+                        let p = &sim.pilot.player;
+                        eprintln!("trace {answer} | origin {:?} movetype {} traversal {} {} view_entity {} {} ground {:?}", sim.pilot.origin, p.movetype, p.traversal_state, p.traversal_type, p.view_entity, p.view_entity_blend, p.ground);
+                    }
+                    writeln!(out, "{answer}")
+                })?;
             }
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown message: {line:?}"))),
         }
@@ -615,7 +714,8 @@ fn main() -> io::Result<()> {
     if let Some(d) = data {
         app.insert_resource(Data(Arc::new(d)));
     }
-    app.insert_resource(Overlay { size: (w, h), file: File::options().read(true).write(true).create(true).truncate(false).open(shm())?, seq: 0 }).add_plugins((
+    let file = File::options().read(true).write(true).create(true).truncate(false).open(shm())?;
+    app.insert_resource(OverlaySize(w, h)).add_plugins((
         DefaultPlugins
             .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
@@ -637,8 +737,12 @@ fn main() -> io::Result<()> {
     app.finish();
     app.cleanup();
     app.update();
-    let image = app.world().resource::<ViewImage>().0.clone();
-    app.world_mut().spawn(Readback::texture(image)).observe(|done: On<ReadbackComplete>, mut overlay: ResMut<Overlay>| overlay.write(&done.data));
+    let image = app.world().resource::<ViewImage>().0.id();
+    let (out, copies) = mpsc::channel();
+    let (returned, back) = mpsc::channel();
+    let device = app.sub_app(RenderApp).world().resource::<RenderDevice>().clone();
+    std::thread::spawn(move || write_overlays(device, OverlayFile { file, seq: 0 }, copies, returned));
+    app.sub_app_mut(RenderApp).insert_resource(Overlay { image, bytes: 0, made: 0, spare: Vec::new(), back: Mutex::new(back), out }).add_systems(Render, read_back.in_set(RenderSystems::Render).after(render_system));
     {
         let mut sim = app.world_mut().resource_mut::<Sim>();
         for st in &mut sim.settings.stances {

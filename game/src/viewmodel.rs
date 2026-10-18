@@ -656,11 +656,17 @@ pub fn host_lit(base: StandardMaterial) -> ViewmodelMaterial {
     ExtendedMaterial { base, extension: GameShading::default() }
 }
 
+/// Touches only the materials whose light is out of date: a material written to is prepared
+/// again, bind group and all.
 fn host_light(light: Res<HostLight>, mut materials: ResMut<Assets<ViewmodelMaterial>>) {
-    for (_, m) in materials.iter_mut() {
-        let c = &mut m.extension.constants;
-        c.host_light = light.color.extend(1.0);
-        [c.host_dir0, c.host_dir1] = light.dirs;
+    let (color, dirs) = (light.color.extend(1.0), light.dirs);
+    let stale: Vec<_> = materials.iter().filter(|(_, m)| m.extension.constants.host_light != color || [m.extension.constants.host_dir0, m.extension.constants.host_dir1] != dirs).map(|(id, _)| id).collect();
+    for id in stale {
+        if let Some(mut m) = materials.get_mut(id) {
+            let c = &mut m.extension.constants;
+            c.host_light = color;
+            [c.host_dir0, c.host_dir1] = dirs;
+        }
     }
 }
 

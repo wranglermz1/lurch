@@ -1,11 +1,11 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::RenderTarget;
+use bevy::camera::{CameraOutputMode, RenderTarget};
 use bevy::light::cluster::ClusterConfig;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureFormat, TextureUsages};
+use bevy::render::render_resource::{BlendState, TextureFormat, TextureUsages};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -16,7 +16,7 @@ use lurch::world::Tri;
 use crate::convert::{dir, pos, rot, vfov, INCH};
 use crate::data::Props;
 use crate::sim::{Pose, Sim};
-use crate::viewmodel::{gpu_image, host_lit, HostLight, ViewmodelMaterial};
+use crate::viewmodel::{gpu_image, host_lit, HostLight, ViewmodelCamera, ViewmodelMaterial};
 use crate::{advance_frame, common, Config, Frame, FrameIndex, Paused, PendingShots};
 
 pub const SKY: Color = Color::srgb(0.55, 0.70, 0.85);
@@ -81,7 +81,7 @@ impl Plugin for ViewPlugin {
             .insert_resource(GlobalAmbientLight::NONE)
             .init_resource::<DisplayInfo>()
             .add_systems(Startup, (setup, spawn_props, log_display))
-            .add_systems(Update, (sync_camera.after(crate::viewmodel::Animate), sync_body, sync_rope.after(crate::viewmodel::Animate), apply_cursor).in_set(Frame::View))
+            .add_systems(Update, (sync_camera.after(crate::viewmodel::Animate), sync_body, sync_rope.after(crate::viewmodel::Animate), overlay_cameras.after(sync_rope), apply_cursor).in_set(Frame::View))
             .add_systems(Update, grapple_look.run_if(resource_added::<crate::data::Data>))
             .add_systems(Last, take_shots.before(advance_frame));
     }
@@ -326,6 +326,31 @@ fn sync_rope(
         let points = lurch::rope::points(p.grapple_hook_at, &p.grapple_points[..n], at, tight, g.weapon.max_length, now);
         let width = data.as_ref().and_then(|d| d.0.grapple.as_ref()?.rope.first()?.as_ref().map(|t| t.width)).unwrap_or(64) as f32;
         let _ = meshes.insert(&mesh.0, tube(&points, lurch::rope::WIDTH * 0.5, lurch::rope::SIDES, lurch::rope::ROPE_TEXELS_PER_WORLD_UNIT / width));
+    }
+}
+
+/// Over another game's world the main camera draws only the grapple's rope and hook, so while
+/// neither shows it is off and the viewmodel's camera clears the image in its place: a camera's
+/// passes fewer each frame. The viewmodel's camera blends its output as the second camera on the
+/// image does, alone too, so the image's edges stay as they were.
+#[allow(clippy::type_complexity)]
+fn overlay_cameras(target: Res<ViewTarget>, grapple: Query<&Visibility, Or<(With<GrappleRope>, With<GrappleHook>)>>, mut main: Query<&mut Camera, (With<MainCamera>, Without<ViewmodelCamera>)>, mut viewmodel: Query<&mut Camera, With<ViewmodelCamera>>) {
+    if !matches!(target.0, Target::Overlay { .. }) || viewmodel.is_empty() {
+        return;
+    }
+    let drawn = grapple.iter().any(|v| *v != Visibility::Hidden);
+    for mut c in &mut main {
+        if c.is_active != drawn {
+            c.is_active = drawn;
+        }
+    }
+    for mut c in &mut viewmodel {
+        if matches!(c.clear_color, ClearColorConfig::None) != drawn {
+            c.clear_color = if drawn { ClearColorConfig::None } else { ClearColorConfig::Custom(Color::NONE) };
+        }
+        if !matches!(c.output_mode, CameraOutputMode::Write { blend_state: Some(_), .. }) {
+            c.output_mode = CameraOutputMode::Write { blend_state: Some(BlendState::ALPHA_BLENDING), clear_color: ClearColorConfig::Default };
+        }
     }
 }
 

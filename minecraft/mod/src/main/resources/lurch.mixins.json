@@ -13,7 +13,6 @@
 		"LightmapMixin",
 		"MinecraftMixin",
 		"MouseMixin",
-		"NativeImageAccess",
 		"OptionsMixin",
 		"PauseScreenMixin",
 		"ServerMovementMixin"

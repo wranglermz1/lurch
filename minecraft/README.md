@@ -154,6 +154,22 @@ shell's kill height out of reach above Minecraft's void.
 - On the Windows 10 guest (2026-10-18, RTX 3060 Ti, Temurin JDK 27): the mod built with
   `gradlew.bat build`, `lurch-mc.exe` cross-built from Linux found the install and wrote the
   overlay to `%TEMP%\lurch-mc`, and the dev client connected to it on F7 (`lurch: on`).
+- Frame rate on the host (2026-10-18, Intel UHD 770, 1920x1080 window, vsync off, Superflat,
+  standing): Minecraft alone ran about 260 fps. With lurch on it ran about 74 fps before and
+  128 fps after these changes: the answer goes out before the shell renders, the image is read
+  back and written on another thread, the main camera is off while there is no rope, the arms'
+  materials are prepared again only when their light changes, and the mod uploads the image
+  straight from the shared file. A stand-in client (no Minecraft) over a flat floor gave the
+  shell's own rate, 120 fps before and 160 fps after at 1920x1080, where the host's GPU
+  limits it. The overlay before and after was the same to the pixel, under full and dim light,
+  with and without the rope out.
+- Minecraft's AFK limiter (`inactivityFpsLimit`) held 30 fps a minute after lurch turned on,
+  since lurch takes the input Minecraft counts; the mod now counts lurch's input too. Seen on
+  the guest (RTX 3060 Ti) at 29.9 fps with `SHORT_AFK`. On the host, 75 s of lurch taking
+  input left the limiter off (`NONE`) at 128 fps.
+- On the guest with these changes (2026-10-18, RTX 3060 Ti, fullscreen 1920x1080 at 239 Hz with
+  vsync): the user played with lurch on and saw about 200 fps, where it was about 60 before
+  (30 once the AFK limiter set in).
 - The shell's own tests (`game/tests/shell/sim.rs`): an empty first command after a spawn on a
   floor of 40-unit tiles leaves the pilot free to move.
 - In a 26.3 dev client on a Superflat world (2026-10-17, Intel UHD 770, 75 Hz):
@@ -197,7 +213,8 @@ world, and block collision edge cases such as seams and partial blocks.
   Windows. The melee impact's surface: a blow on any block sounds as on `default`.
 - Depth between the overlay and Minecraft's world. The grapple rope draws over blocks in front
   of it.
-- Timing: the overlay is one readback behind the camera.
+- Timing: the overlay is the newest image the shell has finished, a frame or two behind the
+  camera.
 - The shell's dev text in the top-left corner, which overlaps Minecraft's F3 screen.
 - Parts of the lunge and the blow the image was not read for (`docs/oracle.md`, Melee): the
   cone's exact filter, the lunge's pitch lock and cylinder distances, the blow's ray length

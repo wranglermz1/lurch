@@ -23,8 +23,8 @@ import java.util.Set;
 import java.util.UUID;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.systems.RenderSystem;
 import lurch.mc.mixin.EntityStepAccess;
-import lurch.mc.mixin.NativeImageAccess;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -56,7 +56,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3fc;
-import org.lwjgl.system.MemoryUtil;
 
 /**
  * The Minecraft half of the passthrough: while F7 has it on, lurch-mc (the game shell) gets the
@@ -133,7 +132,9 @@ public final class Lurch {
 
 	private static MappedByteBuffer shm;
 	private static DynamicTexture overlay;
-	private static int overlaySeq;
+	private static int overlaySeq, overlayWidth;
+	/** The shared file's header (`LMC2` and five numbers, `lurch-mc.rs`), its first four bytes as a little-endian int. */
+	private static final int HEADER = 24, MAGIC = 0x32434d4c;
 
 	/** Where lurch last put the player, read by the integrated server's thread; null while lurch is off or the player swims. */
 	public static volatile Vec3 placedAt;
@@ -491,6 +492,10 @@ public final class Lurch {
 				lastLayout = layout;
 			}
 			msg.append(bodies(mc.level, p));
+			if (events.length() > 0) {
+				// Minecraft counts input only past the handlers lurch cancels; without this its AFK limiter holds 30 fps after a minute.
+				mc.getFramerateLimitTracker().onInputReceived();
+			}
 			msg.append(events);
 			events.setLength(0);
 			msg.append("frame ").append(frametime).append(' ').append(mc.getWindow().getWidth()).append(' ').append(mc.getWindow().getHeight()).append('\n');
@@ -750,36 +755,38 @@ public final class Lurch {
 		return s;
 	}
 
-	/** Copies lurch-mc's newest finished image into the overlay texture. */
+	/**
+	 * Uploads lurch-mc's newest finished image into the overlay texture straight from the shared
+	 * file, padding and all: the texture is a row's stride wide, and only the image's own width of
+	 * it is drawn. A copy lurch-mc began overwriting meanwhile is drawn this once and uploaded
+	 * again from the newer image next frame.
+	 */
 	private static void readOverlay(Minecraft mc) throws IOException {
-		if (shm == null || shm.capacity() < 20) {
+		if (shm == null || shm.capacity() < HEADER) {
 			try (FileChannel ch = FileChannel.open(SHM, StandardOpenOption.READ)) {
 				shm = ch.map(FileChannel.MapMode.READ_ONLY, 0, ch.size());
 				shm.order(ByteOrder.LITTLE_ENDIAN);
 			}
-			if (shm.capacity() < 20) {
+			if (shm.capacity() < HEADER) {
 				return;
 			}
 		}
 		int seq = shm.getInt(4);
-		if ((seq & 1) != 0 || seq == overlaySeq) {
+		if (shm.getInt(0) != MAGIC || seq == 0 || seq == overlaySeq) {
 			return;
 		}
-		int w = shm.getInt(8), h = shm.getInt(12), stride = shm.getInt(16);
-		if (shm.capacity() < 20L + (long) stride * h) {
+		int w = shm.getInt(8), h = shm.getInt(12), stride = shm.getInt(16), slot = stride * h;
+		if (shm.capacity() < HEADER + 2L * slot) {
 			shm = null;
 			return;
 		}
-		if (overlay == null || overlay.getPixels().getWidth() != w || overlay.getPixels().getHeight() != h) {
-			overlay = new DynamicTexture("lurch overlay", w, h, false);
+		if (overlay == null || overlay.getPixels().getWidth() != stride / 4 || overlay.getPixels().getHeight() != h) {
+			overlay = new DynamicTexture("lurch overlay", stride / 4, h, false);
 			mc.getTextureManager().register(OVERLAY, overlay);
 		}
-		long src = MemoryUtil.memAddress(shm) + 20, dst = ((NativeImageAccess) (Object) overlay.getPixels()).lurch$pixels();
-		for (int row = 0; row < h; row++) {
-			MemoryUtil.memCopy(src + (long) row * stride, dst + (long) row * w * 4, (long) w * 4);
-		}
-		if (shm.getInt(4) == seq) {
-			overlay.upload();
+		overlayWidth = w;
+		RenderSystem.getDevice().createCommandEncoder().writeToTexture(overlay.getTexture(), shm.slice(HEADER + (seq & 1) * slot, slot), 0, 0, 0, 0, stride / 4, h);
+		if (shm.getInt(20) - seq < 2) {
 			overlaySeq = seq;
 		}
 	}
@@ -788,8 +795,8 @@ public final class Lurch {
 		if (!on() || overlay == null) {
 			return;
 		}
-		int w = overlay.getPixels().getWidth(), h = overlay.getPixels().getHeight();
-		g.blit(RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA, OVERLAY, 0, 0, 0f, 0f, g.guiWidth(), g.guiHeight(), w, h, w, h);
+		int tw = overlay.getPixels().getWidth(), h = overlay.getPixels().getHeight();
+		g.blit(RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA, OVERLAY, 0, 0, 0f, 0f, g.guiWidth(), g.guiHeight(), overlayWidth, h, tw, h);
 	}
 
 	private static void start(Minecraft mc) {
