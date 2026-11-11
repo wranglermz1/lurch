@@ -156,7 +156,7 @@ fn read_input(
             Action::PrevSpot => drop(respawn.write(Respawn::Spot(-1))),
             Action::NextSpot => drop(respawn.write(Respawn::Spot(1))),
             Action::ToggleHud => hud.0 = !hud.0,
-            Action::Bits(_) | Action::Ping | Action::DevMenu => {}
+            Action::Bits(_) | Action::Ping | Action::Ultimate | Action::DevMenu => {}
         }
     }
 }

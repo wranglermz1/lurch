@@ -12,6 +12,7 @@ pub mod input;
 pub mod jump;
 pub mod mantle;
 pub mod math;
+pub mod melee;
 pub mod pilot;
 pub mod rootmotion;
 pub mod setup;
@@ -188,7 +189,35 @@ pub struct Player {
     pub sprint_toggle_lock: bool,
     pub sprint_blocked: bool,
     pub sprint_suppressed: bool,
-    pub traversal_blocked: bool,
+    /// `+0x2c7c`: a melee attack is on (`melee`). It blocks the sprint, traversals and the
+    /// grapple.
+    pub melee_active: bool,
+    /// `+0x2c90`: the attack's `PLAYER_MELEE_STATE_*`, 0 for none.
+    pub melee_state: u32,
+    /// `+0x2c80`: when the attack started.
+    pub melee_start: f32,
+    /// `+0x2c84`: the attack has hit something.
+    pub melee_hit: bool,
+    /// `+0x2c98`: what a punch adds to the ground move's velocity (`Move::melee_push`).
+    pub melee_push: V3,
+    /// `+0x3adc`: the entity a lunge moves the player to (`Lunge_SetTargetEntity`).
+    pub lunge_target: Option<u64>,
+    /// `+0x3af0`: the player's origin from the target's when the lunge started.
+    pub lunge_start_offset: V3,
+    /// `+0x3afc`: where the lunge ends, from the target's origin.
+    pub lunge_end_offset: V3,
+    /// `+0x3b08`: when the lunge started.
+    pub lunge_start: f32,
+    /// `+0x3b0c`: when the lunge gives up, or -1.
+    pub lunge_abort: f32,
+    /// `+0x3b10`: the lunge leaves the ground (`Lunge_EnableFlying`).
+    pub lunge_flying: bool,
+    /// `+0x3b18`: how long the lunge takes.
+    pub lunge_duration: f32,
+    /// `+0x3b1c`: how long a lunge may run, or -1 for as long as it lasts.
+    pub lunge_max_time: f32,
+    /// `+0x3b20`: the fastest the player leaves a lunge, or 0 to stop dead.
+    pub lunge_max_end_speed: f32,
     pub stamina: f32,
     pub prev_velocity: V3,
     pub eye_angles: V3,
@@ -300,6 +329,9 @@ pub struct Player {
     /// The hook entity (`+0x3140`): where it is, which the rope is drawn to and a zipline grab
     /// measures from, and the zipline it caught (`m_grappleZipline`, hook `+0x1300`).
     pub grapple_hook_at: V3,
+    /// The entity the hook entity is parented to since it caught it, and where on it it holds,
+    /// from its box's lowest corner (`0x61ae90` from `0x9d1b00`); not a player field.
+    pub grapple_parent: Option<(u64, V3)>,
     pub grapple_zipline: Option<u32>,
     /// The first-person animation state (`+0x2a4c`): 5 while the proxy plays the grapple's.
     pub first_person_anim: u32,
@@ -454,6 +486,14 @@ pub trait Tracer {
     fn ziplines(&self) -> &[zipline::Zipline] {
         &[]
     }
+
+    fn bodies(&self) -> &[crate::world::Body] {
+        &[]
+    }
+
+    fn body(&self, id: u64) -> Option<crate::world::Body> {
+        self.bodies().iter().find(|b| b.id == id).copied()
+    }
 }
 
 /// Whatever the movement code knows about where it is in one ProcessMovement call: the
@@ -532,15 +572,17 @@ impl Move<'_> {
         if 0 < self.p.duck_timer {
             self.p.duck_timer = (self.p.duck_timer - (self.g.frametime * 1000.0) as i32).max(0);
         }
-        if self.p.movetype != 12 {
+        let movetype = self.p.movetype;
+        self.lunge_movetype();
+        if movetype != 12 {
             if 0 < self.p.traversal_gun {
                 self.p.traversal_gun -= 1;
             }
-            if self.p.movetype == 2 && !self.mv.origin_changed && optimized {
+            if movetype == 2 && !self.mv.origin_changed && optimized {
                 if OPTIMIZED_LEAVE_SPEED < math::dot(self.p.up, self.mv.velocity) {
                     self.set_ground(None);
                 }
-            } else if self.p.movetype != 2 || !self.on_ground() || !self.stay_on_ground() {
+            } else if movetype != 2 || !self.on_ground() || !self.stay_on_ground() {
                 self.categorize(false);
             }
         }
@@ -564,6 +606,7 @@ impl Move<'_> {
                 }
             }
             mantle::MOVETYPE_TRAVERSE => self.traversal_move(false),
+            melee::MOVETYPE_LUNGE => self.lunge_move(),
             _ => {}
         }
         self.grapple_wrap();

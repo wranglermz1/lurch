@@ -217,7 +217,7 @@ impl Move<'_> {
         if 0.25 > now - self.p.last_ground_time && !jump {
             return false;
         }
-        if (self.p.grappling && self.p.grapple_count > 0) || self.p.traversal_blocked || m.cooldown > now - self.p.traversal_start_time {
+        if (self.p.grappling && self.p.grapple_count > 0) || self.p.melee_active || m.cooldown > now - self.p.traversal_start_time {
             return false;
         }
         let o = self.mv.origin;

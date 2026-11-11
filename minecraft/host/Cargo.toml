@@ -1,0 +1,29 @@
+[package]
+name = "lurch-mc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[dependencies]
+lurch = { path = "../.." }
+lurch-game = { path = "../../game" }
+bevy = { version = "=0.19.1", default-features = false, features = [
+  "std", "multi_threaded", "async_executor", "bevy_log", "bevy_asset",
+  "bevy_window", "bevy_winit", "x11", "wayland",
+  "bevy_render", "bevy_core_pipeline", "bevy_pbr",
+  "bevy_camera", "bevy_light", "bevy_mesh", "bevy_color", "bevy_image",
+  "png", "tonemapping_luts", "ktx2", "zstd_rust",
+  "bevy_ui", "bevy_ui_render", "bevy_text", "default_font",
+  "bevy_gizmos", "bevy_gizmos_render",
+] }
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false

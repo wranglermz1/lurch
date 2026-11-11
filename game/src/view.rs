@@ -1,11 +1,11 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::RenderTarget;
+use bevy::camera::{CameraOutputMode, RenderTarget};
 use bevy::light::cluster::ClusterConfig;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureFormat, TextureUsages};
+use bevy::render::render_resource::{BlendState, TextureFormat, TextureUsages};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -16,7 +16,7 @@ use lurch::world::Tri;
 use crate::convert::{dir, pos, rot, vfov, INCH};
 use crate::data::Props;
 use crate::sim::{Pose, Sim};
-use crate::viewmodel::gpu_image;
+use crate::viewmodel::{gpu_image, host_lit, HostLight, ViewmodelCamera, ViewmodelMaterial};
 use crate::{advance_frame, common, Config, Frame, FrameIndex, Paused, PendingShots};
 
 pub const SKY: Color = Color::srgb(0.55, 0.70, 0.85);
@@ -29,6 +29,9 @@ const ROPE_RADIUS: f32 = 1.5;
 pub enum Target {
     Window,
     Image { w: u32, h: u32 },
+    /// An image of only what the player holds and sees over the world (the viewmodel, the HUD
+    /// and the grapple's rope), on a transparent background: for another game's world under it.
+    Overlay { w: u32, h: u32 },
 }
 
 pub struct ViewPlugin {
@@ -74,11 +77,11 @@ impl Plugin for ViewPlugin {
     fn build(&self, app: &mut App) {
         common(app);
         app.insert_resource(ViewTarget(self.target))
-            .insert_resource(ClearColor(SKY))
+            .insert_resource(ClearColor(if matches!(self.target, Target::Overlay { .. }) { Color::NONE } else { SKY }))
             .insert_resource(GlobalAmbientLight::NONE)
             .init_resource::<DisplayInfo>()
             .add_systems(Startup, (setup, spawn_props, log_display))
-            .add_systems(Update, (sync_camera.after(crate::viewmodel::Animate), sync_body, sync_rope.after(crate::viewmodel::Animate), apply_cursor).in_set(Frame::View))
+            .add_systems(Update, (sync_camera.after(crate::viewmodel::Animate), sync_body, sync_rope.after(crate::viewmodel::Animate), overlay_cameras.after(sync_rope), apply_cursor).in_set(Frame::View))
             .add_systems(Update, grapple_look.run_if(resource_added::<crate::data::Data>))
             .add_systems(Last, take_shots.before(advance_frame));
     }
@@ -183,7 +186,9 @@ pub fn map_mesh() -> Mesh {
 #[allow(clippy::too_many_arguments)] // Bevy's system parameters
 fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>, target: Res<ViewTarget>, pose: Res<Pose>, cfg: Res<Config>) {
     let material = StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 1.0, cull_mode: None, double_sided: true, ..default() };
-    commands.spawn((Mesh3d(meshes.add(map_mesh())), MeshMaterial3d(materials.add(material))));
+    if !matches!(target.0, Target::Overlay { .. }) {
+        commands.spawn((Mesh3d(meshes.add(map_mesh())), MeshMaterial3d(materials.add(material))));
+    }
     commands.spawn((
         DirectionalLight { shadow_maps_enabled: cfg.shadows, ..default() },
         Transform::default().looking_to(Vec3::new(0.55, -0.65, -0.52), Vec3::Y),
@@ -194,7 +199,7 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
     // One light cluster: the scene has no point or spot lights to sort into more, and each
     // cluster costs the frame.
     let mut camera = commands.spawn((Camera3d::default(), MainCamera, IsDefaultUiCamera, projection, transform, sky_light(&mut images), ClusterConfig::Single));
-    if let Target::Image { w, h } = target.0 {
+    if let Target::Image { w, h } | Target::Overlay { w, h } = target.0 {
         let mut image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
         image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let handle = images.add(image);
@@ -209,8 +214,8 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
 
 /// Each prop mesh with its albedo tinted by its vertex colours; the models' winding is
 /// clockwise.
-fn spawn_props(mut commands: Commands, props: Option<Res<Props>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
-    let Some(props) = props else { return };
+fn spawn_props(mut commands: Commands, props: Option<Res<Props>>, target: Res<ViewTarget>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
+    let Some(props) = props.filter(|_| !matches!(target.0, Target::Overlay { .. })) else { return };
     for m in &props.0 {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, m.positions.iter().map(|&p| pos(p).to_array()).collect::<Vec<_>>())
@@ -249,14 +254,27 @@ fn sync_body(sim: Res<Sim>, mut bodies: Query<&mut Transform, With<Body>>) {
 /// The rope from the hand through its bends to the hook, while the hook is out.
 /// The rope drawn with the game's `cable/grapple` textures and the hook with its own model,
 /// once the install's files are read.
-fn grapple_look(mut commands: Commands, data: Res<crate::data::Data>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>, ropes: Query<&MeshMaterial3d<StandardMaterial>, With<GrappleRope>>) {
+/// Over another game's world (`HostLight`), both take that game's light, as the arms do.
+#[allow(clippy::too_many_arguments)] // Bevy's system parameters
+fn grapple_look(
+    mut commands: Commands,
+    data: Res<crate::data::Data>,
+    host: Option<Res<HostLight>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut host_materials: ResMut<Assets<ViewmodelMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    ropes: Query<Entity, With<GrappleRope>>,
+) {
     let Some(g) = &data.0.grapple else { return };
+    let mut material = |e: &mut EntityCommands, m: StandardMaterial| match host {
+        Some(_) => drop(e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(host_materials.add(host_lit(m))))),
+        None => drop(e.insert(MeshMaterial3d(materials.add(m)))),
+    };
     let albedo = g.rope.first().and_then(|t| t.as_ref()).and_then(gpu_image).map(|i| images.add(i));
     let normal = g.rope.get(1).and_then(|t| t.as_ref()).and_then(gpu_image).map(|i| images.add(i));
-    for m in &ropes {
-        if let Some(mut mat) = materials.get_mut(&m.0) {
-            *mat = StandardMaterial { base_color_texture: albedo.clone(), normal_map_texture: normal.clone(), flip_normal_map_y: true, perceptual_roughness: 0.6, ..default() };
-        }
+    for e in &ropes {
+        material(&mut commands.entity(e), StandardMaterial { base_color_texture: albedo.clone(), normal_map_texture: normal.clone(), flip_normal_map_y: true, perceptual_roughness: 0.6, ..default() });
     }
     for (m, textures) in g.hook.meshes.iter().zip(&g.hook_textures) {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
@@ -266,8 +284,8 @@ fn grapple_look(mut commands: Commands, data: Res<crate::data::Data>, mut meshes
             .with_inserted_indices(Indices::U16(m.indices.chunks(3).flat_map(|t| [t[0], t[2], t[1]]).collect()));
         let _ = mesh.generate_tangents();
         let base_color_texture = textures.first().and_then(|t| t.as_ref()).and_then(gpu_image).map(|i| images.add(i));
-        let material = materials.add(StandardMaterial { base_color_texture, perceptual_roughness: 0.5, ..default() });
-        commands.spawn((GrappleHook, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material), NotShadowCaster, Visibility::Hidden, Transform::default()));
+        let mut hook = commands.spawn((GrappleHook, Mesh3d(meshes.add(mesh)), NotShadowCaster, Visibility::Hidden, Transform::default()));
+        material(&mut hook, StandardMaterial { base_color_texture, perceptual_roughness: 0.5, ..default() });
     }
 }
 
@@ -308,6 +326,31 @@ fn sync_rope(
         let points = lurch::rope::points(p.grapple_hook_at, &p.grapple_points[..n], at, tight, g.weapon.max_length, now);
         let width = data.as_ref().and_then(|d| d.0.grapple.as_ref()?.rope.first()?.as_ref().map(|t| t.width)).unwrap_or(64) as f32;
         let _ = meshes.insert(&mesh.0, tube(&points, lurch::rope::WIDTH * 0.5, lurch::rope::SIDES, lurch::rope::ROPE_TEXELS_PER_WORLD_UNIT / width));
+    }
+}
+
+/// Over another game's world the main camera draws only the grapple's rope and hook, so while
+/// neither shows it is off and the viewmodel's camera clears the image in its place: a camera's
+/// passes fewer each frame. The viewmodel's camera blends its output as the second camera on the
+/// image does, alone too, so the image's edges stay as they were.
+#[allow(clippy::type_complexity)]
+fn overlay_cameras(target: Res<ViewTarget>, grapple: Query<&Visibility, Or<(With<GrappleRope>, With<GrappleHook>)>>, mut main: Query<&mut Camera, (With<MainCamera>, Without<ViewmodelCamera>)>, mut viewmodel: Query<&mut Camera, With<ViewmodelCamera>>) {
+    if !matches!(target.0, Target::Overlay { .. }) || viewmodel.is_empty() {
+        return;
+    }
+    let drawn = grapple.iter().any(|v| *v != Visibility::Hidden);
+    for mut c in &mut main {
+        if c.is_active != drawn {
+            c.is_active = drawn;
+        }
+    }
+    for mut c in &mut viewmodel {
+        if matches!(c.clear_color, ClearColorConfig::None) != drawn {
+            c.clear_color = if drawn { ClearColorConfig::None } else { ClearColorConfig::Custom(Color::NONE) };
+        }
+        if !matches!(c.output_mode, CameraOutputMode::Write { blend_state: Some(_), .. }) {
+            c.output_mode = CameraOutputMode::Write { blend_state: Some(BlendState::ALPHA_BLENDING), clear_color: ClearColorConfig::Default };
+        }
     }
 }
 

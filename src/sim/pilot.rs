@@ -327,6 +327,9 @@ pub fn spawn(origin: V3) -> Player {
         fov_from: 1.0,
         fov_to: 1.0,
         suit_grapple_power: 100.0,
+        lunge_abort: -1.0,
+        lunge_duration: 0.5,
+        lunge_max_time: -1.0,
         ..Default::default()
     }
 }
@@ -417,6 +420,77 @@ impl Pilot {
         p.grapple(s, dir, curtime, &mut self.cues)
     }
 
+    /// A punch pressed in a command starts after its move, in the weapon's turn: the script's
+    /// `AttackerCanStartMelee` as far as ours goes (alive, no attack on), then
+    /// PlayerMelee_StartAttack.
+    pub fn melee(&mut self, curtime: f32) -> bool {
+        let p = &mut self.player;
+        if p.dead || p.melee_state != 0 {
+            return false;
+        }
+        p.start_melee(super::melee::HUMAN_KICK_ATTACK, curtime);
+        true
+    }
+
+    /// `CodeCallback_OnMeleeStartActivity` (`sh_melee.gnut`) for a punch just started: the first
+    /// entity the lunge's cone trace finds becomes the lunge's target. The script's `move_slow`
+    /// check and the pitch lock on the ground are not modelled.
+    pub fn melee_start_activity(&mut self, s: &Settings, curtime: f32, world: &mut dyn Tracer) -> bool {
+        let p = &mut self.player;
+        if !p.melee_active {
+            return false;
+        }
+        let eye = p.eye_position(s, self.origin, p.view_angles, curtime);
+        match super::melee::lunge_cone_trace(world, eye, p.view_angles) {
+            Some(target) => p.lunge_set_target(&target, self.origin, curtime),
+            None => false,
+        }
+    }
+
+    /// `CodeCallback_OnMeleeAttackAnimEvent` (`sh_melee.gnut`), the punch's blow: what
+    /// `PlayerMelee_AttackTrace` hits within `range` takes it, and the player is knocked back
+    /// from it at half of `MELEE_KNOCKBACK_SCALE`, level, unless the blow is at the feet or the
+    /// player already moves away; the attack and the lunge end and the grapple lets go. Nothing
+    /// happens without an attack on or with nothing in reach.
+    pub fn melee_blow(&mut self, s: &Settings, curtime: f32, range: f32, world: &mut dyn Tracer) -> Option<super::melee::Blow> {
+        const MELEE_KNOCKBACK_SCALE: f32 = 350.0;
+        const GROUND_OFFSET: f32 = 10.0;
+        let p = &mut self.player;
+        if !p.melee_active || p.melee_hit {
+            return None;
+        }
+        let eye = p.eye_position(s, self.origin, p.view_angles, curtime);
+        let lunge = p.lunge_target.and_then(|id| world.body(id));
+        let blow = super::melee::attack_trace(world, eye, p.view_angles, range, lunge)?;
+        p.melee_hit = true;
+        let look = math::angle_vectors(p.view_angles).0;
+        let mut push = math::scale(look, MELEE_KNOCKBACK_SCALE);
+        if let Some(b) = blow.entity.and_then(|id| world.body(id)) {
+            let (lo, hi) = (p.hull_min, p.hull_max);
+            let ours = [self.origin[0] + (lo[0] + hi[0]) * 0.5, self.origin[1] + (lo[1] + hi[1]) * 0.5, self.origin[2] + (lo[2] + hi[2]) * 0.5];
+            if math::dot(look, math::sub(super::melee::body_center(&b), ours)) < 0.0 {
+                push = math::scale(push, -1.0);
+            }
+        }
+        p.end_melee();
+        p.lunge_clear();
+        let mut back = math::scale(push, -1.0);
+        let at_ground = blow.at[2] - GROUND_OFFSET <= self.origin[2];
+        back[2] = 0.0;
+        back = math::scale(back, 0.5);
+        if 0.0 < math::dot(back, back)
+            && !at_ground
+            && math::dot(squirrel_normalize(back), squirrel_normalize(self.velocity)) <= 0.0
+            && let Some(v) = p.knock_back(back, 0.25)
+        {
+            self.velocity = v;
+        }
+        let mut v = self.velocity;
+        p.grapple_detach(s, &mut v, true, curtime, &mut self.cues);
+        self.velocity = v;
+        Some(blow)
+    }
+
     /// Whether the crosshair shows the grapple in range, asked with the view as it stands.
     pub fn grapple_in_range(&self, s: &Settings, curtime: f32, world: &mut dyn Tracer) -> bool {
         let mut mv = MoveData { origin: self.origin, velocity: self.velocity, ..Default::default() };
@@ -496,4 +570,10 @@ impl Default for Clock {
     fn default() -> Self {
         Clock(Self::START)
     }
+}
+
+/// Squirrel's `Normalize`: a zero vector stays zero.
+fn squirrel_normalize(v: V3) -> V3 {
+    let l = math::len(v);
+    if l == 0.0 { v } else { math::scale(v, 1.0 / l) }
 }

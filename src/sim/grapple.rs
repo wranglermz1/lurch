@@ -4,10 +4,13 @@
 //! grapple puts the player in; the suit power's refill; the view's roll toward the rope; and
 //! the crosshair's in-range answer. docs/oracle.md (Grapple) maps each function here to its RVA.
 //!
+//! The hook that catches an entity (a `world::Body`) is parented to it and moves with it
+//! (`0x61ae90` from `0x9d1b00`); nothing pulls the entity. Ours moves the rope's last point with
+//! the hook: how the image's rope follows a parented hook is not read.
+//!
 //! Not modelled: swinging (`grapple_swing`, off in every pilot's settings); window hints,
-//! no-grapple volumes, moving or parented anchors and the hook catching an entity, none of
-//! which the recorded maps or the test map's world collision hold; status effects that slow
-//! the pull; the scripted grapple animation.
+//! no-grapple volumes, moving brush anchors, none of which the recorded maps or the test map's
+//! world collision hold; status effects that slow the pull; the scripted grapple animation.
 
 use super::buttons::{IN_DUCK, IN_TOGGLE_DUCK};
 use super::cue::{Cue, GrappleAnim};
@@ -173,6 +176,7 @@ impl Player {
         self.grappling = true;
         let eye = self.eye(s, self.abs_origin, self.view_angles, curtime);
         self.grapple_count = 1;
+        self.grapple_parent = None;
         self.grapple_hook_vel = [GRAPPLE_SHOOTVEL * dir[0], GRAPPLE_SHOOTVEL * dir[1], GRAPPLE_SHOOTVEL * dir[2]];
         self.grapple_points[0] = eye;
         self.grapple_attached = false;
@@ -196,12 +200,12 @@ impl Player {
         true
     }
 
-    /// `0x86c6b0`: not traversing or blocked from it, in no first-person animation but the
+    /// `0x86c6b0`: not traversing, not in a melee attack, in no first-person animation but the
     /// grapple's, with the suit power the weapon needs. Its other refusals (`+0xa2e`,
     /// `0x870860`, `0x870920`, `0x8709e0`) are states ours never enters.
     pub fn may_grapple(&self, s: &Settings) -> bool {
         self.movetype != super::mantle::MOVETYPE_TRAVERSE
-            && !self.traversal_blocked
+            && !self.melee_active
             && (self.first_person_anim == 0 || self.first_person_anim == FP_ANIM_GRAPPLE)
             && s.grapple.weapon.power_required <= self.suit_grapple_power
     }
@@ -272,6 +276,7 @@ impl Player {
         if self.grapple_count == 0 {
             return;
         }
+        self.grapple_parent = None;
         if loss && self.grapple_pulling {
             Self::grapple_speed_loss(s, v);
         }
@@ -400,6 +405,16 @@ impl Move<'_> {
         }
         if !self.p.grappling {
             return;
+        }
+        if let Some((id, held)) = self.p.grapple_parent {
+            match self.tr.body(id) {
+                Some(b) => {
+                    let at = add(b.mins, held);
+                    self.p.grapple_hook_at = at;
+                    self.p.grapple_points[(self.p.grapple_count - 1) as usize] = at;
+                }
+                None => self.p.grapple_parent = None,
+            }
         }
         let g = &self.s.grapple;
         if (!g.swing || g.swing_type != 3) && self.mv.pressed & (IN_DUCK | IN_TOGGLE_DUCK) != 0 {
@@ -781,7 +796,9 @@ impl Move<'_> {
             self.grapple_drop();
             return;
         }
+        let parent = self.tr.body(t.entity).map(|b| (b.id, sub(t.endpos, b.mins)));
         self.grapple_catch(vel, t.endpos, zipline);
+        self.p.grapple_parent = parent;
     }
 
     /// `0x9d1b00`: the hook holds. The first catch lifts the player to at least

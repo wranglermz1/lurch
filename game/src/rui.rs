@@ -55,6 +55,10 @@ pub const UI_LAYER: usize = 3;
 /// `HUD_Z_BASE` (`sh_consts.gnut`).
 const HUD_Z_BASE: i16 = 300;
 const GRAPPLE: &str = "mp_ability_grapple";
+/// Pathfinder's ultimate, whose panel the Minecraft host shows uncharged.
+const ULTIMATE: &str = "mp_weapon_zipline";
+/// The space between the host's HUD and the game's panels beside it, over the target's height.
+const HOST_GAP: f32 = 0.02;
 const SHADER: &str = "embedded://lurch_game/rui.wgsl";
 const VGUI_SHADER: &str = "embedded://lurch_game/vgui.wgsl";
 const SYSTEM_MENU: &str = "scripts/resource/ui/menus/system.menu";
@@ -247,13 +251,49 @@ fn crosshairs(ui: &Ui, install: &std::path::Path, weapon: &str, in_use: bool) ->
         .collect()
 }
 
-/// The tactical's panel for the grapple as `ClWeaponStatus_AddClient` creates it and
-/// `InitOffhandRui` (`cl_weapon_status.gnut`) sets it up for a `cooldown_type ammo` weapon, at
-/// game time `now`.
+/// The player's panel (`SURVIVAL_HUD_PLAYER`) as `SURVIVAL_PopulatePlayerInfoRui`
+/// (`cl_gamemode_survival.nut`) sets it up, at game time `now`, with the legend's portrait.
+/// `name` is any text: the host draws over the name and the bars, and the name's first glyph
+/// is where they start (`player_panel`).
+fn player_panel(ui: &Ui, data: Option<&Data>, now: f32) -> Option<Rui> {
+    let mut rui = ui.create("survival_player_hud_v2", RUI_DRAW_POSTEFFECTS, HUD_Z_BASE)?;
+    rui.set_bool(ui, "useShields", true);
+    rui.set_string(ui, "name", "lurch");
+    rui.set_game_time(ui, "trackedPlayerChangeTime", now);
+    for name in ["playerHealthFrac", "playerTargetHealthFrac"] {
+        rui.set_float(ui, name, 1.0);
+    }
+    if let Some(icon) = data.and_then(|d| d.0.character.as_ref()).and_then(|c| c.str("galleryPortrait")) {
+        rui.set_image(ui, "playerIcon", icon);
+    }
+    Some(rui)
+}
+
+/// The tactical's panel for the grapple, as `ClWeaponStatus_AddClient` creates it, at game time
+/// `now`.
 fn tactical(ui: &Ui, install: &std::path::Path, now: f32) -> Option<Rui> {
     let w = lurch::assets::script::weapon(install, GRAPPLE).ok()?;
-    let mut rui = ui.create("tactical_ability_hud", RUI_DRAW_POSTEFFECTS, HUD_Z_BASE)?;
-    let (clip, per_shot, min) = (cooldown::CLIP_SIZE, cooldown::AMMO_PER_SHOT, cooldown::AMMO_MIN_TO_FIRE);
+    offhand(ui, &w, now, "tactical_ability_hud", [cooldown::CLIP_SIZE, cooldown::AMMO_PER_SHOT, cooldown::AMMO_MIN_TO_FIRE], "%offhand1%")
+}
+
+/// The ultimate's panel for Pathfinder's zipline as `ClWeaponStatus_AddClient` creates it
+/// (`ability_hud`, without the playlist's `hud_ultimate_ready_video`) on `OFFHAND_INVENTORY`,
+/// at game time `now`, uncharged: no ultimate is modelled.
+fn ultimate(ui: &Ui, install: &std::path::Path, now: f32) -> Option<Rui> {
+    let w = lurch::assets::script::weapon(install, ULTIMATE).ok()?;
+    let ammo = |k: &str| w.get(k).and_then(|v| v.parse().ok());
+    let mut rui = offhand(ui, &w, now, "ability_hud", [ammo("ammo_clip_size")?, ammo("ammo_per_shot")?, ammo("ammo_min_to_fire")?], "%offhand4%")?;
+    rui.set_int(ui, "ultimateCredits", -1);
+    rui.set_float(ui, "chargeFrac", 0.0);
+    rui.set_float(ui, "refillRate", 0.0);
+    Some(rui)
+}
+
+/// An offhand's panel as `InitOffhandRui` (`cl_weapon_status.gnut`) sets it up for a
+/// `cooldown_type ammo` weapon with settings `w` and `[clip, per shot, min to fire]` ammo, with
+/// the hint `UpdateOffhandRuiVisibility` gives its slot.
+fn offhand(ui: &Ui, w: &HashMap<String, String>, now: f32, element: &str, [clip, per_shot, min]: [i32; 3], hint: &str) -> Option<Rui> {
+    let mut rui = ui.create(element, RUI_DRAW_POSTEFFECTS, HUD_Z_BASE)?;
     rui.set_game_time(ui, "hintTime", now);
     for name in ["isTitan", "isReverseCharge", "isPaused"] {
         rui.set_bool(ui, name, false);
@@ -265,8 +305,22 @@ fn tactical(ui: &Ui, install: &std::path::Path, now: f32) -> Option<Rui> {
     rui.set_value(ui, "segments", Value::Int(clip / per_shot));
     rui.set_value(ui, "ammoMinToFire", Value::Int(min));
     rui.set_image(ui, "hudIcon", w.get("hud_icon").map_or("", String::as_str));
-    rui.set_string(ui, "hintText", "%offhand1%");
+    rui.set_string(ui, "hintText", hint);
     Some(rui)
+}
+
+/// What an offhand's panel takes each frame besides its charge: the legend's ultimate colours
+/// and the target's virtual screen.
+fn offhand_frame(ui: &Ui, t: &mut Rui, data: Option<&Data>, width: f32, height: f32) {
+    if let Some(c) = data.and_then(|d| d.0.character.as_ref()) {
+        for (arg, key) in [("ultimateColor", "hudUltimateColor"), ("ultimateColorHighlight", "hudUltimateColorHighlight")] {
+            if let Some(v) = c.float3(key).map(script_srgb_to_linear) {
+                t.set_value(ui, arg, Value::Vector([v[0], v[1], v[2], 1.0]));
+            }
+        }
+    }
+    let [vw, vh] = lurch::rui::virtual_screen(width, height);
+    (t.size, t.inv_size) = ([vw, vh], [1.0 / vw, 1.0 / vh]);
 }
 
 /// The script's `SrgbToLinear` (native `0x7a5d20`, each lane `0x7158c0`): the engine's curve
@@ -293,6 +347,77 @@ fn weapon_value(var: &str, sim: &Sim, range: &GrappleRange, grapple: bool) -> Op
     })
 }
 
+/// Another game's HUD drawn over the shell's, for the shell drawn over that game. The shell
+/// draws the player panel's frame and portrait and leaves its contents to the host, mirrors
+/// the player panel with the ultimate's at the right edge, and leaves the middle of the
+/// bottom to the host's own bar (`HostBar`), with the tactical's panel left of it. Written each
+/// frame, in the target's pixels.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct HostHud {
+    /// The box the player panel's name and bars fill in the game, as tall as the panel:
+    /// left, top, right, bottom.
+    pub panel: Option<[f32; 4]>,
+    /// How far left the host's bar may reach and leave room for the tactical's panel between
+    /// it and the player panel.
+    pub room: Option<f32>,
+    /// Where the shell puts the player panel, the tactical's and the ultimate's, before the
+    /// host's layout moves them: left, top, right, bottom.
+    pub rects: [Option<[f32; 4]>; 3],
+}
+
+/// The left edge of the host's bar in the middle of the bottom, in the target's pixels: the
+/// tactical's panel moves left of it when it would reach it.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct HostBar(pub f32);
+
+/// Where the host's player put one of the shell's panels: its top left corner `offset` target
+/// pixels from where the shell puts it, drawn `scale` times its size from there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Place {
+    pub offset: [f32; 2],
+    pub scale: f32,
+}
+
+impl Default for Place {
+    fn default() -> Self {
+        Place { offset: [0.0; 2], scale: 1.0 }
+    }
+}
+
+/// The host's own layout of the player panel, the tactical's and the ultimate's.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct HostLayout {
+    pub player: Place,
+    pub tactical: Place,
+    pub ultimate: Place,
+}
+
+/// Where `p` moves a point of something whose bounds are `b`, in a target `size` pixels big.
+fn placed(c: [f32; 2], b: [f32; 4], p: Place, size: [f32; 2]) -> [f32; 2] {
+    std::array::from_fn(|i| (c[i] - b[i]) * p.scale + b[i] + p.offset[i] / size[i])
+}
+
+fn place(quads: &mut [Quad], b: [f32; 4], p: Place, size: [f32; 2]) {
+    for c in quads.iter_mut().flat_map(|q| q.corners.iter_mut()) {
+        *c = placed(*c, b, p, size);
+    }
+}
+
+fn shift_x(quads: &mut [Quad], dx: f32) {
+    for c in quads.iter_mut().flat_map(|q| q.corners.iter_mut()) {
+        c[0] += dx;
+    }
+}
+
+/// The bounds of the quads' corners, `[x0, y0, x1, y1]` in the quads' own units.
+fn bounds(quads: &[Quad]) -> Option<[f32; 4]> {
+    let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for c in quads.iter().flat_map(|q| q.corners) {
+        b = [b[0].min(c[0]), b[1].min(c[1]), b[2].max(c[0]), b[3].max(c[1])];
+    }
+    (b[0] <= b[2]).then_some(b)
+}
+
 /// The runtime and the instances the HUD shows.
 #[derive(Resource)]
 pub struct Runtime {
@@ -301,6 +426,9 @@ pub struct Runtime {
     /// The fists' crosshairs, then the grapple's.
     crosshairs: Vec<(Crosshair, bool)>,
     tactical: Option<Rui>,
+    /// The player's panel and the ultimate's, with a `HostHud` only.
+    player: Option<Rui>,
+    ultimate: Option<Rui>,
     atlases: Vec<Option<Handle<Image>>>,
     /// Each font atlas's texture and glyph bounds.
     fonts: Vec<(Option<Handle<Image>>, Handle<ShaderBuffer>)>,
@@ -368,7 +496,8 @@ fn atlas_image(t: &Texture) -> Option<Image> {
     Some(image)
 }
 
-fn finish(mut commands: Commands, loading: Option<Res<Loading>>, cfg: Res<Config>, sim: Option<Res<Sim>>, mut images: ResMut<Assets<Image>>, mut buffers: ResMut<Assets<ShaderBuffer>>) {
+#[allow(clippy::too_many_arguments)] // Bevy's system parameters
+fn finish(mut commands: Commands, loading: Option<Res<Loading>>, cfg: Res<Config>, sim: Option<Res<Sim>>, data: Option<Res<Data>>, host: Option<Res<HostHud>>, mut images: ResMut<Assets<Image>>, mut buffers: ResMut<Assets<ShaderBuffer>>) {
     let Some(loading) = loading else { return };
     let Ok(result) = loading.0.lock().unwrap().try_recv() else { return };
     commands.remove_resource::<Loading>();
@@ -416,11 +545,16 @@ fn finish(mut commands: Commands, loading: Option<Res<Loading>>, cfg: Res<Config
     if let Some(install) = cfg.r5r.as_deref() {
         crosshair_list.extend(crosshairs(&ui, install, lurch::assets::FISTS, true).into_iter().map(|c| (c, false)));
         crosshair_list.extend(crosshairs(&ui, install, GRAPPLE, false).into_iter().map(|c| (c, true)));
-        tactical_hud = tactical(&ui, install, sim.map_or(0.0, |s| s.view_now));
+        tactical_hud = tactical(&ui, install, sim.as_ref().map_or(0.0, |s| s.view_now));
         if tactical_hud.is_none() {
             warn!("no tactical_ability_hud in this install's UI");
         }
     }
+    let now = sim.as_ref().map_or(0.0, |s| s.view_now);
+    let (player, ultimate) = match (host.is_some(), cfg.r5r.as_deref()) {
+        (true, Some(install)) => (player_panel(&ui, data.as_deref(), now), ultimate(&ui, install, now)),
+        _ => (None, None),
+    };
     let (system_menu, misc_menu, vgui_textures) = cfg.r5r.as_deref().map(|install| menus(&ui, install, &mut images)).unwrap_or_default();
     let mut ui = ui;
     let localized = |token: &str| String::from_utf16_lossy(ui.localized(token.as_bytes()).unwrap_or(&[])).trim_end_matches('\0').to_string();
@@ -431,6 +565,8 @@ fn finish(mut commands: Commands, loading: Option<Res<Loading>>, cfg: Res<Config
         frame: RuiFrame::default(),
         crosshairs: crosshair_list,
         tactical: tactical_hud,
+        player,
+        ultimate,
         atlases,
         fonts,
         white,
@@ -648,6 +784,7 @@ type DrawRest<'w, 's> = (
     MessageWriter<'w, MenuSound>,
     Res<'w, ButtonInput<KeyCode>>,
     ResMut<'w, KeyTrap>,
+    (Option<ResMut<'w, HostHud>>, Option<Res<'w, HostBar>>, Option<Res<'w, HostLayout>>),
 );
 
 #[allow(clippy::too_many_arguments)] // Bevy's system parameters
@@ -667,7 +804,7 @@ fn draw(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<RuiMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
-    (mut batches, mut shown, mut vgui_materials, mut menu_open, mut paused, real, mouse, cursor, mut convars, mut wheel, mut sounds, keyboard, mut trap): DrawRest,
+    (mut batches, mut shown, mut vgui_materials, mut menu_open, mut paused, real, mouse, cursor, mut convars, mut wheel, mut sounds, keyboard, mut trap, (mut host, host_bar, layout)): DrawRest,
 ) {
     let target = view.and_then(|v| images.get(&v.0)).map(|i| (i.width() as f32, i.height() as f32));
     let (width, height) = target.or_else(|| windows.single().ok().map(|w| (w.width(), w.height()))).unwrap_or((cfg.size.0 as f32, cfg.size.1 as f32));
@@ -717,27 +854,85 @@ fn draw(
             }
         }
     }
+    let mut tactical_quads = None;
     if let Some(t) = rt.tactical.as_mut() {
         t.set_bool(&ui, "isVisible", visible.0);
         t.set_float(&ui, "chargeFrac", sim.grapple_clip.fraction());
         t.set_float(&ui, "refillRate", sim.grapple_clip.refill_rate());
-        if let Some(c) = data.as_ref().and_then(|d| d.0.character.as_ref()) {
-            for (arg, key) in [("ultimateColor", "hudUltimateColor"), ("ultimateColorHighlight", "hudUltimateColorHighlight")] {
-                if let Some(v) = c.float3(key).map(script_srgb_to_linear) {
-                    t.set_value(&ui, arg, Value::Vector([v[0], v[1], v[2], 1.0]));
-                }
-            }
-        }
-        let [vw, vh] = lurch::rui::virtual_screen(width, height);
-        (t.size, t.inv_size) = ([vw, vh], [1.0 / vw, 1.0 / vh]);
+        offhand_frame(&ui, t, data.as_deref(), width, height);
         match ui.update(t, &globals, &topology, &mut rt.frame) {
-            Ok(true) => ui.draws(t, &rt.frame, &mut draws),
+            Ok(true) => {
+                let from = draws.quads.len();
+                ui.draws(t, &rt.frame, &mut draws);
+                tactical_quads = Some(from..draws.quads.len());
+            }
             Ok(false) => {}
             Err(stop) => {
                 if rt.reported.insert(format!("{}: {stop:?}", t.name)) {
                     warn!("{}: {stop:?}", t.name);
                 }
             }
+        }
+    }
+    if let Some(host) = host.as_deref_mut() {
+        let size = [width, height, width, height];
+        let gap = HOST_GAP * height / width;
+        let mut frame = None;
+        host.panel = None;
+        let layout = layout.as_deref().copied().unwrap_or_default();
+        let px = [width, height];
+        host.rects = [None; 3];
+        if let Some(t) = rt.player.as_mut() {
+            if let Some(icon) = data.as_ref().filter(|d| d.is_changed()).and_then(|d| d.0.character.as_ref()).and_then(|c| c.str("galleryPortrait")) {
+                t.set_image(&ui, "playerIcon", icon);
+            }
+            t.set_bool(&ui, "isVisible", visible.0);
+            let [vw, vh] = lurch::rui::virtual_screen(width, height);
+            (t.size, t.inv_size) = ([vw, vh], [1.0 / vw, 1.0 / vh]);
+            if let Ok(true) = ui.update(t, &globals, &topology, &mut rt.frame) {
+                let from = draws.quads.len();
+                ui.draws(t, &rt.frame, &mut draws);
+                let name = draws.quads[from..].iter().position(|q| q.flags >> 12 == 0).map_or(draws.quads.len(), |i| from + i);
+                frame = bounds(&draws.quads[from..name]);
+                if let (Some(panel), Some(contents)) = (frame, bounds(&draws.quads[name..])) {
+                    let (lo, hi) = (placed([contents[0], panel[1]], panel, layout.player, px), placed([contents[2], panel[3]], panel, layout.player, px));
+                    host.panel = Some(std::array::from_fn(|i| [lo[0], lo[1], hi[0], hi[1]][i] * size[i]));
+                }
+                draws.quads.truncate(name);
+                if let Some(panel) = frame {
+                    place(&mut draws.quads[from..], panel, layout.player, px);
+                    host.rects[0] = Some(std::array::from_fn(|i| panel[i] * size[i]));
+                }
+            }
+        }
+        if let (Some(t), Some(panel)) = (rt.ultimate.as_mut(), frame) {
+            t.set_bool(&ui, "isVisible", visible.0);
+            offhand_frame(&ui, t, data.as_deref(), width, height);
+            if let Ok(true) = ui.update(t, &globals, &topology, &mut rt.frame) {
+                let from = draws.quads.len();
+                ui.draws(t, &rt.frame, &mut draws);
+                if let Some(b) = bounds(&draws.quads[from..]) {
+                    shift_x(&mut draws.quads[from..], (1.0 - panel[0]) - b[2]);
+                    let b = [b[0] + (1.0 - panel[0]) - b[2], b[1], 1.0 - panel[0], b[3]];
+                    place(&mut draws.quads[from..], b, layout.ultimate, px);
+                    host.rects[2] = Some(std::array::from_fn(|i| b[i] * size[i]));
+                }
+            }
+        }
+        let tactical = tactical_quads.and_then(|r| Some((bounds(&draws.quads[r.clone()])?, r)));
+        host.room = match (frame, &tactical) {
+            (Some(panel), Some((b, _))) => Some((panel[2] + gap + (b[2] - b[0]) + gap) * width),
+            (Some(panel), None) => Some((panel[2] + gap) * width),
+            _ => None,
+        };
+        if let Some((mut b, r)) = tactical {
+            let over = host_bar.map_or(0.0, |bar| b[2] - (bar.0 / width - gap));
+            if over > 0.0 && layout.tactical == Place::default() {
+                shift_x(&mut draws.quads[r.clone()], -over);
+                (b[0], b[2]) = (b[0] - over, b[2] - over);
+            }
+            place(&mut draws.quads[r], b, layout.tactical, px);
+            host.rects[1] = Some(std::array::from_fn(|i| b[i] * size[i]));
         }
     }
     if visible.0 {

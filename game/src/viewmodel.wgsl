@@ -1,6 +1,7 @@
 // The material inputs of the game's skinned-model pixel shader (`viewmodel.rs`), ported from
 // its disassembly (docs/assets.md, Materials and textures): the normal map, gloss, specular
-// colour, cavity and the scrolling, distorted emissive. Bevy's PBR lighting does the rest.
+// colour, cavity and the scrolling, distorted emissive. Bevy's PBR lighting does the rest, but
+// over another game's world, where the host's light shades them as it shades its own hand.
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -28,6 +29,21 @@ struct GameShading {
     game_time: f32,
     emissive_scale: f32,
     present: u32,
+    host_light: vec4<f32>,
+    host_dir0: vec3<f32>,
+    host_dir1: vec3<f32>,
+}
+
+// Minecraft's entity shading (`light.glsl`): two fixed diffuse lights and an ambient term.
+const HOST_LIGHT_POWER: f32 = 0.6;
+const HOST_AMBIENT_LIGHT: f32 = 0.4;
+
+fn to_srgb(c: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
+}
+
+fn to_linear(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> shading: GameShading;
@@ -77,6 +93,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.metallic = 0.0;
     pbr_input.material.perceptual_roughness = max(1.0 - gloss, 0.04);
     pbr_input.material.reflectance = sqrt(spec * cavity / 0.16);
+    var glow = vec3<f32>(0.0);
     if (has & HAS_EMISSIVE) != 0u {
         let time = shading.game_time;
         let uv2 = vec2<f32>(dot(uv, shading.uv2_x), dot(uv, shading.uv2_y)) + shading.uv2_translate * time;
@@ -90,11 +107,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         if (has & HAS_MULTIPLY) != 0u {
             multiply = textureSample(multiply_texture, multiply_sampler, uv1).rgb;
         }
-        let glow = textureSample(emissive_texture, emissive_sampler, uv).rgb * shading.emissive_tint * multiply;
+        glow = textureSample(emissive_texture, emissive_sampler, uv).rgb * shading.emissive_tint * multiply;
         pbr_input.material.emissive = vec4<f32>(glow * shading.emissive_scale, 1.0);
     }
 #endif
     var out: FragmentOutput;
+    if shading.host_light.w > 0.0 {
+        // The host does its lighting on gamma-encoded colours, so it is done on them here.
+        let n = pbr_input.N;
+        let diffuse = max(dot(shading.host_dir0, n), 0.0) + max(dot(shading.host_dir1, n), 0.0);
+        let lit = min(1.0, diffuse * HOST_LIGHT_POWER + HOST_AMBIENT_LIGHT);
+        let albedo = to_srgb(pbr_input.material.base_color.rgb);
+        out.color = vec4<f32>(to_linear(albedo * lit * shading.host_light.rgb) + glow, pbr_input.material.base_color.a);
+        return out;
+    }
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;

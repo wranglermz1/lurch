@@ -1,0 +1,23 @@
+{
+	"required": true,
+	"package": "lurch.mc.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"CameraMixin",
+		"ClientLevelMixin",
+		"EntityMixin",
+		"EntityStepAccess",
+		"GameRendererMixin",
+		"HudMixin",
+		"KeyboardMixin",
+		"LightmapMixin",
+		"MinecraftMixin",
+		"MouseMixin",
+		"OptionsMixin",
+		"PauseScreenMixin",
+		"ServerMovementMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

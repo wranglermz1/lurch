@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
-use lurch::sim::buttons::IN_OFFHAND1;
+use lurch::anim::viewmodel::MeleeSwing;
+use lurch::sim::buttons::{IN_ATTACK, IN_OFFHAND1};
 use lurch::sim::math::V3;
 use lurch::sim::pilot::{self, Clock, Eye, Pilot};
 use lurch::sim::setup::UserCmd;
@@ -54,6 +55,22 @@ pub struct Snapshot {
     pub clock: Clock,
 }
 
+/// The punch the viewmodel plays, once it has started it: the commands it spans end the attack
+/// and count its blow. Present while a viewmodel can time a punch; without one, nothing punches.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct Swing(pub Option<MeleeSwing>);
+
+/// How many punches have landed their blow (`AE_MELEE_ATTACK`), and what each blow this frame
+/// hit, in order (none for a blow that hit nothing).
+#[derive(Resource, Clone, Debug, Default)]
+pub struct MeleeAttacks(pub u32, pub Vec<Option<lurch::sim::melee::Blow>>);
+
+/// A host's own rule for one command: it runs the command in movement's place and answers
+/// true, or answers false and leaves the command to movement. The Minecraft host's ledge stop
+/// is one (`minecraft/host/src/sneak.rs`).
+#[derive(Resource, Clone, Copy)]
+pub struct HostStep(pub fn(&mut Pilot, &Settings, &UserCmd, f32, &mut CollisionWorld) -> bool);
+
 /// The last commands run and the movement state each left, oldest first.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct History(pub VecDeque<Snapshot>);
@@ -86,6 +103,8 @@ pub struct Step {
     pub grapple_down: bool,
     /// The player's activity modifiers after the command.
     pub modifiers: lurch::anim::viewmodel::Modifiers,
+    /// A punch started after the command.
+    pub melee: bool,
     pub frametime: f32,
 }
 
@@ -134,9 +153,12 @@ pub fn without_view(p: &Pilot) -> Pilot {
 /// command with no input it hangs in the air for good, so it spawns where a trace would leave it.
 pub const DIST_EPSILON: f32 = 0.03125;
 
-fn spawn_pilot(origin: V3, yaw: f32, oldbuttons: u32) -> Pilot {
+/// A pilot spawned with the hulls `settings` give its stances.
+fn spawn_pilot(settings: &Settings, origin: V3, yaw: f32, oldbuttons: u32) -> Pilot {
     let mut p = Pilot::new([origin[0], origin[1], origin[2] + DIST_EPSILON]).with_oldbuttons(oldbuttons);
     p.player.view_angles = [0.0, yaw, 0.0];
+    let (stand, duck) = (&settings.stances[0], &settings.stances[1]);
+    (p.player.hull_min, p.player.hull_max, p.player.hull_duck_min, p.player.hull_duck_max) = (stand.hull_min, stand.hull_max, duck.hull_min, duck.hull_max);
     p
 }
 
@@ -159,7 +181,7 @@ impl Plugin for SimPlugin {
         let current = map.spots.iter().position(|s| s.name == cfg.spot).unwrap_or_else(|| panic!("no spot {:?}", cfg.spot));
         let (origin, yaw) = (map.spots[current].origin, map.spots[current].yaw);
         let settings = pilot::pathfinder();
-        let pilot = spawn_pilot(origin, yaw, 0);
+        let pilot = spawn_pilot(&settings, origin, yaw, 0);
         let clock = Clock::default();
         let pose = Pose(pilot.eye(&settings, cfg.fov_scale, clock.now()));
         app.insert_resource(Sim { pilot, clock, settings, view_now: clock.now(), grapple_clip: GrappleClip::default() })
@@ -167,6 +189,7 @@ impl Plugin for SimPlugin {
             .insert_resource(Spots { list: map.spots, current })
             .init_resource::<History>()
             .init_resource::<FrameCues>()
+            .init_resource::<MeleeAttacks>()
             .insert_resource(pose)
             .add_systems(Update, apply_respawn.in_set(Frame::Respawn))
             .add_systems(Update, run_cmds.in_set(Frame::Run))
@@ -175,7 +198,7 @@ impl Plugin for SimPlugin {
     }
 }
 
-fn apply_respawn(mut respawns: MessageReader<Respawn>, mut sim: ResMut<Sim>, mut spots: ResMut<Spots>, mut history: ResMut<History>, mut look: MessageWriter<LookReset>) {
+fn apply_respawn(mut respawns: MessageReader<Respawn>, mut sim: ResMut<Sim>, mut spots: ResMut<Spots>, mut history: ResMut<History>, mut look: MessageWriter<LookReset>, swing: Option<ResMut<Swing>>) {
     let Some(r) = respawns.read().last().cloned() else { return };
     let n = spots.list.len() as isize;
     let (origin, yaw) = match r {
@@ -196,8 +219,11 @@ fn apply_respawn(mut respawns: MessageReader<Respawn>, mut sim: ResMut<Sim>, mut
         Respawn::At { origin, yaw } => (origin, yaw),
     };
     let old = sim.pilot.oldbuttons();
-    sim.pilot = spawn_pilot(origin, yaw, old);
+    sim.pilot = spawn_pilot(&sim.settings, origin, yaw, old);
     sim.grapple_clip = GrappleClip::default();
+    if let Some(mut swing) = swing {
+        swing.0 = None;
+    }
     sim.clock = Clock::default();
     sim.view_now = sim.clock.now();
     history.0.clear();
@@ -213,21 +239,43 @@ fn run_cmds(
     mut cues: ResMut<FrameCues>,
     mut respawn: MessageWriter<Respawn>,
     over: Option<ResMut<crate::viewmodel::GrappleAnimOver>>,
+    (mut swing, mut attacks, hands): (Option<ResMut<Swing>>, ResMut<MeleeAttacks>, Option<Res<crate::viewmodel::HostHands>>),
+    host_step: Option<Res<HostStep>>,
 ) {
     let Sim { pilot, clock, settings, view_now, grapple_clip } = &mut *sim;
     let mut last = None;
     cues.0.clear();
+    attacks.1.clear();
     if let Some(mut over) = over.filter(|o| o.0) {
         over.0 = false;
         pilot.player.grapple_anim_end(&mut Vec::new());
     }
     while let Some(cmd) = queue.0.pop_front() {
         let now = clock.now();
+        if let Some(Swing(punch)) = swing.as_deref_mut() {
+            if let Some(s) = punch.as_mut().filter(|s| s.attack.is_some_and(|t| t <= now)) {
+                s.attack = None;
+                attacks.0 += 1;
+                let blow = pilot.melee_blow(settings, now, lurch::sim::melee::MELEE_RANGE, &mut map.0);
+                attacks.1.push(blow);
+            }
+            if punch.is_some_and(|s| s.end <= now) {
+                pilot.player.end_melee();
+                *punch = None;
+            }
+        }
         let rising = pilot.velocity[2] > f32::EPSILON;
         let old = pilot.oldbuttons();
-        pilot.step(settings, &cmd, now, &mut map.0);
+        if !host_step.as_ref().is_some_and(|h| (h.0)(pilot, settings, &cmd, now, &mut map.0)) {
+            pilot.step(settings, &cmd, now, &mut map.0);
+        }
         if cmd.buttons & !old & IN_OFFHAND1 != 0 && (pilot.player.grappling || grapple_clip.ready()) {
             pilot.grapple(settings, now);
+        }
+        let fists = swing.is_some() && hands.as_ref().is_none_or(|h| h.0);
+        let melee = fists && cmd.buttons & !old & IN_ATTACK != 0 && pilot.melee(now);
+        if melee {
+            pilot.melee_start_activity(settings, now, &mut map.0);
         }
         grapple_clip.think(now, cmd.frametime, pilot);
         let p = &pilot.player;
@@ -246,7 +294,7 @@ fn run_cmds(
         let h = p.grapple_hook_at;
         let (dx, dy, dz) = (h[0] - eye[0], h[1] - eye[1], h[2] - eye[2]);
         let grapple_down = p.grappling && !p.grapple_retracting && GRAPPLE_WEAPONS_DOWN2 < dy * dy + dx * dx + dz * dz;
-        cues.0.push(Step { cues: pilot.cues.clone(), sound: sound_frame(pilot, now), sprinting: p.sprinting, traversal, climb, grapple_down, modifiers: lurch::anim::viewmodel::player_modifiers(p), frametime: cmd.frametime });
+        cues.0.push(Step { cues: pilot.cues.clone(), sound: sound_frame(pilot, now), sprinting: p.sprinting, traversal, climb, grapple_down, modifiers: lurch::anim::viewmodel::player_modifiers(p), melee, frametime: cmd.frametime });
         clock.advance(cmd.frametime);
         history.push(Snapshot { cmd, pilot: pilot.clone(), clock: *clock });
         if pilot.origin[2] < KILL_Z {

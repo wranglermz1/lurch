@@ -240,12 +240,15 @@ impl Move<'_> {
             let accel = self.ground_accel();
             self.ground_friction(wishdir, wishspeed);
             self.ground_accelerate(wishdir, wishspeed, accel);
+            self.melee_push();
         } else {
             let (wish, fwd, side) = self.wall_wish(fwd_dir, r);
             self.wall_accelerate(wish, fwd, side);
         }
+        let push = self.p.melee_push;
+        let pushed = if is_world_up(up) && push != ZERO { add(self.mv.velocity, push) } else { self.mv.velocity };
 
-        let speed = len(self.mv.velocity);
+        let speed = len(pushed);
         if self.p.sliding && speed < self.s.slide_stop_speed && self.p.duck_state != 3 {
             self.end_slide();
         }
@@ -254,7 +257,7 @@ impl Move<'_> {
             return;
         }
         let origin = self.mv.origin;
-        let mut vel = self.mv.velocity;
+        let mut vel = pushed;
         let gp = self.p.ground_plane;
         let plane = if len2(gp) != 0.0 { Some(gp) } else { None };
         if let Some(gp) = plane.filter(|_| is_world_up(up)) {

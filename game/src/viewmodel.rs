@@ -41,7 +41,7 @@ use bevy::shader::ShaderRef;
 use bevy::camera::visibility::RenderLayers as Layers;
 use lurch::anim::bones::{self, BoneList, Mat, IDENTITY};
 use lurch::anim::proxy::Proxy;
-use lurch::anim::viewmodel::{Blends, Viewmodel};
+use lurch::anim::viewmodel::{Blends, MeleeSwing, Viewmodel};
 use lurch::assets::texture::Texture;
 use lurch::sim::cue::Cue;
 use lurch::sim::grapple::FP_ANIM_GRAPPLE;
@@ -69,7 +69,19 @@ struct Vm {
     glowing: Vec<Handle<ViewmodelMaterial>>,
     /// The grapple had the weapons down after the last command.
     grapple_down: bool,
+    /// The fists are put away for what the host's player holds (`HostHands`).
+    away: bool,
 }
+
+/// Over another game: whether the player's hands are empty. Without it they always are.
+/// Holding anything puts the fists away (lowered, then not drawn) until the hands are empty
+/// again; the first-person proxy still draws the arms through a mantle, a climb or the grapple.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct HostHands(pub bool);
+
+/// Whether the viewmodel drew arms this frame: the fists' or the proxy's.
+#[derive(Resource, Default)]
+pub struct ArmsShown(pub bool);
 
 /// Where the rope leaves the hand this frame while the grapple's animation plays: the arms'
 /// `grapple_rope` attachment, in the world.
@@ -152,6 +164,21 @@ struct ShadingConstants {
     game_time: f32,
     emissive_scale: f32,
     present: u32,
+    /// The host game's light on the arms, when another game's world is under them
+    /// (`HostLight`): its colour, and 1 in `w` to use it in place of the shell's lights.
+    host_light: Vec4,
+    host_dir0: Vec3,
+    host_dir1: Vec3,
+}
+
+/// Another game's light where the player stands, for the arms drawn over its world: the colour
+/// its own first-person hand is multiplied by, and its two fixed diffuse directions, in Bevy's
+/// world space. Shaded with it, the arms take the host's light as its hand does, gamma-space
+/// diffuse with no specular, and the shell's sun and sky light leave them.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct HostLight {
+    pub color: Vec3,
+    pub dirs: [Vec3; 2],
 }
 
 impl MaterialExtension for GameShading {
@@ -215,9 +242,9 @@ impl Plugin for ViewmodelPlugin {
         common(app);
         bevy::asset::embedded_asset!(app, "viewmodel.wgsl");
         app.add_plugins(MaterialPlugin::<ViewmodelMaterial>::default());
-        app.init_resource::<VmEvents>().init_resource::<GrappleHand>().init_resource::<GrappleAnimOver>().add_systems(
+        app.init_resource::<VmEvents>().init_resource::<GrappleHand>().init_resource::<GrappleAnimOver>().init_resource::<ArmsShown>().add_systems(
             Update,
-            (spawn_meshes.run_if(resource_exists_and_changed::<Data>), respawned.run_if(resource_exists::<Vm>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera, game_time.run_if(resource_exists::<Vm>))
+            (spawn_meshes.run_if(resource_exists_and_changed::<Data>), respawned.run_if(resource_exists::<Vm>), host_light.run_if(resource_exists::<HostLight>), animate.run_if(resource_exists::<Vm>).in_set(Animate), sync_camera, game_time.run_if(resource_exists::<Vm>))
                 .chain()
                 .in_set(Frame::View),
         );
@@ -345,7 +372,8 @@ fn spawn_meshes(
     let weapon = spawn(&d.weapon_meshes, &d.weapon_textures, &d.weapon_constants, d.weapon_bones.len(), true);
     let (state, proxy) = drawn(d, &sim);
     info!("viewmodel: {} sequences, {} arms meshes, {} skinned on the CPU, {} weapon meshes", data.0.anims.seqs.len(), data.0.arms.meshes.len(), arms.cpu.len(), data.0.weapon_textures.len());
-    commands.insert_resource(Vm { state, proxy, arms, weapon, glowing, grapple_down: false });
+    commands.insert_resource(Vm { state, proxy, arms, weapon, glowing, grapple_down: false, away: false });
+    commands.init_resource::<crate::sim::Swing>();
 }
 
 /// The weapon just drawn and the arms at rest, as a pilot spawns with them.
@@ -365,6 +393,7 @@ fn respawned(mut respawns: MessageReader<Respawn>, mut vm: ResMut<Vm>, data: Res
     if respawns.read().count() > 0 {
         (vm.state, vm.proxy) = drawn(&data.0, &sim);
         vm.grapple_down = false;
+        vm.away = false;
     }
 }
 
@@ -386,6 +415,7 @@ fn animate(
     mut events: ResMut<VmEvents>,
     mut hand: ResMut<GrappleHand>,
     mut over: ResMut<GrappleAnimOver>,
+    (host_hands, mut shown, mut swing): (Option<Res<HostHands>>, ResMut<ArmsShown>, ResMut<crate::sim::Swing>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut roots: Query<(&mut Transform, &mut Layers, &mut Visibility, &ViewmodelMesh)>,
     mut joints: Query<&mut GlobalTransform, With<Joint>>,
@@ -393,9 +423,16 @@ fn animate(
     let vm = &mut *vm;
     let d = &*data.0;
     let grapple_lowers = d.legend.bool("grapple_disableWeaponsWhenActive").unwrap_or(false);
+    let hands = host_hands.is_none_or(|h| h.0);
     for step in &cues.0 {
         let now = step.sound.curtime;
         let was = vm.proxy.visible;
+        if !hands && !vm.away {
+            vm.state.holster(&d.anims, now);
+        } else if hands && vm.away && !vm.grapple_down && !was {
+            vm.state.unholster(&d.anims, now);
+        }
+        vm.away = !hands;
         for cue in &step.cues {
             if let Cue::GrappleAnim(g) = cue {
                 vm.proxy.grapple(&d.arms_anims, *g, now);
@@ -407,15 +444,19 @@ fn animate(
         let down = grapple_lowers && step.grapple_down;
         if down && !vm.grapple_down {
             vm.state.holster(&d.anims, now);
-        } else if !down && vm.grapple_down {
+        } else if !down && vm.grapple_down && !vm.away {
             vm.state.unholster(&d.anims, now);
         }
         vm.grapple_down = down;
         vm.state.command(&d.anims, &step.cues, step.sprinting, step.modifiers, now);
+        if step.melee {
+            let act = lurch::anim::viewmodel::melee_activity(d.melee_anim);
+            swing.0 = Some(vm.state.melee(&d.anims, act, now).unwrap_or(MeleeSwing { attack: None, end: now }));
+        }
         let drawn = !vm.state.hidden(now);
         vm.proxy.command(&d.arms_anims, step.traversal, drawn, sim.settings.mantle.jumpoff_duration, now);
         vm.proxy.climb(&d.arms_anims, step.climb, now);
-        if was && !vm.proxy.visible {
+        if was && !vm.proxy.visible && !vm.away {
             vm.state.unholster(&d.anims, now);
         }
         over.0 |= vm.proxy.grapple_think(&d.arms_anims, now);
@@ -439,6 +480,7 @@ fn animate(
     let (origin, angles) = vm.proxy.view(&d.arms_anims, &pinned, &at(d.arms.camera), &at(d.arms.camera_base), half_hull, origin, angles, sim.view_now);
     eye.0.origin = origin;
     eye.0.angles = [angles[0] + (a[0] - view_angles[0]), angles[1] + (a[1] - view_angles[1]), angles[2] + (a[2] - view_angles[2])];
+    shown.0 = vm.proxy.climbing() || vm.proxy.grappling() || vm.proxy.hands_in(sim.view_now) || !vm.state.hidden(sim.view_now);
     if vm.proxy.climbing() {
         let place = vm.proxy.climb_place(sim.pilot.origin, a, player.view_offset[2]);
         let skin: Vec<Mat> = d.arms.bones.iter().zip(&own).map(|(b, m)| bones::concat(&bones::concat(&place, m), &b.pose_to_bone)).collect();
@@ -608,6 +650,26 @@ fn joint(m: &Mat) -> Affine3A {
 }
 
 /// `c_gameTime` for the emissive's scroll: the view's clock.
+/// A plain material that the host's light shades like the arms when there is a `HostLight`;
+/// with none it is lit as the arms are in the shell.
+pub fn host_lit(base: StandardMaterial) -> ViewmodelMaterial {
+    ExtendedMaterial { base, extension: GameShading::default() }
+}
+
+/// Touches only the materials whose light is out of date: a material written to is prepared
+/// again, bind group and all.
+fn host_light(light: Res<HostLight>, mut materials: ResMut<Assets<ViewmodelMaterial>>) {
+    let (color, dirs) = (light.color.extend(1.0), light.dirs);
+    let stale: Vec<_> = materials.iter().filter(|(_, m)| m.extension.constants.host_light != color || [m.extension.constants.host_dir0, m.extension.constants.host_dir1] != dirs).map(|(id, _)| id).collect();
+    for id in stale {
+        if let Some(mut m) = materials.get_mut(id) {
+            let c = &mut m.extension.constants;
+            c.host_light = color;
+            [c.host_dir0, c.host_dir1] = dirs;
+        }
+    }
+}
+
 fn game_time(vm: Res<Vm>, sim: Res<Sim>, mut materials: ResMut<Assets<ViewmodelMaterial>>) {
     for h in &vm.glowing {
         if let Some(mut m) = materials.get_mut(h) {

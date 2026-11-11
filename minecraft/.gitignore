@@ -1,0 +1,4 @@
+/mod/build
+/mod/.gradle
+/mod/run
+/host/target

@@ -251,6 +251,31 @@ runs per command, in movement's order:
 - On the viewmodel (`0x7e3530`): a delta sequence (`STUDIO_DELTA`) plays on overlay layer 0
   at weight 1 from cycle 0; any other becomes the main sequence from cycle 0, and layer 0's
   weight goes to 0.
+- A punch (`0xa5b180`): the melee weapon sends `ACT_VM_MELEE_ATTACK1` − 1 +
+  `melee_anim_1p_number` (held to 1..3; 2 for the offhand melee `melee_pilot_emptyhanded`, so
+  `ACT_VM_MELEE_ATTACK2`). The fists' model has it as `melee_punch` (0.933 s, blow
+  `AE_MELEE_ATTACK` at cycle 0.321), `melee_uppercut` and its legend variants with `crouch`,
+  `melee_kick` with `air`, `melee_09_seq` with `wallhang` and `melee_grapple` with `grapple`;
+  `ACT_VM_MELEE_ATTACK3` is the door kick. Ours sends it through SendWeaponAnim, holds the
+  weapon in it until its length has run (WeaponIdle does nothing meanwhile), then raises the
+  fists with `ACT_VM_RAISE_FROM_MELEE` (`meleeraise`, 0.333 s at its own length), as RaiseWeapon
+  (`0xa44520`) does when its third argument is set; the switch back from a melee weapon
+  (`0x7d01b7`, weapon states 4 and 5) sets it. Its client events play its sounds
+  (`Mvmt_Melee_Elbow_1P`, `effort_melee_1p`).
+- A blow that hits (`sh_melee.gnut`) dispatches the impact effects of the melee weapon's
+  `impact_effect_table`, `melee_human` for the fists and every heirloom's settings in this
+  install (`melee_knife` for Octane's). The table is loaded at run time and not read. Ours
+  plays the game's events of the matching names at the hit (`lurch::sound::melee_impact`):
+  with the fists `player_melee_impact_flesh_1p_vs_3p` on a body, else
+  `Player_Melee_Impact_Default_1p_vs_3p`; with an heirloom its own `Victim_*` and `Generic_*`
+  events (`Kunai`, `Axe`, `Baton`, `ButterflyKnife`; `lurch::assets::Heirloom`). All resolve
+  through the game's Miles; that any table names them is not checked.
+- The heirlooms' sequences name their swings with `AE_CL_PLAYSOUND` in full (axe, baton,
+  Octane's knife), except the kunai's swipe and stab: `AE_CL_PLAYSOUND_FOR_TYPE`
+  `Mvmt_Melee_Kunai_Swipe_1P` and `_Stab_1P`, which only Wraith's type has. The shell plays
+  a type-named sound the legend has none of as the heirloom owner's (`Heirloom::owner`), so
+  the kunai swings for every legend; every other type-named sound of the four heirlooms
+  resolves for Pathfinder (checked 2026-10-18).
 - Player events reach each child of the player (`0x7e84e0`): 6 and 9 → `ACT_VM_JUMP`, 7 →
   `ACT_VM_DOUBLEJUMP`, 11–14 → `ACT_VM_LAND`, `_LOW`, `_MEDIUM`, `_HIGH`, on overlay layer 1:
   rate 1, weight 1, cycle 0, order 1, fading in and out over the sequence's own fade times.
@@ -327,7 +352,7 @@ Client, per frame:
 - The viewmodel's FOV is the legend's `viewmodelfov` (view setup `0x5d4740`; the ConVar
   `ss_viewmodelfov` is split-screen only).
 
-Not ported: firing, reloading, switching, holstering, melee, inspecting, one-handed and
+Not ported: firing, reloading, switching, holstering, inspecting, the melee weapon's own start (`0xa3bea0`) and recovery times, one-handed and
 alternate activities (`0xa582a0`); the random draw among ties (the first is taken); the
 modifiers `airfast`, `althand` and `onehand_was_sprinting`; the client's own frame advance
 (cycles run from the time a sequence was sent, as the transitions' do, and a transition
