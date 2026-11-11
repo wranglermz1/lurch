@@ -22,7 +22,7 @@ Where the facts about the game come from. Most of it lives in the HAVM repo at
   The playlist keeps `flowstate_modified_movement 0` (Apex movement).
 - `dumps/current.bin` (HAVM `dumps/5dba2a2f-02ae8471/dump.bin`): full plaintext image of
   `r5apex.exe` under R5Reloaded main. `.text` and `.rdata` 100% held, no encrypted pages.
-  Committed as `dumps/current.bin.zst`.
+  Not distributed: each workstation keeps its own at `dumps/current.bin` (gitignored).
 - `dump.bin`: retail `r5apex_dx12.exe`, probably build 6abfe359 (same capture as
   `_offsets.ini`; the earlier 6ab42c93 label is unverified). Newer mechanics live here
   (`m_jumpGraceTapCount`, `tapstrafe_repeated_tapping_*`) that the S3 build lacks.

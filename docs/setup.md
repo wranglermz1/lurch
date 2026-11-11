@@ -33,12 +33,14 @@ install without starting the guest's game; unmount it and disconnect the device 
 ## Cloud
 
 A cloud session (claude.ai/code, the apps, `claude --cloud`) starts from a fresh clone.
-It can build, test, read the recordings and decompile. It cannot record, reach the guest
-or HAVM, or load map meshes; that work goes back to the workstation.
+It can build, test and read the recordings. The repository does not carry the oracle image,
+so it decompiles only where one is provided; recording, the guest, HAVM and map meshes stay
+on the workstation.
 
-At session start, `tools/session-start.sh` (the repository's SessionStart hook) unpacks
-`dumps/current.bin.zst` into `dumps/current.bin`, with `zstd` or, failing that, Python's
-`zstandard`. It reports anything the session lacks, such as Ghidra.
+At session start, `tools/session-start.sh` (the repository's SessionStart hook) unpacks a
+`dumps/current.bin.zst` into `dumps/current.bin` if one is there, with `zstd` or, failing
+that, Python's `zstandard`. It reports anything the session lacks, such as the image or
+Ghidra.
 
 ### The environment's setup script
 

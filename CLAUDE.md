@@ -19,6 +19,9 @@ files.
   assets, the compiled RUI code in `ui.dll`, fonts, atlases, layouts) are read from the
   user's R5Reloaded install at run time (`docs/assets.md`, `docs/ui.md`). Never commit
   anything taken from the install.
+- The Minecraft passthrough lives in `minecraft/` (the Fabric mod and the `lurch-mc` host
+  crate). The lurch crate and `game/` never depend on it; what the host needs from the shell
+  goes in as a generic hook (`sim::HostStep`, the `Host*` resources).
 - Multiplayer and our own models are deferred, not refused (`docs/game-shell-plan.md`
   section 8). Ask before starting them.
 
@@ -102,8 +105,8 @@ files.
 
 ## Git and legal
 
-- The repository is private and must stay private: it holds the oracle image
-  (`dumps/current.bin.zst`). Never publish or paste its contents elsewhere.
+- The repository is public. Never commit the oracle image (`dumps/current.bin`, gitignored),
+  any part of it, or anything taken from the install, and never paste them elsewhere.
 - No lifted bytes in source: recovered constants and a clean reimplementation only.
 - Commit messages follow the history: `feat(sim): ...`, `fix(sim): ...`, `test: ...`,
   `docs: ...`, `chore: ...`, a summary line, then what changed and why.

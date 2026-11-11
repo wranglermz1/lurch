@@ -2,7 +2,7 @@ ghidra-cache/
 /target
 traces/local/
 maps/
-dumps/current.bin
+dumps/
 __pycache__/
 /game/target
 /game/target-st

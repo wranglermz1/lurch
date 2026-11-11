@@ -1,14 +1,112 @@
 # lurch
 
-Apex Legends movement, reimplemented in Rust, in our own engine: an offline game for
-practising movement. The goal is behavioural equivalence with the real game on the full
-movement tech list (strafe accel, air control, lurch and tap strafe, slide and slide hop,
-superjump, mantle, wall climb, superglide, jump grace and multi-jump penalty) and on the
-camera's answer to movement (FOV scaling, bob, punch, shake). `docs/roadmap.md` is the
-order of work.
+An offline practice game for Apex Legends movement. The movement is reimplemented in Rust
+and proven against the game's own code: recorded input replayed through lurch gives the same
+position and velocity, bit for bit, as the real engine. The goal is the full movement tech
+list (strafe accel, air control, lurch and tap strafe, slide and slide hop, superjump, mantle,
+wall climb, superglide, jump grace and multi-jump penalty) and the camera's answer to movement
+(FOV scaling, bob, punch, shake). `docs/roadmap.md` is the order of work.
 
 The purpose is educational: recovering a movement model from a shipped binary, and proving
 the recovery with a differential test.
+
+## Based on R5Reloaded
+
+lurch is based on [R5Reloaded](https://r5reloaded.com), the community-run Season 3 build of
+Apex Legends, and relies on it for its assets.
+
+- **The reference.** R5Reloaded ships without anti-cheat, so its movement code can be hooked
+  in the running game and called with chosen state. Every number lurch claims is checked
+  against recordings taken that way, from R5Reloaded build 5dba2a2f-02ae8471.
+- **The assets.** The first-person arms and their animations, the heirloom melee weapons,
+  the movement sounds, the test map's props and the game's own HUD and menus are read from
+  your R5Reloaded install each time the game starts (`docs/assets.md`). None of it is in this
+  repository. Without an install, the game runs with a flat-shaded test map and nothing else.
+
+lurch is not affiliated with or endorsed by Electronic Arts, Respawn Entertainment or the
+R5Reloaded team. Apex Legends is a trademark of Electronic Arts.
+
+## What is here
+
+- `src/`: the lurch crate. The headless movement simulation and the replay gates that check
+  it against the recordings in `traces/`. Rust stable and std only, no dependencies.
+- `game/`: the game you play. A Bevy shell that drives the simulation one command per frame,
+  with the first-person arms, sound and UI from the install.
+- `minecraft/`: a separate project. Apex movement, the arms and the HUD inside Minecraft,
+  through a Fabric mod and a host process (`minecraft/README.md`). Neither the lurch crate
+  nor the game depends on it.
+- `capture/`, `tools/`, `docs/`: recording the reference, reverse engineering it, and what
+  was recovered.
+
+## Setup
+
+### What you need
+
+- Rust stable, 1.95 or later (`rustup`).
+- An R5Reloaded install, for the arms, sound and UI. Build 5dba2a2f-02ae8471 is the one
+  checked; another build loads with a warning, and its RTech paks do not load.
+- Windows to hear sound: it plays through the game's own Miles library, which exists only
+  for Windows. On Linux the game runs silent.
+- On Linux, Bevy's system packages. On Debian or Ubuntu:
+
+      sudo apt install g++ pkg-config libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
+        libxcursor1 libxrandr2 libxi6 libx11-xcb1 libvulkan1 mesa-vulkan-drivers
+
+### Run the tests
+
+    cargo test --release
+
+This replays every recording in `traces/` through the simulation and needs neither the game
+nor an install. The game shell has its own tests: `cd game && cargo test --release`.
+
+### Play
+
+    cd game
+    cargo run --release -- --r5r "C:\Program Files\R5Reloaded\R5R Library\LIVE"
+
+Without `--r5r` the game asks for the install folder (the one holding `r5apex.exe`) on its
+first run and keeps the answer in `lurch.cfg` beside the executable. Other flags (sensitivity,
+FOV scale, fps cap, legend, heirloom, scroll-wheel binds for tap strafing) are listed by
+`lurch-game --help`.
+
+To build the Windows executable on Linux:
+
+    rustup target add x86_64-pc-windows-gnu        # needs mingw-w64
+    cd game && cargo build --release --target x86_64-pc-windows-gnu
+
+Default keys:
+
+| Key | Action |
+|---|---|
+| W A S D | move |
+| Space | jump |
+| Left Ctrl, C | crouch (hold), crouch (toggle) |
+| Left Shift | sprint |
+| Q | Pathfinder's grapple |
+| E | use (ziplines) |
+| Left mouse | punch |
+| R | respawn at the current spot |
+| [ and ] | previous and next spot on the test map |
+| F1, F2, Escape | HUD, dev menu, game menu and settings |
+
+### Minecraft
+
+    cd minecraft/host && cargo run --release -- --r5r INSTALL
+    cd minecraft/mod && ./gradlew runClient
+
+Then load a world and press F7. Setup, controls and what is checked are in
+`minecraft/README.md`.
+
+### Reverse engineering and recording
+
+Not needed to play or to run the tests.
+
+- Decompiling (`tools/dec.sh`) needs Ghidra 12.x with a JDK 21 or later, and the oracle
+  image: a full in-memory dump of R5Reloaded's `r5apex.exe`, build 5dba2a2f-02ae8471, at
+  `dumps/current.bin`. The image is not distributed; `tools/sect.py` checks that a dump is
+  complete and in the clear. `docs/ground-truth.md` lists the sources.
+- Recording new traces needs R5Reloaded running in a Windows VM with the capture DLL injected
+  (`docs/capture.md`). `docs/setup.md` describes the workstation it was built on.
 
 ## Definition of done
 
@@ -134,8 +232,9 @@ movement. Deferred, not refused: multiplayer and our own models
     traces/           recorded oracle traces (lurchtr4); `cargo test` gates on them
     traces/local/     recordings kept off git (none now); gated when present
     traces/pending/   recordings of mechanics not ported yet; `cargo test -- --ignored`
+    minecraft/        the Minecraft passthrough: Fabric mod and lurch-mc host (minecraft/README.md)
     capture/          lurchcap3.dll + inject.exe (guest, mingw), drain and drive (host); `make`
-    dumps/            the oracle image, committed zstd-compressed, unpacked at session start
+    dumps/            where the oracle image goes (dumps/current.bin, gitignored)
     ref/              HAVM's extracted convar values and datamap offsets, retail build
     tools/            see below
     docs/oracle.md    recovered entry points, layouts and settings for the oracle build
@@ -163,7 +262,7 @@ Tools run from the repo root:
     tools/tables.py       the activity, animation event and activity modifier tables
     tools/record.sh       record one scripted scenario (drive + drain) into traces/
     tools/fuzz.py         seeded random drive script, for record.sh
-    tools/session-start.sh  the SessionStart hook: unpacks the oracle image
+    tools/session-start.sh  the SessionStart hook: unpacks a compressed oracle image
     tools/cloud-setup.sh  a cloud environment's setup script (docs/setup.md)
     tools/bevy-deps.sh    system packages for building game/ in a cloud session
 
@@ -176,6 +275,13 @@ unterminated" ran past the end of the vtable: the walk stops at the first slot o
 ## Legal
 
 Decompiler output is derivative. Recovered constants and a clean reimplementation written
-from a behavioural spec are the defensible shape, so the source holds no lifted bytes. The
-one exception is `dumps/current.bin.zst`, the oracle image, so that any session can
-decompile. The repository is private for that reason and must stay so.
+from a behavioural spec are the defensible shape, so the source holds no lifted bytes and no
+game file. The oracle image used for reverse engineering is not distributed, and the game's
+files are read from your own install at run time. `traces/` holds movement state recorded
+from R5Reloaded; `ref/` holds ConVar values and datamap field names and offsets extracted
+from a retail build.
+
+## License
+
+MIT (`LICENSE`), for lurch's own code and documentation. It does not cover the game's files
+lurch reads from an install.
