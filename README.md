@@ -7,6 +7,8 @@ list (strafe accel, air control, lurch and tap strafe, slide and slide hop, supe
 wall climb, superglide, jump grace and multi-jump penalty) and the camera's answer to movement
 (FOV scaling, bob, punch, shake). `docs/roadmap.md` is the order of work.
 
+[![Watch the video](https://img.youtube.com/vi/ferqeYzkhUE/maxresdefault.jpg)](https://www.youtube.com/watch?v=ferqeYzkhUE)
+
 The purpose is educational: recovering a movement model from a shipped binary, and proving
 the recovery with a differential test.
 
